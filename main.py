@@ -242,7 +242,7 @@ async def weather(interaction: discord.Interaction, city: str):
 
 
     # ⚠️ 請把這裡換成你剛剛在第一步申請到的授權碼
-    API_KEY = "CWA-A8DCADF8-822A-4F74-A32B-5906D9143BB2" 
+    API_KEY = "CWA-513252A5-0F7B-44A9-850B-648C57B942B1" 
     
     # 接下來的 API 網址，就使用轉換後的 formatted_city
     url = f"https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-C0032-001?Authorization={API_KEY}&locationName={formatted_city}"
