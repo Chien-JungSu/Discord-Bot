@@ -22,6 +22,11 @@ intents.message_content = True
 class MyBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix='/', intents=intents)
+        # 標誌是否已同步過全域指令（供 fallback 檢查用）
+        self._global_synced = False
+
+    async def on_connect(self):
+        print("ℹ️ on_connect event fired")
 
     # 💡 關鍵點：必須在這一生只執行一次的 setup_hook 裡進行「全域指令同步」
     async def setup_hook(self):
@@ -40,6 +45,7 @@ class MyBot(commands.Bot):
             synced = await self.tree.sync()
 
             print(f"🎉 [重大突破] 成功同步了 {len(synced)} 個全域斜線指令！")
+            self._global_synced = True
         except Exception as e:
             print(f"❌ 同步全域指令時發生錯誤: {e}")
             traceback.print_exc()
@@ -331,7 +337,19 @@ class FunView(discord.ui.View):
 @bot.event
 async def on_ready():
     print(f'目前登入身份：{bot.user}')
+    print('ℹ️ on_ready event fired')
     print('✅ 機器人已經百分之百在雲端準備就緒！')
+
+    # fallback: 如果 setup_hook 沒成功執行導致還沒同步全域指令，這裡嘗試同步並把錯誤印出
+    try:
+        if not getattr(bot, '_global_synced', False):
+            print('🔁 on_ready fallback: 嘗試同步全域指令...')
+            synced = await bot.tree.sync()
+            print(f'🎉 fallback 成功同步了 {len(synced)} 個全域斜線指令！')
+            bot._global_synced = True
+    except Exception as e:
+        print(f'❌ on_ready fallback 同步失敗: {e}')
+        traceback.print_exc()
 
 # ================= 程式執行入口 =================
 if __name__ == "__main__":
