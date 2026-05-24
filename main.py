@@ -2,7 +2,9 @@ import discord
 from discord.ext import commands
 from discord import app_commands 
 import aiohttp
+import certifi
 import random
+import ssl
 from datetime import datetime
 import sys
 import traceback
@@ -222,7 +224,10 @@ async def weather(interaction: discord.Interaction, city: str):
 
     try:
         # 3. 發送網路請求
-        async with aiohttp.ClientSession() as session:
+        ssl_context = ssl.create_default_context(cafile=certifi.where())
+        async with aiohttp.ClientSession(
+            connector=aiohttp.TCPConnector(ssl=ssl_context)
+        ) as session:
             async with session.get(url, timeout=10) as resp:
                 if resp.status != 200:
                     await interaction.followup.send("⚠️ 氣象署伺服器連線異常，請稍後再試！")
