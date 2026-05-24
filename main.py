@@ -54,8 +54,15 @@ class MyBot(commands.Bot):
         else:
             msg = "發生了未知錯誤，已回報給開發者。"
             
+            # 【核心修正點】安全檢查：判斷指令是否存在，避免在 CommandNotFound 時讀取 .name 導致 NoneType 崩潰
+            if interaction.command is not None:
+                cmd_name = interaction.command.name
+            else:
+                cmd_name = "未知或未同步之全域指令"
+            
             # 在終端機印出詳細的錯誤追蹤 (Traceback)，方便開發者除錯
-            print(f"Ignoring exception in command {interaction.command.name}:", file=sys.stderr)
+            # 使用剛才安全取得的 cmd_name 替代原本可能造成 NoneType 崩潰的 interaction.command.name
+            print(f"Ignoring exception in command {cmd_name}:", file=sys.stderr)
             traceback.print_exception(type(error), error, error.__traceback__, file=sys.stderr)
 
         # 根據 interaction 的狀態發送錯誤訊息 (設定 ephemeral=True 讓錯誤訊息只有觸發者看得到)
