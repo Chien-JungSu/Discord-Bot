@@ -142,8 +142,16 @@ async def quotes(interaction: discord.Interaction):
 @bot.tree.command(name="weather", description="查詢全台各縣市的即時天氣預報")
 @app_commands.describe(city="請輸入縣市名稱（中英皆可，英文請確保首字母大寫）")
 async def weather(interaction: discord.Interaction, city: str):
-    # 1. 立即回應 Discord，因為網路請求需要時間
-    await interaction.response.defer()
+    # 1. 立即回應 Discord，先佔住這次互動
+    try:
+        await interaction.response.defer(thinking=True)
+    except discord.NotFound as e:
+        print(f">>> interaction.defer() 失敗: {e}")
+        try:
+            await interaction.response.send_message("⏳ 正在查詢天氣，請稍候...", ephemeral=True)
+        except Exception as e_send:
+            print(f">>> 直接回應 interaction 也失敗: {e_send}")
+            return
 
     # --- 新增的字典防呆區塊 開始 ---
     
@@ -276,7 +284,7 @@ async def weather(interaction: discord.Interaction, city: str):
 
     except Exception as e:
         print(f">>> 氣象 API 發生錯誤: {e}")
-        await interaction.followup.send("❌ 獲取天氣資料時發生錯誤，請檢查程式碼。")
+        await interaction.followup.send("❌ 獲取天氣資料時發生錯誤，已回報開發者!")
 
 @bot.tree.command(name="server_info", description="顯示此伺服器的詳細資訊")
 @app_commands.guild_only()  # 關鍵：防止使用者在私訊執行此指令導致 guild 為 None
