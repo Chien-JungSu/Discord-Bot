@@ -9,6 +9,7 @@ import sys
 import traceback
 import os
 from dotenv import load_dotenv
+from keep_alive import keep_alive
 
 # 載入 .env 檔案內的環境變數
 load_dotenv()
@@ -334,4 +335,5 @@ class FunView(discord.ui.View):
 
 # 啟動機器人 (請確保這在整份檔案的最底下)
 if __name__ == '__main__':
+    keep_alive() # 啟動 Flask 伺服器，保持機器人運作
     bot.run(TOKEN)
