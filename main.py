@@ -31,10 +31,7 @@ class MyBot(commands.Bot):
         # 1. 先清空這個伺服器上所有卡住的舊指令 (消滅幽靈指令)
         self.tree.clear_commands(guild=None)
         
-        # 2. 將程式碼中的指令複製過去
-        self.tree.copy_global_to(guild=None)
-        
-        # 3. 執行同步
+        # 2. 執行同步
         await self.tree.sync(guild=None)
 
         print("✅ 已成功清理快取並重新同步指令！")
