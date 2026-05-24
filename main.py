@@ -27,17 +27,15 @@ class MyBot(commands.Bot):
 
     # 當機器人啟動時，將指令同步到 Discord 伺服器
     async def setup_hook(self):
-        # ⚠️ 請把這邊的數字換成你的 Discord 伺服器 ID
-        MY_GUILD = discord.Object(id=1477930950288478262) 
         
         # 1. 先清空這個伺服器上所有卡住的舊指令 (消滅幽靈指令)
-        self.tree.clear_commands(guild=MY_GUILD)
+        self.tree.clear_commands(guild=None)
         
         # 2. 將程式碼中的指令複製過去
-        self.tree.copy_global_to(guild=MY_GUILD)
+        self.tree.copy_global_to(guild=None)
         
         # 3. 執行同步
-        await self.tree.sync(guild=MY_GUILD)
+        await self.tree.sync(guild=None)
 
         print("✅ 已成功清理快取並重新同步指令！")
 
