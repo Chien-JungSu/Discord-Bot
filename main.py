@@ -27,10 +27,8 @@ class MyBot(commands.Bot):
 
     # 當機器人啟動時，將指令同步到 Discord 伺服器
     async def setup_hook(self):
-        #先清空這個伺服器上所有卡住的舊指令 (消滅幽靈指令)
-        self.tree.clear_commands(guild=None)
-        
         self.tree.on_error = self.on_app_command_error
+        pass
 
     async def on_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
         # 為了獲得最原始的錯誤，我們可以使用 error.original (如果有被包裝的話)
@@ -70,19 +68,6 @@ class MyBot(commands.Bot):
             pass
 # 這裡實例化了 MyBot，整份檔案只要這一個 bot 就夠了！
 bot = MyBot()
-
-@bot.event
-async def on_ready():
-    print(f'目前登入身份：{bot.user}')
-    try:
-        self_tree = bot.tree
-        self_tree.clear_commands(guild=None)
-        synced = await self_tree.sync()
-        print(f"✅ 全域指令同步成功！共發送了 {len(synced)} 個指令。")
-    except Exception as e:
-        print(f"❌ 同步時發生意外: {e}")
-        
-    print('機器人已準備就緒！')
 
 def generate_server_info_embed(guild: discord.Guild) -> discord.Embed:
     """
@@ -336,6 +321,21 @@ class FunView(discord.ui.View):
                 else:
                     joke = "暫時無法取得笑話，請稍後再試。"
         await interaction.followup.send(content=joke)
+
+@bot.event
+async def on_ready():
+    print(f'目前登入身份：{bot.user}')
+    
+    # 💡 關鍵：等到所有指令都被 Python 讀取完、上線的這一刻，才叫 bot.tree 去全域同步！
+    try:
+        self_tree = bot.tree
+        self_tree.clear_commands(guild=None)
+        synced = await self_tree.sync()
+        print(f"✅ 全域指令同步成功！共發送了 {len(synced)} 個指令。")
+    except Exception as e:
+        print(f"❌ 同步時發生意外: {e}")
+        
+    print('機器人已準備就緒！')
 
 
 # 啟動機器人 (請確保這在整份檔案的最底下)
