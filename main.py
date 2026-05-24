@@ -50,7 +50,7 @@ class MyBot(commands.Bot):
             # 執行全域同步（不要帶任何參數，直接同步全域指令樹）
             synced = await self.tree.sync()
 
-            print(f"🎉 [重大突破] 成功同步了 {len(synced)} 個全域斜線指令！")
+            print(f"成功同步了 {len(synced)} 個全域斜線指令！")
             self._global_synced = True
         except Exception as e:
             print(f"❌ 同步全域指令時發生錯誤: {e}")
@@ -147,7 +147,7 @@ async def weather(interaction: discord.Interaction, city: str):
     try:
         await interaction.response.defer(thinking=True)
         deferred = True
-    except discord.NotFound as e:
+    except (discord.NotFound, discord.HTTPException) as e:
         print(f">>> interaction.defer() 失敗: {e}")
         try:
             await interaction.response.send_message("⏳ 正在查詢天氣，請稍候...", ephemeral=True)
@@ -156,10 +156,18 @@ async def weather(interaction: discord.Interaction, city: str):
             return
 
     async def send_result(content=None, embed=None, ephemeral=False):
-        if interaction.response.is_done() or deferred:
-            await interaction.followup.send(content=content, embed=embed, ephemeral=ephemeral)
-        else:
-            await interaction.response.send_message(content=content, embed=embed, ephemeral=ephemeral)
+        try:
+            if interaction.response.is_done() or deferred:
+                return await interaction.followup.send(content=content, embed=embed, ephemeral=ephemeral)
+            return await interaction.response.send_message(content=content, embed=embed, ephemeral=ephemeral)
+        except discord.HTTPException as exc:
+            print(f">>> send_result first attempt failed: {exc}")
+            if not (interaction.response.is_done() or deferred):
+                try:
+                    return await interaction.followup.send(content=content, embed=embed, ephemeral=ephemeral)
+                except Exception as exc2:
+                    print(f">>> followup after send_message failed: {exc2}")
+            raise
 
     # --- 新增的字典防呆區塊 開始 ---
     
@@ -238,18 +246,32 @@ async def weather(interaction: discord.Interaction, city: str):
     # 接下來的 API 網址，就使用轉換後的 formatted_city
     url = f"https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-C0032-001?Authorization={API_KEY}&locationName={formatted_city}"
 
-    try:
-        # 3. 發送網路請求
+    async def fetch_weather_data(use_insecure: bool = False):
+        if use_insecure:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=10, ssl=False) as resp:
+                    return resp
+
         ssl_context = ssl.create_default_context(cafile=certifi.where())
         async with aiohttp.ClientSession(
             connector=aiohttp.TCPConnector(ssl=ssl_context)
         ) as session:
             async with session.get(url, timeout=10) as resp:
-                if resp.status != 200:
-                    await send_result("⚠️ 氣象署伺服器連線異常，請稍後再試！")
-                    return
-                
-                data = await resp.json()
+                return resp
+
+    try:
+        # 3. 發送網路請求
+        try:
+            resp = await fetch_weather_data()
+        except (ssl.SSLCertVerificationError, aiohttp.ClientConnectorCertificateError, aiohttp.ClientConnectorSSLError) as ssl_err:
+            print(f">>> SSL 驗證失敗，改用 ssl=False 重試: {ssl_err}")
+            resp = await fetch_weather_data(use_insecure=True)
+
+        if resp.status != 200:
+            await send_result("⚠️ 氣象署伺服器連線異常，請稍後再試！")
+            return
+
+        data = await resp.json()
 
         # 4. 檢查是否有抓到該城市的資料
         locations = data.get('records', {}).get('location', [])
