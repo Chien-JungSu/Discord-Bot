@@ -37,9 +37,13 @@ class MyBot(commands.Bot):
         print("🔧 setup_hook 已被呼叫")
         print("⏳ [後台提示] 正在向 Discord 官方伺服器發送全域指令同步請求...")
         try:
-            # 清除舊全域殘影（明確指定 guild=None 進行全域清理）
-            self.tree.clear_commands(guild=None)
-            print("ℹ️ 已嘗試清除舊的全域指令（若存在）")
+            # （已註解）清除舊全域殘影可能會移除本地註冊的命令，先暫時註解避免誤刪
+            # self.tree.clear_commands(guild=None)
+            # 列出本地註冊於 tree 的命令，協助診斷為何 sync 會回傳 0
+            local_cmds = list(self.tree.get_commands())
+            print(f"ℹ️ 本地已註冊的 command 數量: {len(local_cmds)}")
+            if local_cmds:
+                print("ℹ️ 本地 command 名稱:", [c.name for c in local_cmds])
 
             # 執行全域同步（不要帶任何參數，直接同步全域指令樹）
             synced = await self.tree.sync()
