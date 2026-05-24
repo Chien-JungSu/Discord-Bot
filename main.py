@@ -143,8 +143,10 @@ async def quotes(interaction: discord.Interaction):
 @app_commands.describe(city="請輸入縣市名稱（中英皆可，英文請確保首字母大寫）")
 async def weather(interaction: discord.Interaction, city: str):
     # 1. 立即回應 Discord，先佔住這次互動
+    deferred = False
     try:
         await interaction.response.defer(thinking=True)
+        deferred = True
     except discord.NotFound as e:
         print(f">>> interaction.defer() 失敗: {e}")
         try:
@@ -152,6 +154,12 @@ async def weather(interaction: discord.Interaction, city: str):
         except Exception as e_send:
             print(f">>> 直接回應 interaction 也失敗: {e_send}")
             return
+
+    async def send_result(content=None, embed=None, ephemeral=False):
+        if interaction.response.is_done() or deferred:
+            await interaction.followup.send(content=content, embed=embed, ephemeral=ephemeral)
+        else:
+            await interaction.response.send_message(content=content, embed=embed, ephemeral=ephemeral)
 
     # --- 新增的字典防呆區塊 開始 ---
     
@@ -238,7 +246,7 @@ async def weather(interaction: discord.Interaction, city: str):
         ) as session:
             async with session.get(url, timeout=10) as resp:
                 if resp.status != 200:
-                    await interaction.followup.send("⚠️ 氣象署伺服器連線異常，請稍後再試！")
+                    await send_result("⚠️ 氣象署伺服器連線異常，請稍後再試！")
                     return
                 
                 data = await resp.json()
@@ -246,7 +254,7 @@ async def weather(interaction: discord.Interaction, city: str):
         # 4. 檢查是否有抓到該城市的資料
         locations = data.get('records', {}).get('location', [])
         if not locations:
-            await interaction.followup.send(f"找不到「{city}」的資料，請確認輸入的是台灣的縣市名稱喔！")
+            await send_result(f"找不到「{city}」的資料，請確認輸入的是台灣的縣市名稱喔！")
             return
 
         # 5. 拆解 JSON 資料
@@ -280,11 +288,14 @@ async def weather(interaction: discord.Interaction, city: str):
         embed.add_field(name="💡 舒適度", value=ci, inline=False)
         embed.set_footer(text="資料來源：交通部中央氣象署")
 
-        await interaction.followup.send(embed=embed)
+        await send_result(embed=embed)
 
     except Exception as e:
         print(f">>> 氣象 API 發生錯誤: {e}")
-        await interaction.followup.send("❌ 獲取天氣資料時發生錯誤，已回報開發者!")
+        try:
+            await send_result("❌ 獲取天氣資料時發生錯誤，已回報開發者!", ephemeral=True)
+        except Exception as e_send:
+            print(f">>> 無法送出錯誤回應: {e_send}")
 
 @bot.tree.command(name="server_info", description="顯示此伺服器的詳細資訊")
 @app_commands.guild_only()  # 關鍵：防止使用者在私訊執行此指令導致 guild 為 None
