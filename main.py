@@ -27,14 +27,9 @@ class MyBot(commands.Bot):
 
     # 當機器人啟動時，將指令同步到 Discord 伺服器
     async def setup_hook(self):
-        # 1. 先清空這個伺服器上所有卡住的舊指令 (消滅幽靈指令)
+        #先清空這個伺服器上所有卡住的舊指令 (消滅幽靈指令)
         self.tree.clear_commands(guild=None)
         
-        # 2. 執行同步
-        await self.tree.sync()
-
-        print("✅ 已成功清理快取並重新同步指令！")
-
         self.tree.on_error = self.on_app_command_error
 
     async def on_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
@@ -79,6 +74,15 @@ bot = MyBot()
 @bot.event
 async def on_ready():
     print(f'目前登入身份：{bot.user}')
+    try:
+        self_tree = bot.tree
+        self_tree.clear_commands(guild=None)
+        synced = await self_tree.sync()
+        print(f"✅ 全域指令同步成功！共發送了 {len(synced)} 個指令。")
+    except Exception as e:
+        print(f"❌ 同步時發生意外: {e}")
+        
+    print('機器人已準備就緒！')
 
 def generate_server_info_embed(guild: discord.Guild) -> discord.Embed:
     """
