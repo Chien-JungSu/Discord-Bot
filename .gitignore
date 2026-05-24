@@ -1,3 +1,5 @@
 .env
 desktop.ini
 Flask
+_pycache_/
+__pycache__/

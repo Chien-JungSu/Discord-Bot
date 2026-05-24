@@ -1,3 +1,4 @@
+import threading
 from flask import Flask
 from threading import Thread
 
@@ -9,9 +10,11 @@ def home():
 
 def run():
     # 設定讓伺服器監聽 0.0.0.0，這樣 Render 才能偵測到
-    app.run(host='0.0.0.0', port=8080)
+    import os
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
 
 def keep_alive():
     # 使用執行緒（Thread）讓網頁與機器人可以同時運作
-    t = Thread(target=run)
+    t = threading.Thread(target=run)
     t.start()
