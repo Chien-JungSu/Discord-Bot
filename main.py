@@ -149,11 +149,12 @@ async def weather(interaction: discord.Interaction, city: str):
         deferred = True
     except (discord.NotFound, discord.HTTPException) as e:
         print(f">>> interaction.defer() 失敗: {e}")
-        try:
-            await interaction.response.send_message("⏳ 正在查詢天氣，請稍候...", ephemeral=True)
-        except Exception as e_send:
-            print(f">>> 直接回應 interaction 也失敗: {e_send}")
-            return
+        if not interaction.response.is_done():
+            try:
+                await interaction.response.send_message("⏳ 正在查詢天氣，請稍候...", ephemeral=True)
+                deferred = True
+            except discord.HTTPException as e_send:
+                print(f">>> 直接回應 interaction 也失敗: {e_send}")
 
     async def send_result(content=None, embed=None, ephemeral=False):
         try:
@@ -250,28 +251,28 @@ async def weather(interaction: discord.Interaction, city: str):
         if use_insecure:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, timeout=10, ssl=False) as resp:
-                    return resp
+                    return resp.status, await resp.json()
 
         ssl_context = ssl.create_default_context(cafile=certifi.where())
         async with aiohttp.ClientSession(
             connector=aiohttp.TCPConnector(ssl=ssl_context)
         ) as session:
             async with session.get(url, timeout=10) as resp:
-                return resp
+                return resp.status, await resp.json()
 
     try:
         # 3. 發送網路請求
         try:
-            resp = await fetch_weather_data()
+            status, data = await fetch_weather_data()
         except (ssl.SSLCertVerificationError, aiohttp.ClientConnectorCertificateError, aiohttp.ClientConnectorSSLError) as ssl_err:
             print(f">>> SSL 驗證失敗，改用 ssl=False 重試: {ssl_err}")
-            resp = await fetch_weather_data(use_insecure=True)
+            status, data = await fetch_weather_data(use_insecure=True)
 
-        if resp.status != 200:
+        if status != 200:
             await send_result("⚠️ 氣象署伺服器連線異常，請稍後再試！")
             return
 
-        data = await resp.json()
+        # 4. 檢查是否有抓到該城市的資料
 
         # 4. 檢查是否有抓到該城市的資料
         locations = data.get('records', {}).get('location', [])
