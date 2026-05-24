@@ -1,4 +1,3 @@
-from shlex import quote
 import discord
 from discord.ext import commands
 from discord import app_commands 
@@ -9,64 +8,65 @@ import sys
 import traceback
 import os
 from dotenv import load_dotenv
+# 1. 完美導入你寫的外部喚醒模組
 from keep_alive import keep_alive
 
-# 載入 .env 檔案內的環境變數
+# 載入環境變數
 load_dotenv()
-
-# 讀取名為 DISCORD_TOKEN 的環境變數
 TOKEN = os.getenv('DISCORD_TOKEN')
 
 intents = discord.Intents.default()
 intents.message_content = True
 
-
+# ================= 機器人本體定義 =================
 class MyBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix='/', intents=intents)
 
-    # 當機器人啟動時，將指令同步到 Discord 伺服器
+    # 💡 關鍵點：必須在這一生只執行一次的 setup_hook 裡進行「全域指令同步」
     async def setup_hook(self):
+        # 綁定你寫的全局錯誤處理器
         self.tree.on_error = self.on_app_command_error
-        pass
-
-    async def on_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
-        # 為了獲得最原始的錯誤，我們可以使用 error.original (如果有被包裝的話)
-        # 但如果是檢查失敗(如冷卻、權限)，通常錯誤本身就是我們要捕捉的對象
         
-        # 判斷是否已經回應過該 interaction，避免引發 InteractionResponded 錯誤
+        print("⏳ [後台提示] 正在向 Discord 官方伺服器發送全域指令同步請求...")
+        try:
+            # 清除舊全域殘影（明確指定 guild=None 進行全域清理）
+            self.tree.clear_commands(guild=None)
+            
+            # 執行全域同步（不要帶任何參數，直接同步全域指令樹）
+            synced = await self.tree.sync()
+            
+            print(f"🎉 [重大突破] 成功同步了 {len(synced)} 個全域斜線指令！")
+        except Exception as e:
+            print(f"❌ 同步全域指令時發生錯誤: {e}")
+
+    # 你原本寫得很漂亮的錯誤處理器（已融合 NoneType 防呆）
+    async def on_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
         responded = interaction.response.is_done()
 
-        # 1. 處理指令冷卻中 (CommandOnCooldown)
         if isinstance(error, app_commands.CommandOnCooldown):
             msg = f"系統冷卻中，請稍後再試！(還需 {error.retry_after:.1f} 秒)"
-            
-
-        # 2. 處理其他未知錯誤
         else:
             msg = "發生了未知錯誤，已回報給開發者。"
             
-            # 【核心修正點】安全檢查：判斷指令是否存在，避免在 CommandNotFound 時讀取 .name 導致 NoneType 崩潰
+            # 安全防呆：避免在 CommandNotFound 時讀取 .name 導致崩潰
             if interaction.command is not None:
                 cmd_name = interaction.command.name
             else:
                 cmd_name = "未知或未同步之全域指令"
             
-            # 在終端機印出詳細的錯誤追蹤 (Traceback)，方便開發者除錯
-            # 使用剛才安全取得的 cmd_name 替代原本可能造成 NoneType 崩潰的 interaction.command.name
             print(f"Ignoring exception in command {cmd_name}:", file=sys.stderr)
             traceback.print_exception(type(error), error, error.__traceback__, file=sys.stderr)
 
-        # 根據 interaction 的狀態發送錯誤訊息 (設定 ephemeral=True 讓錯誤訊息只有觸發者看得到)
         try:
             if not responded:
                 await interaction.response.send_message(msg, ephemeral=True)
             else:
                 await interaction.followup.send(msg, ephemeral=True)
         except discord.HTTPException:
-            # 如果連發送訊息都失敗（例如 Webhook 逾時），則忽略以避免無限迴圈
             pass
-# 這裡實例化了 MyBot，整份檔案只要這一個 bot 就夠了！
+
+# 2. 實例化機器人
 bot = MyBot()
 
 def generate_server_info_embed(guild: discord.Guild) -> discord.Embed:
@@ -322,23 +322,19 @@ class FunView(discord.ui.View):
                     joke = "暫時無法取得笑話，請稍後再試。"
         await interaction.followup.send(content=joke)
 
+# ================= 啟動與準備就緒事件 =================
+
 @bot.event
 async def on_ready():
     print(f'目前登入身份：{bot.user}')
+    print('✅ 機器人已經百分之百在雲端準備就緒！')
+
+# ================= 程式執行入口 =================
+if __name__ == "__main__":
+    # 3. 呼叫你寫的 keep_alive.py 裡面的函式，它會在背景自己開一條 Thread 跑網頁，絕不卡住主程式！
+    keep_alive()
+    print("🌐 外部 Flask 網頁伺服器已透過 keep_alive 模組在背景啟動...")
     
-    # 💡 關鍵：等到所有指令都被 Python 讀取完、上線的這一刻，才叫 bot.tree 去全域同步！
-    try:
-        self_tree = bot.tree
-        self_tree.clear_commands(guild=None)
-        synced = await self_tree.sync()
-        print(f"✅ 全域指令同步成功！共發送了 {len(synced)} 個指令。")
-    except Exception as e:
-        print(f"❌ 同步時發生意外: {e}")
-        
-    print('機器人已準備就緒！')
-
-
-# 啟動機器人 (請確保這在整份檔案的最底下)
-if __name__ == '__main__':
-    keep_alive() # 啟動 Flask 伺服器，保持機器人運作
+    # 4. 最後一行，大膽交給 Discord 機器人接管主執行緒！
+    print("🤖 正在啟動 Discord 機器人主程式...")
     bot.run(TOKEN)
