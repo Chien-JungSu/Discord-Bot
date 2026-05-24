@@ -27,18 +27,22 @@ class MyBot(commands.Bot):
     async def setup_hook(self):
         # 綁定你寫的全局錯誤處理器
         self.tree.on_error = self.on_app_command_error
-        
+
+        # 加入更多 debug 訊息，方便在 Render log 中追蹤是否有執行到這裡
+        print("🔧 setup_hook 已被呼叫")
         print("⏳ [後台提示] 正在向 Discord 官方伺服器發送全域指令同步請求...")
         try:
             # 清除舊全域殘影（明確指定 guild=None 進行全域清理）
             self.tree.clear_commands(guild=None)
-            
+            print("ℹ️ 已嘗試清除舊的全域指令（若存在）")
+
             # 執行全域同步（不要帶任何參數，直接同步全域指令樹）
             synced = await self.tree.sync()
-            
+
             print(f"🎉 [重大突破] 成功同步了 {len(synced)} 個全域斜線指令！")
         except Exception as e:
             print(f"❌ 同步全域指令時發生錯誤: {e}")
+            traceback.print_exc()
 
     # 你原本寫得很漂亮的錯誤處理器（已融合 NoneType 防呆）
     async def on_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
@@ -331,6 +335,11 @@ async def on_ready():
 
 # ================= 程式執行入口 =================
 if __name__ == "__main__":
+    # 啟動前檢查：若沒有設定 DISCORD_TOKEN，直接印出錯誤並退出，避免 silent failure
+    if not TOKEN:
+        print("❌ 環境變數 DISCORD_TOKEN 未設定或為空！請在環境變數中設定機器人 Token。")
+        sys.exit(1)
+
     # 3. 呼叫你寫的 keep_alive.py 裡面的函式，它會在背景自己開一條 Thread 跑網頁，絕不卡住主程式！
     keep_alive()
     print("🌐 外部 Flask 網頁伺服器已透過 keep_alive 模組在背景啟動...")
