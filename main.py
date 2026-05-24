@@ -144,31 +144,26 @@ async def quotes(interaction: discord.Interaction):
 async def weather(interaction: discord.Interaction, city: str):
     # 1. 立即回應 Discord，先佔住這次互動
     deferred = False
+    acknowledged = False
     try:
         await interaction.response.defer(thinking=True)
         deferred = True
+        acknowledged = True
     except (discord.NotFound, discord.HTTPException) as e:
         print(f">>> interaction.defer() 失敗: {e}")
-        if not interaction.response.is_done():
-            try:
-                await interaction.response.send_message("⏳ 正在查詢天氣，請稍候...", ephemeral=True)
-                deferred = True
-            except discord.HTTPException as e_send:
-                print(f">>> 直接回應 interaction 也失敗: {e_send}")
 
     async def send_result(content=None, embed=None, ephemeral=False):
-        try:
-            if interaction.response.is_done() or deferred:
-                return await interaction.followup.send(content=content, embed=embed, ephemeral=ephemeral)
-            return await interaction.response.send_message(content=content, embed=embed, ephemeral=ephemeral)
-        except discord.HTTPException as exc:
-            print(f">>> send_result first attempt failed: {exc}")
-            if not (interaction.response.is_done() or deferred):
-                try:
-                    return await interaction.followup.send(content=content, embed=embed, ephemeral=ephemeral)
-                except Exception as exc2:
-                    print(f">>> followup after send_message failed: {exc2}")
-            raise
+        nonlocal acknowledged
+        if not (interaction.response.is_done() or acknowledged):
+            try:
+                response = await interaction.response.send_message(content=content, embed=embed, ephemeral=ephemeral)
+                acknowledged = True
+                return response
+            except discord.HTTPException as exc:
+                print(f">>> send_message failed: {exc}")
+                if getattr(exc, 'code', None) not in (40060, 10062):
+                    raise
+        return await interaction.followup.send(content=content, embed=embed, ephemeral=ephemeral)
 
     # --- 新增的字典防呆區塊 開始 ---
     
