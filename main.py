@@ -14,7 +14,8 @@ from dotenv import load_dotenv
 from keep_alive import keep_alive
 
 # 載入環境變數
-load_dotenv()
+dotenv_path = os.path.join(os.path.dirname(__file__), '.env')
+load_dotenv(dotenv_path=dotenv_path)
 TOKEN = os.getenv('DISCORD_TOKEN')
 CWA_API_KEY = os.getenv('CWA_API_KEY')
 
@@ -237,6 +238,10 @@ async def weather(interaction: discord.Interaction, city: str):
     # --- 新增的字典防呆區塊 結束 ---
 
     
+    if not CWA_API_KEY:
+        await send_result("❌ 伺服器端尚未設定氣象 API KEY，請聯絡管理員。", ephemeral=True)
+        return
+
     # 接下來的 API 網址，就使用轉換後的 formatted_city
     url = f"https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-C0032-001?Authorization={CWA_API_KEY}&locationName={formatted_city}"
 
@@ -244,13 +249,18 @@ async def weather(interaction: discord.Interaction, city: str):
         if use_insecure:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, timeout=10, ssl=False) as resp:
+                    if resp.status != 200:
+                        return resp.status, await resp.text()
                     return resp.status, await resp.json()
 
         ssl_context = ssl.create_default_context(cafile=certifi.where())
+        ssl_context.check_hostname = True
         async with aiohttp.ClientSession(
             connector=aiohttp.TCPConnector(ssl=ssl_context)
         ) as session:
             async with session.get(url, timeout=10) as resp:
+                if resp.status != 200:
+                    return resp.status, await resp.text()
                 return resp.status, await resp.json()
 
     try:
@@ -262,10 +272,14 @@ async def weather(interaction: discord.Interaction, city: str):
             status, data = await fetch_weather_data(use_insecure=True)
 
         if status != 200:
+            print(f">>> 氣象 API 非 200 回應: {status} / {data}")
             await send_result("⚠️ 氣象署伺服器連線異常，請稍後再試！")
             return
 
-        # 4. 檢查是否有抓到該城市的資料
+        if not isinstance(data, dict):
+            print(f">>> 取得的資料不是 JSON 物件: {data}")
+            await send_result("⚠️ 取得資料格式異常，請稍後再試！")
+            return
 
         # 4. 檢查是否有抓到該城市的資料
         locations = data.get('records', {}).get('location', [])
@@ -400,6 +414,10 @@ if __name__ == "__main__":
     # 啟動前檢查：若沒有設定 DISCORD_TOKEN，直接印出錯誤並退出，避免 silent failure
     if not TOKEN:
         print("❌ 環境變數 DISCORD_TOKEN 未設定或為空！請在環境變數中設定機器人 Token。")
+        sys.exit(1)
+
+    if not CWA_API_KEY:
+        print("❌ 環境變數 CWA_API_KEY 未設定或為空！請在 .env 或系統環境變數中設定中央氣象署 API KEY。")
         sys.exit(1)
 
     # 3. 呼叫你寫的 keep_alive.py 裡面的函式，它會在背景自己開一條 Thread 跑網頁，絕不卡住主程式！
