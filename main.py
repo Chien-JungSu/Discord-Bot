@@ -155,17 +155,26 @@ async def weather(interaction: discord.Interaction, city: str):
         print(f">>> interaction.defer() 失敗: {e}")
 
     async def send_result(content=None, embed=None, ephemeral=False):
-        nonlocal acknowledged
-        if not (interaction.response.is_done() or acknowledged):
+        nonlocal acknowledged, deferred
+        if deferred:
             try:
-                response = await interaction.response.send_message(content=content, embed=embed, ephemeral=ephemeral)
-                acknowledged = True
-                return response
+                return await interaction.followup.send(content=content, embed=embed, ephemeral=ephemeral)
             except discord.HTTPException as exc:
-                print(f">>> send_message failed: {exc}")
-                if getattr(exc, 'code', None) not in (40060, 10062):
-                    raise
-        return await interaction.followup.send(content=content, embed=embed, ephemeral=ephemeral)
+                print(f">>> followup.send failed: {exc}")
+                if getattr(exc, 'code', None) in (10062, 40060):
+                    return None
+                raise
+
+        try:
+            response = await interaction.response.send_message(content=content, embed=embed, ephemeral=ephemeral)
+            acknowledged = True
+            return response
+        except discord.HTTPException as exc:
+            print(f">>> send_message failed: {exc}")
+            if getattr(exc, 'code', None) not in (40060, 10062):
+                raise
+            deferred = True
+            return await interaction.followup.send(content=content, embed=embed, ephemeral=ephemeral)
 
     # --- 新增的字典防呆區塊 開始 ---
     
