@@ -16,6 +16,7 @@ from keep_alive import keep_alive
 # 載入環境變數
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
+CWA_API_KEY = os.getenv('CWA_API_KEY')
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -235,12 +236,9 @@ async def weather(interaction: discord.Interaction, city: str):
 
     # --- 新增的字典防呆區塊 結束 ---
 
-
-    # ⚠️ 請把這裡換成你剛剛在第一步申請到的授權碼
-    API_KEY = "CWA-513252A5-0F7B-44A9-850B-648C57B942B1" 
     
     # 接下來的 API 網址，就使用轉換後的 formatted_city
-    url = f"https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-C0032-001?Authorization={API_KEY}&locationName={formatted_city}"
+    url = f"https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-C0032-001?Authorization={CWA_API_KEY}&locationName={formatted_city}"
 
     async def fetch_weather_data(use_insecure: bool = False):
         if use_insecure:
