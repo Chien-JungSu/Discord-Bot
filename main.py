@@ -10,7 +10,6 @@ import sys
 import traceback
 import os
 from dotenv import load_dotenv
-# 1. 完美導入你寫的外部喚醒模組
 from keep_alive import keep_alive
 
 # 載入環境變數
@@ -18,6 +17,12 @@ dotenv_path = os.path.join(os.path.dirname(__file__), '.env')
 load_dotenv(dotenv_path=dotenv_path)
 TOKEN = os.getenv('DISCORD_TOKEN')
 CWA_API_KEY = os.getenv('CWA_API_KEY')
+OWNER_ID = os.getenv('DISCORD_OWNER_ID') or os.getenv('OWNER_ID')
+try:
+    OWNER_ID = int(OWNER_ID) if OWNER_ID else None
+except ValueError:
+    print('❌ 環境變數 DISCORD_OWNER_ID 必須是 Discord 使用者 ID 的整數格式。')
+    OWNER_ID = None
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -28,9 +33,48 @@ class MyBot(commands.Bot):
         super().__init__(command_prefix='/', intents=intents)
         # 標誌是否已同步過全域指令（供 fallback 檢查用）
         self._global_synced = False
+        # 管理者 / 開發者 Discord 使用者 ID
+        self.owner_id = OWNER_ID
 
     async def on_connect(self):
         print("ℹ️ on_connect event fired")
+
+    async def notify_owner_error(self, error: Exception, interaction: discord.Interaction | None = None, extra_info: str = ""):
+        if not self.owner_id:
+            return
+
+        try:
+            owner = self.get_user(self.owner_id)
+            if owner is None:
+                owner = await self.fetch_user(self.owner_id)
+            if owner is None:
+                print(f"❌ 無法取得管理者 Discord 使用者: {self.owner_id}")
+                return
+
+            command_name = interaction.command.name if interaction and interaction.command else 'N/A'
+            user_info = f"{interaction.user} ({interaction.user.id})" if interaction else 'N/A'
+            guild_info = f"{interaction.guild} ({interaction.guild.id})" if interaction and interaction.guild else 'Direct Message / N/A'
+            trace = ''.join(traceback.format_exception(type(error), error, error.__traceback__))
+            if len(trace) > 1500:
+                trace = trace[-1500:]
+
+            content = (
+                f"⚠️ **機器人錯誤通知**\n"
+                f"**使用者**: {user_info}\n"
+                f"**伺服器**: {guild_info}\n"
+                f"**指令**: {command_name}\n"
+                f"**錯誤類型**: {type(error).__name__}\n"
+                f"**錯誤訊息**: {str(error)}\n"
+            )
+            if extra_info:
+                content += f"**額外資訊**: {extra_info}\n"
+            content += f"```py\n{trace}\n```"
+
+            await owner.send(content)
+        except discord.HTTPException as exc:
+            print(f"❌ 無法將錯誤 DM 給管理者: {exc}")
+        except Exception as exc:
+            print(f"❌ notify_owner_error 發生例外: {exc}")
 
     # 💡 關鍵點：必須在這一生只執行一次的 setup_hook 裡進行「全域指令同步」
     async def setup_hook(self):
@@ -75,6 +119,7 @@ class MyBot(commands.Bot):
             
             print(f"Ignoring exception in command {cmd_name}:", file=sys.stderr)
             traceback.print_exception(type(error), error, error.__traceback__, file=sys.stderr)
+            await self.notify_owner_error(error, interaction)
 
         try:
             if not responded:
@@ -331,6 +376,7 @@ async def weather(interaction: discord.Interaction, city: str):
 
     except Exception as e:
         print(f">>> 氣象 API 發生錯誤: {e}")
+        await bot.notify_owner_error(e, interaction, extra_info=f"weather command for city={formatted_city}")
         try:
             await send_result("❌ 獲取天氣資料時發生錯誤，已回報開發者!", ephemeral=True)
         except Exception as e_send:
