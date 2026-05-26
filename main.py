@@ -323,6 +323,11 @@ async def weather(interaction: discord.Interaction, city: str):
             status, data = await fetch_weather_data()
         except (ssl.SSLCertVerificationError, aiohttp.ClientConnectorCertificateError, aiohttp.ClientConnectorSSLError) as ssl_err:
             print(f">>> SSL 驗證失敗，改用 ssl=False 重試: {ssl_err}")
+            await bot.notify_owner_error(
+                ssl_err,
+                interaction,
+                extra_info=f"weather command SSL verification failed for city={formatted_city}"
+            )
             status, data = await fetch_weather_data(use_insecure=True)
 
         if status != 200:
