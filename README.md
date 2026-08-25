@@ -14,6 +14,8 @@
 - `/weather <city>`：查詢全台各縣市即時天氣預報
 - `/bus`：使用下拉式選單查詢台灣公車即時到站資訊
 - `/server_info`：顯示目前伺服器詳細資訊
+- `/active_welcome`：設定伺服器歡迎訊息（歡迎頻道必填，規則頻道與身份組頻道選填）
+- `/inactive_welcome`：取消伺服器歡迎訊息功能
 
 專案也包含 `keep_alive.py`，用於在背景啟動一個 Flask HTTP 伺服器，方便部署於需要存活檢查的雲端平台。
 
@@ -31,6 +33,7 @@ pip install -r requirements.txt
 - python-dotenv
 - Flask
 - certifi
+- aiohttp
 
 ### 環境變數
 
@@ -62,6 +65,21 @@ python main.py
 - `/weather city:<縣市名稱或英文>`：查詢天氣，支援如 `臺北`、`Taichung`、`Matsu` 等對照
 - `/bus`：先選擇縣市，再輸入公車號碼，接著從下拉式選單選擇站牌並查詢即時到站資訊
 - `/server_info`：顯示所在伺服器的詳細資訊
+- `/active_welcome welcome_channel:<頻道> [rules_channel:<頻道>] [role_channel:<頻道>]`：啟用歡迎訊息，設定歡迎頻道（必填）、規則頻道（選填）、身份組頻道（選填）。需要「管理伺服器」權限。
+- `/inactive_welcome`：停用本伺服器的歡迎訊息功能。需要「管理伺服器」權限。
+
+### 歡迎訊息功能說明
+
+啟用後，每當有新成員加入伺服器，機器人會在指定的歡迎頻道發送一則嵌入訊息，包含：
+
+- 新成員的大頭貼與 @ 標註
+- 加入時間與目前成員人數
+- 若有設定規則頻道，附上引導連結
+- 若有設定身份組頻道，附上引導連結
+
+歡迎設定會儲存於 `welcome_settings.json`，重啟機器人後不會遺失。
+
+> **注意**：使用歡迎訊息功能前，請至 [Discord Developer Portal](https://discord.com/developers/applications) → **Bot** → **Privileged Gateway Intents** 開啟 **Server Members Intent**，否則 `on_member_join` 事件不會觸發。
 
 ### 特別說明
 
@@ -92,6 +110,8 @@ Supported features:
 - `/weather <city>`: query real-time weather for Taiwan cities
 - `/bus`: query Taiwan bus arrivals through dropdown menus
 - `/server_info`: display detailed server information
+- `/active_welcome`: set up a server welcome message (welcome channel required; rules and role channels optional)
+- `/inactive_welcome`: disable the server welcome message feature
 
 The project also includes `keep_alive.py`, which starts a Flask HTTP server in the background for cloud deployments that require a keep-alive endpoint.
 
@@ -109,6 +129,7 @@ pip install -r requirements.txt
 - python-dotenv
 - Flask
 - certifi
+- aiohttp
 
 ### Environment Variables
 
@@ -140,6 +161,21 @@ When launched, the bot checks required environment variables, starts the Flask b
 - `/weather city:<city name or English name>`: query weather, supports mappings like `臺北`, `Taichung`, `Matsu`
 - `/bus`: select a city, enter a bus route, choose a stop from a dropdown menu, and view real-time arrival information
 - `/server_info`: display the current server's details
+- `/active_welcome welcome_channel:<channel> [rules_channel:<channel>] [role_channel:<channel>]`: enable welcome messages with a required welcome channel and optional rules/role channels. Requires **Manage Server** permission.
+- `/inactive_welcome`: disable welcome messages for this server. Requires **Manage Server** permission.
+
+### Welcome Message Feature
+
+When enabled, the bot sends an embed to the configured welcome channel whenever a new member joins. The embed includes:
+
+- The new member's avatar and @mention
+- Join timestamp and current member count
+- A link to the rules channel (if configured)
+- A link to the role pickup channel (if configured)
+
+Welcome settings are saved to `welcome_settings.json` and persist across restarts.
+
+> **Important**: Before using the welcome feature, go to the [Discord Developer Portal](https://discord.com/developers/applications) → **Bot** → **Privileged Gateway Intents** and enable **Server Members Intent**, otherwise the `on_member_join` event will not fire.
 
 ### Notes
 
