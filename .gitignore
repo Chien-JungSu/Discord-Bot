@@ -3,3 +3,5 @@ desktop.ini
 Flask
 _pycache_/
 __pycache__/
+.venv
+welcome_settings.json
