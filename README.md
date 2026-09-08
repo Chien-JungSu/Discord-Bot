@@ -16,6 +16,8 @@
 - `/server_info`：顯示目前伺服器詳細資訊
 - `/active_welcome`：設定伺服器歡迎訊息（歡迎頻道必填，規則頻道與身份組頻道選填）
 - `/inactive_welcome`：取消伺服器歡迎訊息功能
+- `/join`：加入使用者目前所在的語音頻道
+- `/leave`：離開目前所在的語音頻道
 
 專案也包含 `keep_alive.py`，用於在背景啟動一個 Flask HTTP 伺服器，方便部署於需要存活檢查的雲端平台。
 
@@ -35,6 +37,8 @@ pip install -r requirements.txt
 - certifi
 - aiohttp
 
+音樂功能另外需要安裝 `wavelink`，並準備可連線的 Lavalink 節點；未安裝或未設定時，其他功能仍可正常啟動，但 `/join` 與 `/leave` 無法使用。
+
 ### 環境變數
 
 請在專案根目錄建立 `.env`，或直接將以下變數設定於系統環境：
@@ -45,9 +49,18 @@ CWA_API_KEY=中央氣象署 API 金鑰
 TDX_CLIENT_ID=交通部 TDX Client ID
 TDX_CLIENT_SECRET=交通部 TDX Client Secret
 DISCORD_OWNER_ID=你的 Discord 使用者 ID
+LAVALINK_URI=Lavalink 節點網址
+LAVALINK_PASSWORD=Lavalink 節點密碼
 ```
 
 `TDX_CLIENT_ID` 與 `TDX_CLIENT_SECRET` 用於 `/bus` 公車查詢。`DISCORD_OWNER_ID` 為選填，用來接收機器人錯誤通知。若未設定，錯誤通知會略過。
+也可以使用 `OWNER_ID` 作為 `DISCORD_OWNER_ID` 的替代名稱。`LAVALINK_URI` 與 `LAVALINK_PASSWORD` 用於音樂功能的 Lavalink 連線；這兩項未設定時會略過節點連線。
+
+若要啟用音樂功能，請另外安裝套件並啟動 Lavalink：
+
+```bash
+pip install wavelink
+```
 
 ### 啟動方式
 
@@ -67,6 +80,8 @@ python main.py
 - `/server_info`：顯示所在伺服器的詳細資訊
 - `/active_welcome welcome_channel:<頻道> [rules_channel:<頻道>] [role_channel:<頻道>]`：啟用歡迎訊息，設定歡迎頻道（必填）、規則頻道（選填）、身份組頻道（選填）。需要「管理伺服器」權限。
 - `/inactive_welcome`：停用本伺服器的歡迎訊息功能。需要「管理伺服器」權限。
+- `/join`：機器人加入你目前所在的語音頻道；需要已安裝 `wavelink` 並設定 Lavalink。
+- `/leave`：機器人離開目前所在的語音頻道。
 
 ### 歡迎訊息功能說明
 
@@ -81,6 +96,8 @@ python main.py
 
 > **注意**：使用歡迎訊息功能前，請至 [Discord Developer Portal](https://discord.com/developers/applications) → **Bot** → **Privileged Gateway Intents** 開啟 **Server Members Intent**，否則 `on_member_join` 事件不會觸發。
 
+機器人也會啟用 `Message Content Intent` 與語音狀態 intents，以支援目前的指令與 `/join`、`/leave` 語音功能；請在 Discord Developer Portal 的 Bot 設定中依需求開啟對應權限。
+
 ### 特別說明
 
 - `/weather` 會呼叫中央氣象署公開資料 API，若 SSL 驗證失敗會自動嘗試不驗證模式重試。
@@ -91,7 +108,7 @@ python main.py
 
 ### 開發建議
 
-- 若要新增指令，可在 `main.py` 中擴充 `bot.tree.command`。
+- 若要新增指令，請在 `cogs/` 建立或修改 Cog，再將模組路徑加入 `main.py` 的 `INITIAL_EXTENSIONS`。
 - 若要部署到雲端平台，請確認 `PORT` 環境變數或預設 `8080` 可正常對外連線。
 
 ---
@@ -112,6 +129,8 @@ Supported features:
 - `/server_info`: display detailed server information
 - `/active_welcome`: set up a server welcome message (welcome channel required; rules and role channels optional)
 - `/inactive_welcome`: disable the server welcome message feature
+- `/join`: join the voice channel where the user is currently connected
+- `/leave`: leave the current voice channel
 
 The project also includes `keep_alive.py`, which starts a Flask HTTP server in the background for cloud deployments that require a keep-alive endpoint.
 
@@ -131,6 +150,8 @@ pip install -r requirements.txt
 - certifi
 - aiohttp
 
+The music features also require `wavelink` and a reachable Lavalink node. If Wavelink or Lavalink is unavailable, the bot can still start, but the music features will not work.
+
 ### Environment Variables
 
 Create a `.env` file in the project root, or set these variables in your environment:
@@ -141,9 +162,18 @@ CWA_API_KEY=your Central Weather Administration API key
 TDX_CLIENT_ID=your TDX Client ID
 TDX_CLIENT_SECRET=your TDX Client Secret
 DISCORD_OWNER_ID=your Discord user ID
+LAVALINK_URI=your Lavalink node URL
+LAVALINK_PASSWORD=your Lavalink node password
 ```
 
 `TDX_CLIENT_ID` and `TDX_CLIENT_SECRET` are required for `/bus`. `DISCORD_OWNER_ID` is optional and is used to receive bot error notifications. If it is not set, error notifications will be skipped.
+`OWNER_ID` can also be used as an alternative name for `DISCORD_OWNER_ID`. `LAVALINK_URI` and `LAVALINK_PASSWORD` configure the Lavalink connection for the music features. If either is missing, the bot skips the Lavalink connection.
+
+To enable the music features, install Wavelink separately and run a Lavalink node:
+
+```bash
+pip install wavelink
+```
 
 ### Run
 
@@ -163,6 +193,8 @@ When launched, the bot checks required environment variables, starts the Flask b
 - `/server_info`: display the current server's details
 - `/active_welcome welcome_channel:<channel> [rules_channel:<channel>] [role_channel:<channel>]`: enable welcome messages with a required welcome channel and optional rules/role channels. Requires **Manage Server** permission.
 - `/inactive_welcome`: disable welcome messages for this server. Requires **Manage Server** permission.
+- `/join`: join the user's current voice channel. Requires `wavelink` and a configured Lavalink node.
+- `/leave`: leave the current voice channel.
 
 ### Welcome Message Feature
 
@@ -177,15 +209,18 @@ Welcome settings are saved to `welcome_settings.json` and persist across restart
 
 > **Important**: Before using the welcome feature, go to the [Discord Developer Portal](https://discord.com/developers/applications) → **Bot** → **Privileged Gateway Intents** and enable **Server Members Intent**, otherwise the `on_member_join` event will not fire.
 
+The bot also enables the `Message Content Intent` and voice-state intents for the current commands and the `/join` and `/leave` voice features. Enable the corresponding intents in the Discord Developer Portal as needed.
+
 ### Notes
 
 - `/weather` calls the Taiwan Central Weather Administration API. If SSL verification fails, it retries with SSL verification disabled.
 - `/bus` calls the Taiwan TDX API for route stops and real-time arrival estimates. Bus query messages are ephemeral, so only the user who started the query can see them.
 - `/bus` handles unknown route numbers with a clear not-found message. Unexpected errors trigger an owner DM when `DISCORD_OWNER_ID` is configured.
+- `/join` and `/leave` use Wavelink and require a reachable Lavalink node configured with `LAVALINK_URI` and `LAVALINK_PASSWORD`. The music Cog is loaded without stopping the bot when Wavelink or Lavalink is unavailable.
 - The bot syncs global slash commands in `setup_hook`. If that fails, it retries in `on_ready` as a fallback.
 - `keep_alive.py` runs a background Flask web service that responds with `機器人正在運作中！`.
 
 ### Tips
 
-- To add commands, extend `bot.tree.command` in `main.py`.
+- To add a command, create or update a Cog under `cogs/`, then add its module path to `INITIAL_EXTENSIONS` in `main.py`.
 - For cloud deployment, ensure the `PORT` environment variable or default port `8080` is accessible.
