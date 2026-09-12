@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>炙彗JI器人</title>
+    <style>
+      :root {
+        --bg: #0b1020;
+        --bg2: #111827;
+        --panel: rgba(15, 23, 42, 0.85);
+        --panel-border: rgba(148, 163, 184, 0.2);
+        --primary: #7dd3fc;
+        --secondary: #34d399;
+        --accent: #a78bfa;
+        --text: #e5eefb;
+        --muted: #b9c6db;
+        --danger: #f87171;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        font-family: "Segoe UI", "Microsoft JhengHei", sans-serif;
+        background: linear-gradient(135deg, #0b1020, #111827 38%, #172554);
+        color: var(--text);
+        min-height: 100vh;
+        padding: 32px 18px;
+      }
+
+      main {
+        max-width: 1100px;
+        margin: 0 auto;
+      }
+
+      .hero {
+        background: rgba(15, 23, 42, 0.82);
+        border: 1px solid var(--panel-border);
+        border-radius: 24px;
+        padding: 30px 28px;
+        box-shadow: 0 16px 50px rgba(0, 0, 0, 0.28);
+      }
+
+      .status {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        background: rgba(52, 211, 153, 0.1);
+        border: 1px solid rgba(52, 211, 153, 0.45);
+        color: var(--secondary);
+        padding: 10px 16px;
+        border-radius: 999px;
+        font-size: 14px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+      }
+
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: var(--secondary);
+        box-shadow: 0 0 12px var(--secondary);
+        animation: pulse 1.8s infinite;
+      }
+
+      @keyframes pulse {
+        0%, 100% { transform: scale(1); opacity: 1; }
+        50% { transform: scale(1.4); opacity: 0.8; }
+      }
+
+      h1 {
+        margin: 22px 0 12px;
+        font-size: clamp(2rem, 4vw, 3.1rem);
+        line-height: 1.15;
+      }
+
+      .subtitle {
+        color: var(--muted);
+        margin: 0 0 24px;
+        font-size: 1.04rem;
+        line-height: 1.8;
+      }
+
+      .cta-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 14px;
+        margin-top: 20px;
+      }
+
+      .btn {
+        display: inline-block;
+        padding: 12px 18px;
+        border-radius: 12px;
+        text-decoration: none;
+        font-weight: 700;
+        transition: 0.2s ease;
+      }
+
+      .btn.primary {
+        background: linear-gradient(135deg, var(--primary), #60a5fa);
+        color: #0b1020;
+      }
+
+      .btn.secondary {
+        background: rgba(167, 139, 250, 0.12);
+        color: var(--text);
+        border: 1px solid rgba(167, 139, 250, 0.35);
+      }
+
+      .btn:hover {
+        transform: translateY(-1px);
+        text-decoration: none;
+      }
+
+      .features {
+        margin-top: 30px;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        gap: 20px;
+      }
+
+      .card {
+        background: rgba(15, 23, 42, 0.8);
+        border: 1px solid var(--panel-border);
+        border-radius: 18px;
+        padding: 20px 18px;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
+      }
+
+      .card h2 {
+        margin: 0 0 12px;
+        font-size: 1.2rem;
+      }
+
+      .tag {
+        display: inline-block;
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--primary);
+        margin-bottom: 10px;
+      }
+
+      ul {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+      }
+
+      li {
+        color: var(--muted);
+        line-height: 1.8;
+        padding: 4px 0;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+      }
+
+      li:last-child {
+        border-bottom: none;
+      }
+
+      .footer {
+        margin-top: 30px;
+        text-align: center;
+        color: var(--muted);
+        font-size: 0.95rem;
+      }
+
+      a {
+        color: var(--primary);
+        text-decoration: none;
+      }
+
+      a:hover {
+        text-decoration: underline;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="hero">
+        <div class="status">
+          <span class="dot"></span>
+          機器人狀態：在線中
+        </div>
+
+        <h1>炙彗JI器人</h1>
+        <p class="subtitle">
+          這是一個於高中自主學習製作的多功能 Discord 機器人，整合了娛樂、天氣查詢、公車到站、伺服器資訊、歡迎訊息與語音功能。
+          目前機器人使用雲端貓居託管，24/7全天候上線。
+        </p>
+
+        <div class="cta-row">
+          <a class="btn secondary" href="https://discord.gg/YjjdJMa8rm" target="_blank" rel="noreferrer">
+            加入官方支援群
+          </a>
+          <a class="btn secondary" href="https://github.com/Chien-JungSu/Discord-Bot" target="_blank" rel="noreferrer">
+            GitHub Repository
+          </a>
+          <a class="btn secondary" href="https://discord.com/oauth2/authorize?client_id=1477930641944350952&permissions=8&integration_type=0&scope=bot+applications.commands" target="_blank" rel="noreferrer">
+            邀請機器人
+          </a>
+        </div>
+      </section>
+
+      <section class="features">
+        <article class="card">
+          <div class="tag">General</div>
+          <h2>一般功能</h2>
+          <ul>
+            <li> /ping：測試機器人延遲</li>
+            <li> /choice：幫你從多個選項中做決定</li>
+            <li> /quotes：隨機名言與笑話互動功能</li>
+          </ul>
+        </article>
+
+        <article class="card">
+          <div class="tag">Weather</div>
+          <h2>天氣查詢</h2>
+          <ul>
+            <li> /weather：查詢台灣各縣市的即時天氣</li>
+            <li> 支援中文與英文地名輸入</li>
+            <li> 提供溫度、降雨機率、舒適度資訊</li>
+          </ul>
+        </article>
+
+        <article class="card">
+          <div class="tag">Bus</div>
+          <h2>公車資訊</h2>
+          <ul>
+            <li> 查詢城市公車路線到站時間</li>
+            <li> 顯示站牌資訊與車牌狀態</li>
+            <li> 提供路線與方向選擇</li>
+          </ul>
+        </article>
+
+        <article class="card">
+          <div class="tag">Server Info</div>
+          <h2>伺服器資訊</h2>
+          <ul>
+            <li> /server_info：顯示伺服器基本資料</li>
+            <li> 可查看成員數與建立時間</li>
+            <li> 適合用於管理與社群資訊展示</li>
+          </ul>
+        </article>
+
+        <article class="card">
+          <div class="tag">Welcome</div>
+          <h2>歡迎訊息</h2>
+          <ul>
+            <li> /active_welcome：設定加入歡迎頻道</li>
+            <li> /inactive_welcome：停用歡迎訊息</li>
+            <li> 新成員加入時自動發送歡迎卡片</li>
+          </ul>
+        </article>
+
+        <article class="card">
+          <div class="tag">Music</div>
+          <h2>語音功能</h2>
+          <ul>
+            <li> /join：讓機器人加入語音頻道</li>
+            <li> /leave：讓機器人離開語音頻道</li>
+            <li> 未來可擴充音樂播放與自動播放功能</li>
+          </ul>
+        </article>
+      </section>
+
+      <div class="footer">
+        © 2026 炙彗JI器人 •
+        支援群：<a href="https://discord.gg/YjjdJMa8rm" target="_blank" rel="noreferrer">https://discord.gg/YjjdJMa8rm</a>
+        • GitHub：<a href="https://github.com/Chien-JungSu/Discord-Bot" target="_blank" rel="noreferrer">https://github.com/Chien-JungSu/Discord-Bot</a>
+        • 雲端貓居：<a href="https://nyanko.host/" target="_blank" rel="noreferrer">https://nyanko.host/</a>
+      </div>
+    </main>
+  </body>
+</html>
