@@ -7,7 +7,7 @@ from discord.ext import commands
 from discord import app_commands
 from dotenv import load_dotenv
 
-from cogs.keep_alive import keep_alive
+from cogs.web_server import app, start_web_server
 
 # ================= 環境變數載入 =================
 dotenv_path = os.path.join(os.path.dirname(__file__), '.env')
@@ -33,7 +33,7 @@ INITIAL_EXTENSIONS = [
     'cogs.weather',       # /weather
     'cogs.bus',           # /bus
     'cogs.server_info',   # /server_info
-    'cogs.welcome',       # /active_welcome /inactive_welcome + on_member_join
+    'cogs.welcome',       # /welcome_active /welcome_inactive + on_member_join
     'cogs.music',         # /join /leave（第1週新增，之後每週持續擴充）
 ]
 
@@ -139,6 +139,7 @@ class MyBot(commands.Bot):
 
 
 bot = MyBot()
+app.config['BOT'] = bot
 
 
 @bot.event
@@ -159,6 +160,9 @@ async def on_ready():
 
 
 if __name__ == "__main__":
+    start_web_server()
+    print("🌐 外部 Flask 網頁伺服器已透過 web_server 模組在背景啟動...")
+
     if not TOKEN:
         print("❌ 環境變數 DISCORD_TOKEN 未設定或為空！請在環境變數中設定機器人 Token。")
         sys.exit(1)
@@ -166,9 +170,6 @@ if __name__ == "__main__":
     if not CWA_API_KEY:
         print("❌ 環境變數 CWA_API_KEY 未設定或為空！請在 .env 或系統環境變數中設定中央氣象署 API KEY。")
         sys.exit(1)
-
-    keep_alive()
-    print("🌐 外部 Flask 網頁伺服器已透過 keep_alive 模組在背景啟動...")
 
     print("🤖 正在啟動 Discord 機器人主程式...")
     bot.run(TOKEN)

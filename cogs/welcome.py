@@ -37,7 +37,7 @@ class Welcome(commands.Cog):
         self.bot = bot
         self.settings: dict = _load_welcome_settings()
 
-    @app_commands.command(name="active_welcome", description="設定伺服器歡迎訊息的規則與頻道")
+    @app_commands.command(name="welcome_active", description="設定伺服器歡迎訊息的規則與頻道")
     @app_commands.describe(
         welcome_channel="新成員加入時發送歡迎訊息的頻道（必填）",
         rules_channel="規則頻道（選填，不填則不顯示）",
@@ -45,7 +45,7 @@ class Welcome(commands.Cog):
     )
     @app_commands.guild_only()
     @app_commands.default_permissions(manage_guild=True)
-    async def active_welcome(
+    async def welcome_active(
         self,
         interaction: discord.Interaction,
         welcome_channel: discord.TextChannel,
@@ -61,7 +61,7 @@ class Welcome(commands.Cog):
         try:
             _save_welcome_settings(self.settings)
         except Exception as e:
-            await self.bot.notify_owner_error(e, interaction, extra_info="active_welcome: 儲存設定失敗")
+            await self.bot.notify_owner_error(e, interaction, extra_info="welcome_active: 儲存設定失敗")
             await interaction.response.send_message("❌ 儲存設定時發生錯誤，設定可能在重新啟動後遺失，已回報開發者。", ephemeral=True)
             return
 
@@ -74,17 +74,17 @@ class Welcome(commands.Cog):
         embed = discord.Embed(title="🎉 歡迎訊息設定完成", description="\n".join(desc_lines), color=discord.Color.green())
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @app_commands.command(name="inactive_welcome", description="取消伺服器的歡迎訊息功能")
+    @app_commands.command(name="welcome_inactive", description="取消伺服器的歡迎訊息功能")
     @app_commands.guild_only()
     @app_commands.default_permissions(manage_guild=True)
-    async def inactive_welcome(self, interaction: discord.Interaction):
+    async def welcome_inactive(self, interaction: discord.Interaction):
         guild_id = str(interaction.guild.id)
         if guild_id in self.settings:
             del self.settings[guild_id]
             try:
                 _save_welcome_settings(self.settings)
             except Exception as e:
-                await self.bot.notify_owner_error(e, interaction, extra_info="inactive_welcome: 儲存設定失敗")
+                await self.bot.notify_owner_error(e, interaction, extra_info="welcome_inactive: 儲存設定失敗")
                 await interaction.response.send_message("❌ 儲存設定時發生錯誤，可能需要再執行一次，已回報開發者。", ephemeral=True)
                 return
             embed = discord.Embed(title="🔕 歡迎訊息已關閉", description="此伺服器的歡迎訊息功能已停用。", color=discord.Color.red())

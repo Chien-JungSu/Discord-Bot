@@ -14,8 +14,8 @@
 - `/weather <city>`：查詢全台各縣市即時天氣預報
 - `/bus`：使用下拉式選單查詢台灣公車即時到站資訊
 - `/server_info`：顯示目前伺服器詳細資訊
-- `/active_welcome`：設定伺服器歡迎訊息（歡迎頻道必填，規則頻道與身份組頻道選填）
-- `/inactive_welcome`：取消伺服器歡迎訊息功能
+- `/welcome_active`：設定伺服器歡迎訊息（歡迎頻道必填，規則頻道與身份組頻道選填）
+- `/welcome_inactive`：取消伺服器歡迎訊息功能
 - `/join`：加入使用者目前所在的語音頻道
 - `/leave`：離開目前所在的語音頻道
 
@@ -78,8 +78,8 @@ python main.py
 - `/weather city:<縣市名稱或英文>`：查詢天氣，支援如 `臺北`、`Taichung`、`Matsu` 等對照
 - `/bus`：先選擇縣市，再輸入公車號碼，接著從下拉式選單選擇站牌並查詢即時到站資訊
 - `/server_info`：顯示所在伺服器的詳細資訊
-- `/active_welcome welcome_channel:<頻道> [rules_channel:<頻道>] [role_channel:<頻道>]`：啟用歡迎訊息，設定歡迎頻道（必填）、規則頻道（選填）、身份組頻道（選填）。需要「管理伺服器」權限。
-- `/inactive_welcome`：停用本伺服器的歡迎訊息功能。需要「管理伺服器」權限。
+- `/welcome_active welcome_channel:<頻道> [rules_channel:<頻道>] [role_channel:<頻道>]`：啟用歡迎訊息，設定歡迎頻道（必填）、規則頻道（選填）、身份組頻道（選填）。需要「管理伺服器」權限。
+- `/welcome_inactive`：停用本伺服器的歡迎訊息功能。需要「管理伺服器」權限。
 - `/join`：機器人加入你目前所在的語音頻道；需要已安裝 `wavelink` 並設定 Lavalink。
 - `/leave`：機器人離開目前所在的語音頻道。
 
@@ -127,8 +127,8 @@ Supported features:
 - `/weather <city>`: query real-time weather for Taiwan cities
 - `/bus`: query Taiwan bus arrivals through dropdown menus
 - `/server_info`: display detailed server information
-- `/active_welcome`: set up a server welcome message (welcome channel required; rules and role channels optional)
-- `/inactive_welcome`: disable the server welcome message feature
+- `/welcome_active`: set up a server welcome message (welcome channel required; rules and role channels optional)
+- `/welcome_inactive`: disable the server welcome message feature
 - `/join`: join the voice channel where the user is currently connected
 - `/leave`: leave the current voice channel
 
@@ -191,8 +191,8 @@ When launched, the bot checks required environment variables, starts the Flask b
 - `/weather city:<city name or English name>`: query weather, supports mappings like `臺北`, `Taichung`, `Matsu`
 - `/bus`: select a city, enter a bus route, choose a stop from a dropdown menu, and view real-time arrival information
 - `/server_info`: display the current server's details
-- `/active_welcome welcome_channel:<channel> [rules_channel:<channel>] [role_channel:<channel>]`: enable welcome messages with a required welcome channel and optional rules/role channels. Requires **Manage Server** permission.
-- `/inactive_welcome`: disable welcome messages for this server. Requires **Manage Server** permission.
+- `/welcome_active welcome_channel:<channel> [rules_channel:<channel>] [role_channel:<channel>]`: enable welcome messages with a required welcome channel and optional rules/role channels. Requires **Manage Server** permission.
+- `/welcome_inactive`: disable welcome messages for this server. Requires **Manage Server** permission.
 - `/join`: join the user's current voice channel. Requires `wavelink` and a configured Lavalink node.
 - `/leave`: leave the current voice channel.
 

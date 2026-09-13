@@ -56,6 +56,15 @@
         letter-spacing: 0.08em;
       }
 
+      .status a {
+        color: inherit;
+        text-decoration: none;
+      }
+
+      .status a:hover {
+        text-decoration: underline;
+      }
+
       .dot {
         width: 10px;
         height: 10px;
@@ -117,6 +126,164 @@
 
       .features {
         margin-top: 30px;
+      }
+
+      .features-title {
+        margin: 0 auto 18px;
+        padding-bottom: 10px;
+        font-size: 1.7rem;
+        font-weight: 900;
+        color: var(--text);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        border-bottom: 2px solid rgba(125, 211, 252, 0.35);
+        display: block;
+        text-align: center;
+        width: fit-content;
+      }
+
+      .monitor-card {
+        margin-top: 28px;
+        margin-bottom: 18px;
+        padding: 22px 20px;
+        background: rgba(15, 23, 42, 0.82);
+        border: 1px solid var(--panel-border);
+        border-radius: 20px;
+        box-shadow: 0 14px 42px rgba(0, 0, 0, 0.18);
+      }
+
+      .monitor-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin-bottom: 18px;
+      }
+
+      .monitor-header h3 {
+        margin: 0;
+        font-size: 1.35rem;
+      }
+
+      .status-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        border-radius: 999px;
+        background: rgba(52, 211, 153, 0.12);
+        color: var(--secondary);
+        border: 1px solid rgba(52, 211, 153, 0.4);
+        font-size: 0.88rem;
+        font-weight: 700;
+      }
+
+      .status-pill .dot {
+        width: 9px;
+        height: 9px;
+      }
+
+      .monitor-metrics {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+        gap: 12px;
+        margin-bottom: 18px;
+      }
+
+      .metric-box {
+        background: rgba(15, 23, 42, 0.7);
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        border-radius: 12px;
+        padding: 12px 14px;
+      }
+
+      .metric-box span {
+        display: block;
+        color: var(--muted);
+        font-size: 0.78rem;
+        margin-bottom: 6px;
+      }
+
+      .metric-box strong {
+        font-size: 1.15rem;
+        color: var(--text);
+      }
+
+      .uptime-bars {
+        display: grid;
+        gap: 10px;
+      }
+
+      .bar-row {
+        display: grid;
+        grid-template-columns: 52px 1fr 56px;
+        align-items: center;
+        gap: 12px;
+        color: var(--muted);
+        font-size: 0.82rem;
+      }
+
+      .bar-track {
+        position: relative;
+        width: 100%;
+        height: 12px;
+        background: rgba(148, 163, 184, 0.12);
+        border-radius: 999px;
+        overflow: hidden;
+      }
+
+      .bar-fill {
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: 0%;
+        border-radius: 999px;
+        background: linear-gradient(90deg, var(--secondary), var(--primary));
+      }
+
+      .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 18px;
+      }
+
+      .stat-card {
+        min-height: 220px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        background: rgba(39, 49, 63, 0.8);
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        border-radius: 18px;
+        padding: 24px 18px;
+        text-align: center;
+        color: var(--text);
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
+      }
+
+      .stat-value {
+        font-size: clamp(2.1rem, 2.7vw, 4.1rem);
+        line-height: 1.18;
+        font-weight: 800;
+        letter-spacing: -0.05em;
+        color: #7c8cff;
+        margin: 0;
+        white-space: pre-line;
+        word-break: break-word;
+      }
+
+      .stat-label {
+        margin-top: 12px;
+        font-size: 1.02rem;
+        color: rgba(229, 238, 251, 0.9);
+      }
+
+      .stat-card.small .stat-value {
+        font-size: clamp(1.8rem, 2.3vw, 3.1rem);
+      }
+
+      .features-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
         gap: 20px;
@@ -166,6 +333,11 @@
         text-align: center;
         color: var(--muted);
         font-size: 0.95rem;
+        line-height: 1.9;
+      }
+
+      .footer-line {
+        display: block;
       }
 
       a {
@@ -183,96 +355,274 @@
       <section class="hero">
         <div class="status">
           <span class="dot"></span>
-          機器人狀態：在線中
+          <a href="https://stats.uptimerobot.com/AVDH7BXq2X/803979719" target="_blank" rel="noreferrer">
+            機器人狀態：在線中
+          </a>
         </div>
 
         <h1>炙彗JI器人</h1>
         <p class="subtitle">
           這是一個於高中自主學習製作的多功能 Discord 機器人，整合了娛樂、天氣查詢、公車到站、伺服器資訊、歡迎訊息與語音功能。
-          目前機器人使用雲端貓居託管，24/7全天候上線。
+          目前機器人使用<a href="https://nyanko.host/" target="_blank" rel="noreferrer">雲端貓居</a>託管，24/7全天候上線。
         </p>
 
         <div class="cta-row">
+          <a class="btn secondary" href="https://discord.com/oauth2/authorize?client_id=1477930641944350952&permissions=8&integration_type=0&scope=bot+applications.commands" target="_blank" rel="noreferrer">
+            邀請機器人
+          </a>
           <a class="btn secondary" href="https://discord.gg/YjjdJMa8rm" target="_blank" rel="noreferrer">
             加入官方支援群
           </a>
           <a class="btn secondary" href="https://github.com/Chien-JungSu/Discord-Bot" target="_blank" rel="noreferrer">
             GitHub Repository
           </a>
-          <a class="btn secondary" href="https://discord.com/oauth2/authorize?client_id=1477930641944350952&permissions=8&integration_type=0&scope=bot+applications.commands" target="_blank" rel="noreferrer">
-            邀請機器人
-          </a>
+        </div>
+      </section>
+
+      <section class="monitor-card">
+        <div class="monitor-header">
+          <h3>機器人監控狀態</h3>
+          <div class="status-pill">
+            <span class="dot"></span>
+            <span id="monitor-status">載入中...</span>
+          </div>
+        </div>
+
+        <div class="monitor-metrics">
+          <div class="metric-box">
+            <span>24 小時</span>
+            <strong id="uptime-24h">--</strong>
+          </div>
+          <div class="metric-box">
+            <span>7 天</span>
+            <strong id="uptime-7d">--</strong>
+          </div>
+          <div class="metric-box">
+            <span>30 天</span>
+            <strong id="uptime-30d">--</strong>
+          </div>
+          <div class="metric-box">
+            <span>90 天</span>
+            <strong id="uptime-90d">--</strong>
+          </div>
+        </div>
+
+        <div class="uptime-bars">
+          <div class="bar-row">
+            <span>24h</span>
+            <div class="bar-track"><div class="bar-fill" id="bar-24h"></div></div>
+            <strong id="bar-24h-value">--</strong>
+          </div>
+          <div class="bar-row">
+            <span>7d</span>
+            <div class="bar-track"><div class="bar-fill" id="bar-7d"></div></div>
+            <strong id="bar-7d-value">--</strong>
+          </div>
+          <div class="bar-row">
+            <span>30d</span>
+            <div class="bar-track"><div class="bar-fill" id="bar-30d"></div></div>
+            <strong id="bar-30d-value">--</strong>
+          </div>
+          <div class="bar-row">
+            <span>90d</span>
+            <div class="bar-track"><div class="bar-fill" id="bar-90d"></div></div>
+            <strong id="bar-90d-value">--</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="monitor-card">
+        <div class="stats-grid">
+          <div class="stat-card">
+            <p class="stat-value" id="server-count">--</p>
+            <div class="stat-label">伺服器</div>
+          </div>
+
+          <div class="stat-card">
+            <p class="stat-value" id="user-count">--</p>
+            <div class="stat-label">總用戶</div>
+          </div>
+
+          <div class="stat-card small">
+            <p class="stat-value" id="latency-value">--</p>
+            <div class="stat-label">延遲</div>
+          </div>
+
+          <div class="stat-card small">
+            <p class="stat-value" id="uptime-value">--</p>
+            <div class="stat-label">運行時間</div>
+          </div>
         </div>
       </section>
 
       <section class="features">
-        <article class="card">
-          <div class="tag">General</div>
-          <h2>一般功能</h2>
-          <ul>
-            <li> /ping：測試機器人延遲</li>
-            <li> /choice：幫你從多個選項中做決定</li>
-            <li> /quotes：隨機名言與笑話互動功能</li>
-          </ul>
-        </article>
+        <h2 class="features-title">模組介紹</h2>
+        <div class="features-grid">
+          <article class="card">
+            <div class="tag">General</div>
+            <h2>一般功能</h2>
+            <ul>
+              <li> /ping：測試機器人延遲</li>
+              <li> /choice：幫你從多個選項中做出決定</li>
+              <li> /quotes：隨機名言與笑話互動功能</li>
+            </ul>
+          </article>
 
-        <article class="card">
-          <div class="tag">Weather</div>
-          <h2>天氣查詢</h2>
-          <ul>
-            <li> /weather：查詢台灣各縣市的即時天氣</li>
-            <li> 支援中文與英文地名輸入</li>
-            <li> 提供溫度、降雨機率、舒適度資訊</li>
-          </ul>
-        </article>
+          <article class="card">
+            <div class="tag">Weather</div>
+            <h2>天氣查詢</h2>
+            <ul>
+              <li> /weather：查詢台灣各縣市的即時天氣</li>
+              <li> 支援台澎金馬中文與英文地名輸入</li>
+              <li> 提供來自交通部中央氣象署的即時天氣資訊</li>
+            </ul>
+          </article>
 
-        <article class="card">
-          <div class="tag">Bus</div>
-          <h2>公車資訊</h2>
-          <ul>
-            <li> 查詢城市公車路線到站時間</li>
-            <li> 顯示站牌資訊與車牌狀態</li>
-            <li> 提供路線與方向選擇</li>
-          </ul>
-        </article>
+          <article class="card">
+            <div class="tag">Bus</div>
+            <h2>公車資訊</h2>
+            <ul>
+              <li> /bus：查詢城市公車路線到站時間</li>
+              <li> 顯示站牌資訊與車牌狀態</li>
+              <li> 支援台澎金馬各縣市之公車查詢</li>
+            </ul>
+          </article>
 
-        <article class="card">
-          <div class="tag">Server Info</div>
-          <h2>伺服器資訊</h2>
-          <ul>
-            <li> /server_info：顯示伺服器基本資料</li>
-            <li> 可查看成員數與建立時間</li>
-            <li> 適合用於管理與社群資訊展示</li>
-          </ul>
-        </article>
+          <article class="card">
+            <div class="tag">Server Info</div>
+            <h2>伺服器資訊</h2>
+            <ul>
+              <li> /server_info：顯示伺服器基本資料</li>
+              <li> 可查看成員數與建立時間</li>
+              <li> 適合用於管理與社群資訊展示</li>
+            </ul>
+          </article>
 
-        <article class="card">
-          <div class="tag">Welcome</div>
-          <h2>歡迎訊息</h2>
-          <ul>
-            <li> /active_welcome：設定加入歡迎頻道</li>
-            <li> /inactive_welcome：停用歡迎訊息</li>
-            <li> 新成員加入時自動發送歡迎卡片</li>
-          </ul>
-        </article>
+          <article class="card">
+            <div class="tag">Welcome</div>
+            <h2>歡迎訊息</h2>
+            <ul>
+              <li> /welcome_active：設定加入歡迎頻道</li>
+              <li> /welcome_inactive：停用歡迎訊息</li>
+              <li> 新成員加入時自動發送歡迎卡片</li>
+            </ul>
+          </article>
 
-        <article class="card">
-          <div class="tag">Music</div>
-          <h2>語音功能</h2>
-          <ul>
-            <li> /join：讓機器人加入語音頻道</li>
-            <li> /leave：讓機器人離開語音頻道</li>
-            <li> 未來可擴充音樂播放與自動播放功能</li>
-          </ul>
-        </article>
+          <article class="card">
+            <div class="tag">Music</div>
+            <h2>語音功能</h2>
+            <ul>
+              <li> /join：讓機器人加入語音頻道</li>
+              <li> /leave：讓機器人離開語音頻道</li>
+              <li> 未來可擴充音樂播放與自動播放功能</li>
+            </ul>
+          </article>
+        </div>
       </section>
 
       <div class="footer">
-        © 2026 炙彗JI器人 •
-        支援群：<a href="https://discord.gg/YjjdJMa8rm" target="_blank" rel="noreferrer">https://discord.gg/YjjdJMa8rm</a>
-        • GitHub：<a href="https://github.com/Chien-JungSu/Discord-Bot" target="_blank" rel="noreferrer">https://github.com/Chien-JungSu/Discord-Bot</a>
-        • 雲端貓居：<a href="https://nyanko.host/" target="_blank" rel="noreferrer">https://nyanko.host/</a>
+        <span class="footer-line">© 2026 炙彗JI器人</span>
       </div>
     </main>
+
+    <script>
+      function formatNumber(value) {
+        return Number(value || 0).toLocaleString('zh-Hant');
+      }
+
+      function formatLatency(value) {
+        return `${Number(value || 0)} ms`;
+      }
+
+      function formatUptimeText(text) {
+        return text ? text.replace(/\n/g, '<br>') : '--';
+      }
+
+      async function loadUptimeStatus() {
+        try {
+          const response = await fetch('/api/uptime');
+          const data = await response.json();
+
+          if (data.status !== 'ok') {
+            const statusText = document.getElementById('monitor-status');
+            if (statusText) {
+              statusText.textContent = data.message || '資料不可用';
+            }
+            return;
+          }
+
+          const setMetric = (id, value) => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = value ? `${value}%` : '--';
+          };
+
+          const setBar = (barId, valueId, value) => {
+            const bar = document.getElementById(barId);
+            const label = document.getElementById(valueId);
+            if (!bar || !label) return;
+
+            const numeric = Number.parseFloat(value || 0);
+            const safeValue = Number.isFinite(numeric) ? Math.max(0, Math.min(100, numeric)) : 0;
+            bar.style.width = `${safeValue}%`;
+            label.textContent = `${safeValue.toFixed(2)}%`;
+          };
+
+          const status = data.status_text || '未知';
+          const statusEl = document.getElementById('monitor-status');
+          if (statusEl) statusEl.textContent = status;
+
+          const statusPill = document.querySelector('.status-pill');
+          if (statusPill) {
+            const isOnline = status === '在線';
+            statusPill.style.background = isOnline ? 'rgba(52, 211, 153, 0.12)' : 'rgba(248, 113, 113, 0.12)';
+            statusPill.style.borderColor = isOnline ? 'rgba(52, 211, 153, 0.4)' : 'rgba(248, 113, 113, 0.38)';
+            statusPill.style.color = isOnline ? '#34d399' : '#f87171';
+          }
+
+          setMetric('uptime-24h', data.uptime['24h']);
+          setMetric('uptime-7d', data.uptime['7d']);
+          setMetric('uptime-30d', data.uptime['30d']);
+          setMetric('uptime-90d', data.uptime['90d']);
+
+          setBar('bar-24h', 'bar-24h-value', data.uptime['24h']);
+          setBar('bar-7d', 'bar-7d-value', data.uptime['7d']);
+          setBar('bar-30d', 'bar-30d-value', data.uptime['30d']);
+          setBar('bar-90d', 'bar-90d-value', data.uptime['90d']);
+        } catch (error) {
+          const statusText = document.getElementById('monitor-status');
+          if (statusText) {
+            statusText.textContent = '資料載入失敗';
+          }
+        }
+      }
+
+      async function loadBotStats() {
+        try {
+          const response = await fetch('/api/bot-stats');
+          const data = await response.json();
+
+          if (data.status !== 'ok') {
+            document.getElementById('server-count').textContent = '--';
+            document.getElementById('user-count').textContent = '--';
+            document.getElementById('latency-value').textContent = '--';
+            document.getElementById('uptime-value').textContent = '--';
+            return;
+          }
+
+          document.getElementById('server-count').textContent = formatNumber(data.guilds);
+          document.getElementById('user-count').textContent = formatNumber(data.users);
+          document.getElementById('latency-value').textContent = formatLatency(data.latency_ms);
+          document.getElementById('uptime-value').innerHTML = formatUptimeText(data.uptime_text);
+        } catch (error) {
+          document.getElementById('server-count').textContent = '--';
+          document.getElementById('user-count').textContent = '--';
+          document.getElementById('latency-value').textContent = '--';
+          document.getElementById('uptime-value').textContent = '--';
+        }
+      }
+
+      loadUptimeStatus();
+      loadBotStats();
+    </script>
   </body>
 </html>
