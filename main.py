@@ -137,6 +137,23 @@ class MyBot(commands.Bot):
         except discord.HTTPException:
             pass
 
+    async def on_command_error(self, context: commands.Context, error: commands.CommandError):
+        """實測發現的雜訊：本專案完全沒有定義任何傳統前綴指令，全部都是 slash
+        commands（app_commands），錯誤處理應該走上面的 on_app_command_error。
+
+        但 commands.Bot(command_prefix='/') 這個設定，讓 discord.py 仍然會監看
+        頻道裡「以 / 開頭的一般文字訊息」（不是透過 Discord 指令選單觸發的真正
+        Interaction），只要有人手滑打出這種訊息，就會嘗試解析成前綴指令、找不到
+        就丟 CommandNotFound，灌爆後台 log，但其實不是真正的錯誤，直接忽略即可。
+        其他種類的例外（理論上不太會發生，因為沒有任何前綴指令）還是照印出來，
+        避免真的有 bug 時被靜默吃掉。
+        """
+        if isinstance(error, commands.CommandNotFound):
+            return
+
+        print(f"Ignoring exception in command {context.command}:", file=sys.stderr)
+        traceback.print_exception(type(error), error, error.__traceback__, file=sys.stderr)
+
 
 bot = MyBot()
 app.config['BOT'] = bot
