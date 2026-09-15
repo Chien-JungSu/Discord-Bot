@@ -1,10 +1,15 @@
+from __future__ import annotations
+
 import asyncio
 import os
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import discord
 from discord import app_commands
 from discord.ext import commands
+
+if TYPE_CHECKING:
+    import wavelink as wavelink_module
 
 try:
     import wavelink
@@ -65,15 +70,20 @@ class Music(commands.Cog):
                 timeout=LAVALINK_CONNECT_TIMEOUT,
             )
             print(f"🎧 已成功連線至 Lavalink 節點：{lavalink_uri}")
-        except asyncio.TimeoutError:
+        except asyncio.TimeoutError as e:
             print(
                 f"❌ 連線 Lavalink 節點逾時（超過 {LAVALINK_CONNECT_TIMEOUT:.0f} 秒）：{lavalink_uri}，"
                 "語音功能（/join /leave /play）可能暫時無法使用，但不影響機器人其他功能。"
+            )
+            # 修正：先前只有 print，開發者不在電腦前看 log 就完全不會發現音樂功能掛了。
+            await self.bot.notify_owner_error(
+                e, extra_info=f"Lavalink 節點連線逾時：{lavalink_uri}（超過 {LAVALINK_CONNECT_TIMEOUT:.0f} 秒）"
             )
         except Exception as e:
             # Lavalink 節點若尚未啟動，這裡會失敗；先印出訊息，不讓整個 Bot 崩潰。
             print(f"❌ 連線 Lavalink 節點失敗：{e}")
             print("   請確認 Lavalink 是否已啟動，以及 LAVALINK_URI / LAVALINK_PASSWORD 是否正確。")
+            await self.bot.notify_owner_error(e, extra_info=f"Lavalink 節點連線失敗：{lavalink_uri}")
 
     # ---------- wavelink 自訂事件 ----------
     @commands.Cog.listener()
@@ -130,6 +140,18 @@ class Music(commands.Cog):
         else:
             reason_hint = ""
 
+        # 修正：先前只把錯誤印在後台跟發到文字頻道，開發者完全不會被 DM 通知。
+        # severity 分三種：common（常見、預期內，例如格式不支援）、suspicious（可疑，
+        # 通常是外部來源造成，例如 YouTube 反爬蟲）、fault（節點本身的問題）。
+        # common 太常見也不算真的「未知錯誤」，故意不 DM 避免洗版；suspicious／fault
+        # 才算是需要開發者留意的狀況，這兩種才會觸發 notify_owner_error。
+        if severity in ("suspicious", "fault"):
+            synthetic_error = RuntimeError(f"Lavalink TrackException（{severity}）：{message or cause or '未知錯誤'}")
+            await self.bot.notify_owner_error(
+                synthetic_error,
+                extra_info=f"on_wavelink_track_exception track={track_title} severity={severity} cause={cause}",
+            )
+
         try:
             await channel.send(f"⚠️ 播放「{track_title}」失敗，Lavalink 節點無法載入這首歌曲。{reason_hint}")
         except discord.HTTPException as e:
@@ -138,7 +160,7 @@ class Music(commands.Cog):
     # ---------- 共用邏輯 ----------
     async def _ensure_player(
         self, interaction: discord.Interaction
-    ) -> "wavelink.Player | None":
+    ) -> "wavelink_module.Player | None":
         """取得目前伺服器的 Player；若機器人還沒加入語音頻道，就直接幫使用者加入。
 
         回傳 None 代表已經送出錯誤訊息給使用者，呼叫端應該直接 return，不要繼續播放。
@@ -150,7 +172,7 @@ class Music(commands.Cog):
             return None
 
         user_channel = interaction.user.voice.channel
-        player: wavelink.Player | None = interaction.guild.voice_client
+        player: "wavelink_module.Player | None" = interaction.guild.voice_client
 
         if player is None:
             try:
