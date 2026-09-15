@@ -18,8 +18,9 @@
 - `/welcome_inactive`：取消伺服器歡迎訊息功能
 - `/join`：加入使用者目前所在的語音頻道
 - `/leave`：離開目前所在的語音頻道
+- `/play <query>`：搜尋並播放音樂（支援關鍵字或直接貼 YouTube／SoundCloud 網址）
 
-專案也包含 `keep_alive.py`，用於在背景啟動一個 Flask HTTP 伺服器，方便部署於需要存活檢查的雲端平台。
+專案也包含 `cogs/web_server.py`，會在背景啟動一個 Flask 網頁伺服器（搭配 `templates/index.html` 儀表板），提供機器人狀態 API（伺服器數、延遲、運行時間等），方便部署於需要存活檢查的雲端平台。
 
 ### 專案需求
 
@@ -37,7 +38,7 @@ pip install -r requirements.txt
 - certifi
 - aiohttp
 
-音樂功能另外需要安裝 `wavelink`，並準備可連線的 Lavalink 節點；未安裝或未設定時，其他功能仍可正常啟動，但 `/join` 與 `/leave` 無法使用。
+音樂功能另外需要安裝 `wavelink`，並準備可連線的 Lavalink 節點；未安裝或未設定時，其他功能仍可正常啟動，但 `/join`、`/leave`、`/play` 無法使用。
 
 ### 環境變數
 
@@ -68,7 +69,7 @@ pip install wavelink
 python main.py
 ```
 
-啟動後，機器人會先檢查必要環境變數，然後啟動 `keep_alive.py` 中的 Flask 背景伺服器，再以 `bot.run(TOKEN)` 連線 Discord。
+啟動後，機器人會先啟動 `cogs/web_server.py` 中的 Flask 背景伺服器，再檢查必要環境變數，最後以 `bot.run(TOKEN)` 連線 Discord。
 
 ### 機器人指令說明
 
@@ -82,6 +83,7 @@ python main.py
 - `/welcome_inactive`：停用本伺服器的歡迎訊息功能。需要「管理伺服器」權限。
 - `/join`：機器人加入你目前所在的語音頻道；需要已安裝 `wavelink` 並設定 Lavalink。
 - `/leave`：機器人離開目前所在的語音頻道。
+- `/play query:<關鍵字或網址>`：搜尋並播放音樂；若機器人尚未加入語音頻道會自動加入。目前尚無播放佇列（預計第3週實作），重複下指令會直接取代正在播放的歌曲。
 
 ### 歡迎訊息功能說明
 
@@ -96,15 +98,17 @@ python main.py
 
 > **注意**：使用歡迎訊息功能前，請至 [Discord Developer Portal](https://discord.com/developers/applications) → **Bot** → **Privileged Gateway Intents** 開啟 **Server Members Intent**，否則 `on_member_join` 事件不會觸發。
 
-機器人也會啟用 `Message Content Intent` 與語音狀態 intents，以支援目前的指令與 `/join`、`/leave` 語音功能；請在 Discord Developer Portal 的 Bot 設定中依需求開啟對應權限。
+機器人也會啟用 `Message Content Intent` 與語音狀態 intents，以支援目前的指令與 `/join`、`/leave`、`/play` 語音功能；請在 Discord Developer Portal 的 Bot 設定中依需求開啟對應權限。
 
 ### 特別說明
 
 - `/weather` 會呼叫中央氣象署公開資料 API，若 SSL 驗證失敗會自動嘗試不驗證模式重試。
 - `/bus` 會呼叫交通部 TDX API 查詢公車路線站點與即時到站資訊。所有公車查詢訊息皆為僅使用者可見，避免干擾頻道版面。
 - `/bus` 若輸入不存在的公車號碼，會提示找不到站牌或到站資料；若發生未知錯誤，會自動嘗試 DM 通知 `DISCORD_OWNER_ID`。
+- `/join`、`/leave`、`/play` 需要已安裝 `wavelink` 並設定 `LAVALINK_URI` / `LAVALINK_PASSWORD`；未安裝或節點無法連線時，這些指令會回覆友善錯誤訊息，不影響機器人其他功能。
+- `/play` 搜尋失敗（來源網站無回應、反爬蟲封鎖等）會立即回覆錯誤訊息。歌曲成功排入播放後，若 Lavalink 節點在背景載入音訊時才失敗（例如 YouTube 判定需要登入、影片地區限制，或公開節點的來源連結失效），機器人會透過 `on_wavelink_track_exception` 監聽器把失敗原因回報到下指令當下的文字頻道，而不是只留在後台 log。目前公開 Lavalink 節點偶爾不穩定是已知風險，後續計畫改為自架節點。
 - 機器人在 `setup_hook` 內進行全域斜線指令同步，若同步失敗會在 `on_ready` 內再嘗試一次作為 fallback。
-- `keep_alive.py` 會在背景執行一個簡單的 Flask 網頁服務，並回傳 `機器人正在運作中！`。
+- `cogs/web_server.py` 會在背景執行 Flask 網頁服務，首頁 `/` 顯示機器人狀態儀表板（`templates/index.html`），並提供 `/api/bot-stats`、`/api/uptime` 兩支 API。
 
 ### 開發建議
 
@@ -131,8 +135,9 @@ Supported features:
 - `/welcome_inactive`: disable the server welcome message feature
 - `/join`: join the voice channel where the user is currently connected
 - `/leave`: leave the current voice channel
+- `/play <query>`: search and play music (accepts keywords, or a YouTube/SoundCloud URL)
 
-The project also includes `keep_alive.py`, which starts a Flask HTTP server in the background for cloud deployments that require a keep-alive endpoint.
+The project also includes `cogs/web_server.py`, which starts a Flask web server in the background (backing a `templates/index.html` dashboard) that exposes bot status APIs (guild count, latency, uptime, etc.) for cloud deployments that require a keep-alive endpoint.
 
 ### Requirements
 
@@ -195,6 +200,7 @@ When launched, the bot checks required environment variables, starts the Flask b
 - `/welcome_inactive`: disable welcome messages for this server. Requires **Manage Server** permission.
 - `/join`: join the user's current voice channel. Requires `wavelink` and a configured Lavalink node.
 - `/leave`: leave the current voice channel.
+- `/play query:<keywords or URL>`: search and play music; auto-joins your voice channel if the bot isn't connected yet. There's no playback queue yet (planned for Week 3), so calling it again replaces the currently playing track.
 
 ### Welcome Message Feature
 
@@ -209,16 +215,17 @@ Welcome settings are saved to `welcome_settings.json` and persist across restart
 
 > **Important**: Before using the welcome feature, go to the [Discord Developer Portal](https://discord.com/developers/applications) → **Bot** → **Privileged Gateway Intents** and enable **Server Members Intent**, otherwise the `on_member_join` event will not fire.
 
-The bot also enables the `Message Content Intent` and voice-state intents for the current commands and the `/join` and `/leave` voice features. Enable the corresponding intents in the Discord Developer Portal as needed.
+The bot also enables the `Message Content Intent` and voice-state intents for the current commands and the `/join`, `/leave`, and `/play` voice features. Enable the corresponding intents in the Discord Developer Portal as needed.
 
 ### Notes
 
 - `/weather` calls the Taiwan Central Weather Administration API. If SSL verification fails, it retries with SSL verification disabled.
 - `/bus` calls the Taiwan TDX API for route stops and real-time arrival estimates. Bus query messages are ephemeral, so only the user who started the query can see them.
 - `/bus` handles unknown route numbers with a clear not-found message. Unexpected errors trigger an owner DM when `DISCORD_OWNER_ID` is configured.
-- `/join` and `/leave` use Wavelink and require a reachable Lavalink node configured with `LAVALINK_URI` and `LAVALINK_PASSWORD`. The music Cog is loaded without stopping the bot when Wavelink or Lavalink is unavailable.
+- `/join`, `/leave`, and `/play` use Wavelink and require a reachable Lavalink node configured with `LAVALINK_URI` and `LAVALINK_PASSWORD`. The music Cog is loaded without stopping the bot when Wavelink or Lavalink is unavailable.
+- `/play` reports search failures (source unreachable, anti-bot blocking, etc.) immediately. If a track is accepted but later fails to load in the background (e.g. YouTube requiring login, region restrictions, or a broken stream link on a public node), the bot reports the failure to the text channel where the command was last used via the `on_wavelink_track_exception` listener, instead of only logging it. Public Lavalink node instability is a known risk here; self-hosting a node is planned for later weeks.
 - The bot syncs global slash commands in `setup_hook`. If that fails, it retries in `on_ready` as a fallback.
-- `keep_alive.py` runs a background Flask web service that responds with `機器人正在運作中！`.
+- `cogs/web_server.py` runs a background Flask web service serving a status dashboard (`templates/index.html`) and the `/api/bot-stats` and `/api/uptime` endpoints.
 
 ### Tips
 
