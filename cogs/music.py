@@ -1,3 +1,4 @@
+import asyncio
 import os
 from typing import Any
 
@@ -10,13 +11,24 @@ try:
 except ImportError:  # 尚未安裝 wavelink 時，讓其他 Cog 仍可正常運作
     wavelink = None
 
+# Lavalink 連線逾時秒數，可用環境變數覆寫，避免連線卡住拖垮整個 bot 啟動流程
+LAVALINK_CONNECT_TIMEOUT = float(os.getenv('LAVALINK_CONNECT_TIMEOUT', '15'))
+
 
 class Music(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
     async def cog_load(self):
-        """Cog 被 bot.load_extension() 載入時自動呼叫一次，建立節點連線池。"""
+        """Cog 被 bot.load_extension() 載入時自動呼叫一次，建立節點連線池。
+
+        修正: 連線 Lavalink 改成背景任務執行，不要在這裡 await 完成連線。
+        wavelink.Pool.connect() 在節點連不上時可能會卡住重試很久，如果直接
+        await 會讓 setup_hook() 整個卡死，導致後面的 tree.sync() 跟 on_ready
+        都永遠跑不到（機器人網頁的 bot-stats 也會因此一直是 0）。改成
+        create_task 丟到背景後，cog_load() 會立刻返回，其餘啟動流程不受影響；
+        另外加上逾時保護，避免背景任務本身無限期卡住。
+        """
         if wavelink is None:
             print("⚠️ 尚未安裝 wavelink，Music Cog 的 /join /leave 將無法運作。"
                   "請先執行 pip install wavelink 並設定 Lavalink 節點。")
@@ -32,10 +44,23 @@ class Music(commands.Cog):
                   "   LAVALINK_PASSWORD=youshallnotpass")
             return
 
+        # 不 await，丟到背景執行，讓 cog_load() 立刻返回
+        asyncio.create_task(self._connect_lavalink(lavalink_uri, lavalink_password))
+        print(f"⏳ 已在背景開始連線 Lavalink 節點：{lavalink_uri}（不會阻擋機器人其他功能啟動）")
+
+    async def _connect_lavalink(self, lavalink_uri: str, lavalink_password: str):
         node = wavelink.Node(uri=lavalink_uri, password=lavalink_password)
         try:
-            await wavelink.Pool.connect(nodes=[node], client=self.bot)
-            print(f"🎧 已嘗試連線至 Lavalink 節點：{lavalink_uri}")
+            await asyncio.wait_for(
+                wavelink.Pool.connect(nodes=[node], client=self.bot),
+                timeout=LAVALINK_CONNECT_TIMEOUT,
+            )
+            print(f"🎧 已成功連線至 Lavalink 節點：{lavalink_uri}")
+        except asyncio.TimeoutError:
+            print(
+                f"❌ 連線 Lavalink 節點逾時（超過 {LAVALINK_CONNECT_TIMEOUT:.0f} 秒）：{lavalink_uri}，"
+                "語音功能（/join /leave）可能暫時無法使用，但不影響機器人其他功能。"
+            )
         except Exception as e:
             # Lavalink 節點若尚未啟動，這裡會失敗；先印出訊息，不讓整個 Bot 崩潰。
             print(f"❌ 連線 Lavalink 節點失敗：{e}")

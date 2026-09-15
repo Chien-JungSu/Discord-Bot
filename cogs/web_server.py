@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import threading
 import time
@@ -31,11 +32,16 @@ def _fetch_uptime_data():
             'message': '尚未設定 UPTIMEROBOT_API_KEY / UPTIMEROBOT_MONITOR_ID',
         }
 
+    # 修正: logs 只能是 0 或 1（是否回傳事件記錄），不是筆數。
+    # 另外要拿 24h/7d/30d/90d 的正常運行率，正確參數是 custom_uptime_ratios
+    # （輸入天數，用 "-" 分隔），custom_uptime_ranges 是另一個參數，
+    # 格式是時間戳記區間（start_end-start_end...），傳天數進去會驗證失敗。
     payload = urllib.parse.urlencode({
         'api_key': api_key,
         'format': 'json',
         'monitors': monitor_id,
-        'logs': 10,
+        'logs': 0,
+        'custom_uptime_ratios': '1-7-30-90',
         'all_time_uptime_ratio': '1',
     }).encode('utf-8')
 
@@ -68,12 +74,22 @@ def _fetch_uptime_data():
         }
 
     monitor = monitors[0]
-    custom_ranges = monitor.get('custom_uptime_ranges') or {}
+
+    # 修正: 請求參數是 custom_uptime_ratios，但 UptimeRobot 回傳的欄位名稱是
+    # 單數的 custom_uptime_ratio，值是用 "-" 分隔的字串（依照請求順序對應 1-7-30-90）
+    custom_ranges_raw = monitor.get('custom_uptime_ratio') or ''
+    ranges_list = custom_ranges_raw.split('-') if custom_ranges_raw else []
+
+    def _range_value(index: int) -> str:
+        if index < len(ranges_list) and ranges_list[index]:
+            return ranges_list[index]
+        return '0'
+
     uptime = {
-        '24h': custom_ranges.get('24_hours') or monitor.get('all_time_uptime_ratio') or '0',
-        '7d': custom_ranges.get('7_days') or '0',
-        '30d': custom_ranges.get('30_days') or '0',
-        '90d': custom_ranges.get('90_days') or '0',
+        '24h': _range_value(0),
+        '7d': _range_value(1),
+        '30d': _range_value(2),
+        '90d': _range_value(3),
         'all': monitor.get('all_time_uptime_ratio') or '0',
     }
 
@@ -109,9 +125,16 @@ def bot_stats_api():
             'message': 'Discord bot 尚未註冊到 Web 伺服器',
         })
 
+    latency_value = getattr(bot, 'latency', None)
+    if latency_value is None or not math.isfinite(latency_value):
+        latency_ms = 0
+    else:
+        latency_ms = int(round(latency_value * 1000))
+
     total_servers = len(bot.guilds)
-    total_users = sum(guild.member_count for guild in bot.guilds)
-    latency_ms = int(round((bot.latency or 0) * 1000)) if bot.latency is not None else 0
+    # 修正: guild.member_count 在缺少 Server Members Intent 或快取尚未就緒時可能是 None，
+    # 直接 sum() 會丟 TypeError 導致整支 API 回傳 500，前端因此全部顯示 "--"
+    total_users = sum((guild.member_count or 0) for guild in bot.guilds)
     uptime_seconds = time.monotonic() - APP_START_TIME
     uptime_text = _format_uptime_seconds(uptime_seconds)
     version = os.getenv('APP_VERSION') or getattr(bot, 'version', None) or discord.__version__
