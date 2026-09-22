@@ -25,7 +25,7 @@ except ValueError:
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True       # on_member_join（歡迎訊息）需要
-intents.voice_states = True  # /join、/leave（語音狀態）需要，第1週新增
+intents.voice_states = True  # /music_join、/music_leave（語音狀態）需要，第1週新增
 
 # 每週新增的功能模組，依序加入這個清單即可自動載入
 INITIAL_EXTENSIONS = [
@@ -34,7 +34,7 @@ INITIAL_EXTENSIONS = [
     'cogs.bus',           # /bus
     'cogs.server_info',   # /server_info
     'cogs.welcome',       # /welcome_active /welcome_inactive + on_member_join
-    'cogs.music',         # /join /leave（第1週新增，之後每週持續擴充）
+    'cogs.music',         # /music_join /music_leave /music_play ...（第1週新增，之後每週持續擴充）
 ]
 
 
