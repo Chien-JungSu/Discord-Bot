@@ -1,810 +1,930 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>炙彗JI器人</title>
-    <link rel="icon" type="image/png" href="https://www.dropbox.com/scl/fi/8mx3kit88y0ojmihwt034/IMG_6426.PNG?rlkey=9iud5rml003o9bzq4mq54uhib&dl=1" />
-    <link rel="shortcut icon" href="https://www.dropbox.com/scl/fi/8mx3kit88y0ojmihwt034/IMG_6426.PNG?rlkey=9iud5rml003o9bzq4mq54uhib&dl=1" />
-    <style>
-      :root {
-        --bg: #0b1020;
-        --bg2: #111827;
-        --panel: rgba(15, 23, 42, 0.85);
-        --panel-border: rgba(148, 163, 184, 0.2);
-        --primary: #7dd3fc;
-        --secondary: #34d399;
-        --accent: #a78bfa;
-        --text: #e5eefb;
-        --muted: #b9c6db;
-        --danger: #f87171;
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>炙彗JI器人</title>
+  <link rel="icon" type="image/png"
+    href="https://www.dropbox.com/scl/fi/8mx3kit88y0ojmihwt034/IMG_6426.PNG?rlkey=9iud5rml003o9bzq4mq54uhib&dl=1" />
+  <link rel="shortcut icon"
+    href="https://www.dropbox.com/scl/fi/8mx3kit88y0ojmihwt034/IMG_6426.PNG?rlkey=9iud5rml003o9bzq4mq54uhib&dl=1" />
+  <style>
+    :root {
+      --bg: #0b1020;
+      --bg2: #111827;
+      --panel: rgba(15, 23, 42, 0.85);
+      --panel-border: rgba(148, 163, 184, 0.2);
+      --primary: #7dd3fc;
+      --secondary: #34d399;
+      --accent: #a78bfa;
+      --text: #e5eefb;
+      --muted: #b9c6db;
+      --danger: #f87171;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "Microsoft JhengHei", sans-serif;
+      background: linear-gradient(135deg, #0b1020, #111827 38%, #172554);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 32px 18px;
+    }
+
+    main {
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+
+    .hero {
+      background: rgba(15, 23, 42, 0.82);
+      border: 1px solid var(--panel-border);
+      border-radius: 24px;
+      padding: 30px 28px;
+      box-shadow: 0 16px 50px rgba(0, 0, 0, 0.28);
+    }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      background: rgba(52, 211, 153, 0.1);
+      border: 1px solid rgba(52, 211, 153, 0.45);
+      color: var(--secondary);
+      padding: 10px 16px;
+      border-radius: 999px;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+    }
+
+    .status a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    .status a:hover {
+      text-decoration: underline;
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--secondary);
+      box-shadow: 0 0 12px var(--secondary);
+      animation: pulse 1.8s infinite;
+    }
+
+    @keyframes pulse {
+
+      0%,
+      100% {
+        transform: scale(1);
+        opacity: 1;
       }
 
-      * { box-sizing: border-box; }
-
-      body {
-        margin: 0;
-        font-family: "Segoe UI", "Microsoft JhengHei", sans-serif;
-        background: linear-gradient(135deg, #0b1020, #111827 38%, #172554);
-        color: var(--text);
-        min-height: 100vh;
-        padding: 32px 18px;
+      50% {
+        transform: scale(1.4);
+        opacity: 0.8;
       }
+    }
 
-      main {
-        max-width: 1100px;
-        margin: 0 auto;
-      }
+    h1 {
+      margin: 22px 0 12px;
+      font-size: clamp(2rem, 4vw, 3.1rem);
+      line-height: 1.15;
+    }
 
-      .hero {
-        background: rgba(15, 23, 42, 0.82);
-        border: 1px solid var(--panel-border);
-        border-radius: 24px;
-        padding: 30px 28px;
-        box-shadow: 0 16px 50px rgba(0, 0, 0, 0.28);
-      }
+    .subtitle {
+      color: var(--muted);
+      margin: 0 0 24px;
+      font-size: 1.04rem;
+      line-height: 1.8;
+    }
 
-      .status {
-        display: inline-flex;
-        align-items: center;
-        gap: 10px;
-        background: rgba(52, 211, 153, 0.1);
-        border: 1px solid rgba(52, 211, 153, 0.45);
-        color: var(--secondary);
-        padding: 10px 16px;
-        border-radius: 999px;
-        font-size: 14px;
-        font-weight: 700;
-        letter-spacing: 0.08em;
-      }
+    .cta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px;
+      margin-top: 20px;
+    }
 
-      .status a {
-        color: inherit;
-        text-decoration: none;
-      }
+    .btn {
+      display: inline-block;
+      padding: 12px 18px;
+      border-radius: 12px;
+      text-decoration: none;
+      font-weight: 700;
+      transition: 0.2s ease;
+    }
 
-      .status a:hover {
-        text-decoration: underline;
-      }
+    .btn.primary {
+      background: linear-gradient(135deg, var(--primary), #60a5fa);
+      color: #0b1020;
+    }
 
-      .dot {
-        width: 10px;
-        height: 10px;
-        border-radius: 50%;
-        background: var(--secondary);
-        box-shadow: 0 0 12px var(--secondary);
-        animation: pulse 1.8s infinite;
-      }
+    .btn.secondary {
+      background: rgba(167, 139, 250, 0.12);
+      color: var(--text);
+      border: 1px solid rgba(167, 139, 250, 0.35);
+    }
 
-      @keyframes pulse {
-        0%, 100% { transform: scale(1); opacity: 1; }
-        50% { transform: scale(1.4); opacity: 0.8; }
-      }
+    .btn:hover {
+      transform: translateY(-1px);
+      text-decoration: none;
+    }
 
-      h1 {
-        margin: 22px 0 12px;
-        font-size: clamp(2rem, 4vw, 3.1rem);
-        line-height: 1.15;
-      }
+    .features {
+      margin-top: 30px;
+    }
 
-      .subtitle {
-        color: var(--muted);
-        margin: 0 0 24px;
-        font-size: 1.04rem;
-        line-height: 1.8;
-      }
+    .features-title {
+      margin: 0 auto 18px;
+      padding-bottom: 10px;
+      font-size: 1.7rem;
+      font-weight: 900;
+      color: var(--text);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      border-bottom: 2px solid rgba(125, 211, 252, 0.35);
+      display: block;
+      text-align: center;
+      width: fit-content;
+    }
 
-      .cta-row {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 14px;
-        margin-top: 20px;
-      }
+    .monitor-card {
+      position: relative;
+      margin-top: 28px;
+      margin-bottom: 18px;
+      padding: 26px 24px 24px;
+      background: rgba(15, 23, 42, 0.82);
+      border: 1px solid var(--panel-border);
+      border-radius: 22px;
+      box-shadow: 0 14px 42px rgba(0, 0, 0, 0.18);
+      overflow: hidden;
+    }
 
-      .btn {
-        display: inline-block;
-        padding: 12px 18px;
-        border-radius: 12px;
-        text-decoration: none;
-        font-weight: 700;
-        transition: 0.2s ease;
-      }
+    .monitor-card::before {
+      content: "";
+      position: absolute;
+      inset: 0 0 auto 0;
+      height: 3px;
+      background: linear-gradient(90deg, var(--secondary), var(--primary), var(--accent));
+    }
 
-      .btn.primary {
-        background: linear-gradient(135deg, var(--primary), #60a5fa);
-        color: #0b1020;
-      }
+    .monitor-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 20px;
+    }
 
-      .btn.secondary {
-        background: rgba(167, 139, 250, 0.12);
-        color: var(--text);
-        border: 1px solid rgba(167, 139, 250, 0.35);
-      }
+    .monitor-header-text {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
 
-      .btn:hover {
-        transform: translateY(-1px);
-        text-decoration: none;
-      }
+    .monitor-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 38px;
+      height: 38px;
+      border-radius: 12px;
+      background: rgba(125, 211, 252, 0.12);
+      border: 1px solid rgba(125, 211, 252, 0.3);
+      font-size: 1.1rem;
+      flex-shrink: 0;
+    }
 
-      .features {
-        margin-top: 30px;
-      }
+    .monitor-header h3 {
+      margin: 0;
+      font-size: 1.3rem;
+      line-height: 1.3;
+    }
 
-      .features-title {
-        margin: 0 auto 18px;
-        padding-bottom: 10px;
-        font-size: 1.7rem;
-        font-weight: 900;
-        color: var(--text);
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        border-bottom: 2px solid rgba(125, 211, 252, 0.35);
-        display: block;
-        text-align: center;
-        width: fit-content;
-      }
+    .monitor-subtitle {
+      margin: 2px 0 0;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
 
-      .monitor-card {
-        position: relative;
-        margin-top: 28px;
-        margin-bottom: 18px;
-        padding: 26px 24px 24px;
-        background: rgba(15, 23, 42, 0.82);
-        border: 1px solid var(--panel-border);
-        border-radius: 22px;
-        box-shadow: 0 14px 42px rgba(0, 0, 0, 0.18);
-        overflow: hidden;
-      }
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 14px;
+      border-radius: 999px;
+      background: rgba(52, 211, 153, 0.12);
+      color: var(--secondary);
+      border: 1px solid rgba(52, 211, 153, 0.4);
+      font-size: 0.88rem;
+      font-weight: 700;
+      transition: background 0.25s ease, border-color 0.25s ease, color 0.25s ease;
+    }
 
-      .monitor-card::before {
-        content: "";
-        position: absolute;
-        inset: 0 0 auto 0;
-        height: 3px;
-        background: linear-gradient(90deg, var(--secondary), var(--primary), var(--accent));
-      }
+    .status-pill .dot {
+      width: 9px;
+      height: 9px;
+    }
 
-      .monitor-header {
-        display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
-        gap: 12px;
-        flex-wrap: wrap;
-        margin-bottom: 20px;
-      }
+    .monitor-section-label {
+      margin: 0 0 12px;
+      color: var(--muted);
+      font-size: 0.78rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
 
-      .monitor-header-text {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-      }
+    .monitor-metrics {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+      gap: 12px;
+      margin-bottom: 22px;
+    }
 
-      .monitor-icon {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 38px;
-        height: 38px;
-        border-radius: 12px;
-        background: rgba(125, 211, 252, 0.12);
-        border: 1px solid rgba(125, 211, 252, 0.3);
-        font-size: 1.1rem;
-        flex-shrink: 0;
-      }
+    .metric-box {
+      position: relative;
+      background: rgba(15, 23, 42, 0.7);
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      border-radius: 14px;
+      padding: 14px 14px 12px;
+      text-align: center;
+      overflow: hidden;
+      transition: transform 0.2s ease, border-color 0.2s ease;
+    }
 
-      .monitor-header h3 {
-        margin: 0;
-        font-size: 1.3rem;
-        line-height: 1.3;
-      }
+    .metric-box::before {
+      content: "";
+      position: absolute;
+      inset: 0 0 auto 0;
+      height: 3px;
+      background: linear-gradient(90deg, var(--secondary), var(--primary));
+      opacity: 0.7;
+    }
 
-      .monitor-subtitle {
-        margin: 2px 0 0;
-        color: var(--muted);
-        font-size: 0.85rem;
-      }
+    .metric-box:hover {
+      transform: translateY(-2px);
+      border-color: rgba(125, 211, 252, 0.35);
+    }
 
-      .status-pill {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        padding: 8px 14px;
-        border-radius: 999px;
-        background: rgba(52, 211, 153, 0.12);
-        color: var(--secondary);
-        border: 1px solid rgba(52, 211, 153, 0.4);
-        font-size: 0.88rem;
-        font-weight: 700;
-        transition: background 0.25s ease, border-color 0.25s ease, color 0.25s ease;
-      }
+    .metric-box span {
+      display: block;
+      color: var(--muted);
+      font-size: 0.76rem;
+      margin-bottom: 8px;
+      letter-spacing: 0.03em;
+    }
 
-      .status-pill .dot {
-        width: 9px;
-        height: 9px;
-      }
+    .metric-box strong {
+      display: block;
+      font-size: 1.3rem;
+      font-weight: 800;
+      color: var(--text);
+      letter-spacing: -0.02em;
+    }
 
-      .monitor-section-label {
-        margin: 0 0 12px;
-        color: var(--muted);
-        font-size: 0.78rem;
-        font-weight: 700;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-      }
+    .metric-box strong.status-good {
+      color: var(--secondary);
+    }
 
-      .monitor-metrics {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
-        gap: 12px;
-        margin-bottom: 22px;
-      }
+    .metric-box strong.status-warn {
+      color: #fbbf24;
+    }
 
-      .metric-box {
-        position: relative;
-        background: rgba(15, 23, 42, 0.7);
-        border: 1px solid rgba(148, 163, 184, 0.18);
-        border-radius: 14px;
-        padding: 14px 14px 12px;
-        text-align: center;
-        overflow: hidden;
-        transition: transform 0.2s ease, border-color 0.2s ease;
-      }
+    .metric-box strong.status-bad {
+      color: var(--danger);
+    }
 
-      .metric-box::before {
-        content: "";
-        position: absolute;
-        inset: 0 0 auto 0;
-        height: 3px;
-        background: linear-gradient(90deg, var(--secondary), var(--primary));
-        opacity: 0.7;
-      }
+    .uptime-bars {
+      display: grid;
+      gap: 12px;
+    }
 
-      .metric-box:hover {
-        transform: translateY(-2px);
-        border-color: rgba(125, 211, 252, 0.35);
-      }
+    .bar-row {
+      display: grid;
+      grid-template-columns: 56px 1fr 64px;
+      align-items: center;
+      gap: 14px;
+      color: var(--muted);
+      font-size: 0.82rem;
+    }
 
-      .metric-box span {
-        display: block;
-        color: var(--muted);
-        font-size: 0.76rem;
-        margin-bottom: 8px;
-        letter-spacing: 0.03em;
-      }
+    .bar-row>span:first-child {
+      font-weight: 700;
+      color: var(--text);
+    }
 
-      .metric-box strong {
-        display: block;
-        font-size: 1.3rem;
-        font-weight: 800;
-        color: var(--text);
-        letter-spacing: -0.02em;
-      }
+    .bar-track {
+      position: relative;
+      width: 100%;
+      height: 10px;
+      background: rgba(148, 163, 184, 0.12);
+      border-radius: 999px;
+      overflow: hidden;
+    }
 
-      .metric-box strong.status-good { color: var(--secondary); }
-      .metric-box strong.status-warn { color: #fbbf24; }
-      .metric-box strong.status-bad { color: var(--danger); }
+    .bar-fill {
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 0%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, var(--secondary), var(--primary));
+      box-shadow: 0 0 10px rgba(52, 211, 153, 0.45);
+      transition: width 0.6s ease, background 0.3s ease, box-shadow 0.3s ease;
+    }
 
-      .uptime-bars {
-        display: grid;
-        gap: 12px;
-      }
+    .bar-fill.status-warn {
+      background: linear-gradient(90deg, #f59e0b, #fbbf24);
+      box-shadow: 0 0 10px rgba(245, 158, 11, 0.45);
+    }
 
+    .bar-fill.status-bad {
+      background: linear-gradient(90deg, #ef4444, var(--danger));
+      box-shadow: 0 0 10px rgba(239, 68, 68, 0.45);
+    }
+
+    .bar-row strong {
+      text-align: right;
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+    }
+
+    @media (max-width: 480px) {
       .bar-row {
-        display: grid;
-        grid-template-columns: 56px 1fr 64px;
-        align-items: center;
-        gap: 14px;
-        color: var(--muted);
-        font-size: 0.82rem;
+        grid-template-columns: 44px 1fr 58px;
+        gap: 8px;
       }
+    }
 
-      .bar-row > span:first-child {
-        font-weight: 700;
-        color: var(--text);
-      }
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+    }
 
-      .bar-track {
-        position: relative;
-        width: 100%;
-        height: 10px;
-        background: rgba(148, 163, 184, 0.12);
-        border-radius: 999px;
-        overflow: hidden;
-      }
+    .stat-card {
+      min-height: 220px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      background: rgba(39, 49, 63, 0.8);
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      border-radius: 18px;
+      padding: 24px 18px;
+      text-align: center;
+      color: var(--text);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+    }
 
-      .bar-fill {
-        position: absolute;
-        inset: 0 auto 0 0;
-        width: 0%;
-        border-radius: 999px;
-        background: linear-gradient(90deg, var(--secondary), var(--primary));
-        box-shadow: 0 0 10px rgba(52, 211, 153, 0.45);
-        transition: width 0.6s ease, background 0.3s ease, box-shadow 0.3s ease;
-      }
+    .stat-value {
+      font-size: clamp(2.1rem, 2.7vw, 4.1rem);
+      line-height: 1.18;
+      font-weight: 800;
+      letter-spacing: -0.05em;
+      color: #7c8cff;
+      margin: 0;
+      white-space: pre-line;
+      word-break: break-word;
+    }
 
-      .bar-fill.status-warn {
-        background: linear-gradient(90deg, #f59e0b, #fbbf24);
-        box-shadow: 0 0 10px rgba(245, 158, 11, 0.45);
-      }
+    .stat-label {
+      margin-top: 12px;
+      font-size: 1.02rem;
+      color: rgba(229, 238, 251, 0.9);
+    }
 
-      .bar-fill.status-bad {
-        background: linear-gradient(90deg, #ef4444, var(--danger));
-        box-shadow: 0 0 10px rgba(239, 68, 68, 0.45);
-      }
+    .stat-card.small .stat-value {
+      font-size: clamp(1.8rem, 2.3vw, 3.1rem);
+    }
 
-      .bar-row strong {
-        text-align: right;
-        color: var(--text);
-        font-variant-numeric: tabular-nums;
-      }
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 20px;
+    }
 
-      @media (max-width: 480px) {
-        .bar-row {
-          grid-template-columns: 44px 1fr 58px;
-          gap: 8px;
-        }
-      }
+    .card {
+      background: rgba(15, 23, 42, 0.8);
+      border: 1px solid var(--panel-border);
+      border-radius: 18px;
+      padding: 20px 18px;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+    }
 
-      .stats-grid {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 18px;
-      }
+    .card h2 {
+      margin: 0 0 12px;
+      font-size: 1.2rem;
+    }
 
-      .stat-card {
-        min-height: 220px;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        align-items: center;
-        background: rgba(39, 49, 63, 0.8);
-        border: 1px solid rgba(148, 163, 184, 0.18);
-        border-radius: 18px;
-        padding: 24px 18px;
-        text-align: center;
-        color: var(--text);
-        box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
-      }
+    .tag {
+      display: inline-block;
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--primary);
+      margin-bottom: 10px;
+    }
 
-      .stat-value {
-        font-size: clamp(2.1rem, 2.7vw, 4.1rem);
-        line-height: 1.18;
-        font-weight: 800;
-        letter-spacing: -0.05em;
-        color: #7c8cff;
-        margin: 0;
-        white-space: pre-line;
-        word-break: break-word;
-      }
+    ul {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
 
-      .stat-label {
-        margin-top: 12px;
-        font-size: 1.02rem;
-        color: rgba(229, 238, 251, 0.9);
-      }
+    li {
+      color: var(--muted);
+      line-height: 1.8;
+      padding: 4px 0;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+    }
 
-      .stat-card.small .stat-value {
-        font-size: clamp(1.8rem, 2.3vw, 3.1rem);
-      }
+    li:last-child {
+      border-bottom: none;
+    }
 
-      .features-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-        gap: 20px;
-      }
+    .card-desc {
+      color: var(--muted);
+      font-size: 0.95rem;
+      line-height: 1.75;
+      margin: 6px 0 0;
+    }
 
-      .card {
-        background: rgba(15, 23, 42, 0.8);
-        border: 1px solid var(--panel-border);
-        border-radius: 18px;
-        padding: 20px 18px;
-        box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
-      }
+    code {
+      background: rgba(125, 211, 252, 0.08);
+      border: 1px solid rgba(125, 211, 252, 0.2);
+      border-radius: 5px;
+      padding: 1px 5px;
+      font-size: 0.87em;
+      color: var(--primary);
+    }
 
-      .card h2 {
-        margin: 0 0 12px;
-        font-size: 1.2rem;
-      }
+    .docs-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
 
-      .tag {
-        display: inline-block;
-        font-size: 11px;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        color: var(--primary);
-        margin-bottom: 10px;
-      }
+    .footer {
+      margin-top: 30px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.95rem;
+      line-height: 1.9;
+    }
 
-      ul {
-        list-style: none;
-        padding: 0;
-        margin: 0;
-      }
+    .footer-line {
+      display: block;
+    }
 
-      li {
-        color: var(--muted);
-        line-height: 1.8;
-        padding: 4px 0;
-        border-bottom: 1px solid rgba(148, 163, 184, 0.12);
-      }
+    a {
+      color: var(--primary);
+      text-decoration: none;
+    }
 
-      li:last-child {
-        border-bottom: none;
-      }
+    a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
 
-      .footer {
-        margin-top: 30px;
-        text-align: center;
-        color: var(--muted);
-        font-size: 0.95rem;
-        line-height: 1.9;
-      }
-
-      .footer-line {
-        display: block;
-      }
-
-      a {
-        color: var(--primary);
-        text-decoration: none;
-      }
-
-      a:hover {
-        text-decoration: underline;
-      }
-    </style>
-  </head>
-  <body>
-    <main>
-      <section class="hero">
-        <div class="status">
-          <span class="dot"></span>
-          <a href="https://stats.uptimerobot.com/AVDH7BXq2X/803979719" target="_blank" rel="noreferrer">
-            機器人狀態：在線中
-          </a>
-        </div>
-
-        <h1>炙彗JI器人</h1>
-        <p class="subtitle">
-          這是一個於高中自主學習製作的多功能 Discord 機器人，整合了娛樂、天氣查詢、公車到站、伺服器資訊、歡迎訊息與語音功能。
-          目前機器人使用<a href="https://nyanko.host/" target="_blank" rel="noreferrer">雲端貓居</a>託管，24/7全天候上線。
-        </p>
-
-        <div class="cta-row">
-          <a class="btn secondary" href="https://discord.com/oauth2/authorize?client_id=1477930641944350952&permissions=8&integration_type=0&scope=bot+applications.commands" target="_blank" rel="noreferrer">
-            邀請機器人
-          </a>
-          <a class="btn secondary" href="https://discord.gg/YjjdJMa8rm" target="_blank" rel="noreferrer">
-            加入官方支援群
-          </a>
-          <a class="btn secondary" href="https://github.com/Chien-JungSu/Discord-Bot" target="_blank" rel="noreferrer">
-            GitHub Repository
-          </a>
-        </div>
-      </section>
-
-      <section class="monitor-card">
-        <div class="monitor-header">
-          <div class="monitor-header-text">
-            <span class="monitor-icon">📡</span>
-            <div>
-              <h3>機器人監控狀態</h3>
-              <p class="monitor-subtitle">由 UptimeRobot 即時監控</p>
-            </div>
-          </div>
-          <div class="status-pill">
-            <span class="dot"></span>
-            <span id="monitor-status">載入中...</span>
-          </div>
-        </div>
-
-        <p class="monitor-section-label">正常運行率</p>
-        <div class="monitor-metrics">
-          <div class="metric-box">
-            <span>24 小時</span>
-            <strong id="uptime-24h">--</strong>
-          </div>
-          <div class="metric-box">
-            <span>7 天</span>
-            <strong id="uptime-7d">--</strong>
-          </div>
-          <div class="metric-box">
-            <span>30 天</span>
-            <strong id="uptime-30d">--</strong>
-          </div>
-          <div class="metric-box">
-            <span>90 天</span>
-            <strong id="uptime-90d">--</strong>
-          </div>
-        </div>
-
-        <div class="uptime-bars">
-          <div class="bar-row">
-            <span>24h</span>
-            <div class="bar-track"><div class="bar-fill" id="bar-24h"></div></div>
-            <strong id="bar-24h-value">--</strong>
-          </div>
-          <div class="bar-row">
-            <span>7d</span>
-            <div class="bar-track"><div class="bar-fill" id="bar-7d"></div></div>
-            <strong id="bar-7d-value">--</strong>
-          </div>
-          <div class="bar-row">
-            <span>30d</span>
-            <div class="bar-track"><div class="bar-fill" id="bar-30d"></div></div>
-            <strong id="bar-30d-value">--</strong>
-          </div>
-          <div class="bar-row">
-            <span>90d</span>
-            <div class="bar-track"><div class="bar-fill" id="bar-90d"></div></div>
-            <strong id="bar-90d-value">--</strong>
-          </div>
-        </div>
-      </section>
-
-      <section class="monitor-card">
-        <div class="stats-grid">
-          <div class="stat-card">
-            <p class="stat-value" id="server-count">--</p>
-            <div class="stat-label">伺服器</div>
-          </div>
-
-          <div class="stat-card">
-            <p class="stat-value" id="user-count">--</p>
-            <div class="stat-label">總用戶</div>
-          </div>
-
-          <div class="stat-card small">
-            <p class="stat-value" id="latency-value">--</p>
-            <div class="stat-label">延遲</div>
-          </div>
-
-          <div class="stat-card small">
-            <p class="stat-value" id="uptime-value">--</p>
-            <div class="stat-label">運行時間</div>
-          </div>
-        </div>
-      </section>
-
-      <section class="features">
-        <h2 class="features-title">模組介紹</h2>
-        <div class="features-grid">
-          <article class="card">
-            <div class="tag">General</div>
-            <h2>一般功能</h2>
-            <ul>
-              <li> /ping：測試機器人延遲</li>
-              <li> /choice：幫你從多個選項中做出決定</li>
-              <li> /quotes：隨機名言與笑話互動功能</li>
-            </ul>
-          </article>
-
-          <article class="card">
-            <div class="tag">Weather</div>
-            <h2>天氣查詢</h2>
-            <ul>
-              <li> /weather：查詢台灣各縣市的即時天氣</li>
-              <li> 支援台澎金馬中文與英文地名輸入</li>
-              <li> 提供來自交通部中央氣象署的即時天氣資訊</li>
-            </ul>
-          </article>
-
-          <article class="card">
-            <div class="tag">Bus</div>
-            <h2>公車資訊</h2>
-            <ul>
-              <li> /bus：查詢城市公車路線到站時間</li>
-              <li> 顯示站牌資訊與車牌狀態</li>
-              <li> 支援台澎金馬各縣市之公車查詢</li>
-            </ul>
-          </article>
-
-          <article class="card">
-            <div class="tag">Server Info</div>
-            <h2>伺服器資訊</h2>
-            <ul>
-              <li> /server_info：顯示伺服器基本資料</li>
-              <li> 可查看成員數與建立時間</li>
-              <li> 適合用於管理與社群資訊展示</li>
-            </ul>
-          </article>
-
-          <article class="card">
-            <div class="tag">Welcome</div>
-            <h2>歡迎訊息</h2>
-            <ul>
-              <li> /welcome_active：設定加入歡迎頻道</li>
-              <li> /welcome_inactive：停用歡迎訊息</li>
-              <li> 新成員加入時自動發送歡迎卡片</li>
-            </ul>
-          </article>
-
-          <article class="card">
-            <div class="tag">Music</div>
-            <h2>語音功能</h2>
-            <ul>
-              <li> /join：讓機器人加入語音頻道</li>
-              <li> /leave：讓機器人離開語音頻道</li>
-              <li> /play：搜尋並播放音樂（YouTube／SoundCloud，支援關鍵字或網址）</li>
-            </ul>
-          </article>
-        </div>
-      </section>
-
-      <div class="footer">
-        <span class="footer-line">© 2026 炙彗JI器人</span>
+<body>
+  <main>
+    <section class="hero" id="home-hero">
+      <div class="status">
+        <span class="dot"></span>
+        <a href="https://stats.uptimerobot.com/AVDH7BXq2X/803979719" target="_blank" rel="noreferrer">
+          機器人狀態：在線中
+        </a>
       </div>
-    </main>
 
-    <script>
-      function formatNumber(value) {
-        return Number(value || 0).toLocaleString('zh-Hant');
-      }
+      <h1>炙彗JI器人</h1>
+      <p class="subtitle">
+        這是一個於高中自主學習製作的多功能 Discord 機器人，整合了娛樂、天氣查詢、公車到站、伺服器資訊、歡迎訊息與語音功能。
+        目前機器人使用<a href="https://nyanko.host/" target="_blank" rel="noreferrer">雲端貓居</a>託管，24/7全天候上線。
+      </p>
 
-      function formatLatency(value) {
-        return `${Number(value || 0)} ms`;
-      }
+      <div class="cta-row">
+        <a class="btn secondary"
+          href="https://discord.com/oauth2/authorize?client_id=1477930641944350952&permissions=8&integration_type=0&scope=bot+applications.commands"
+          target="_blank" rel="noreferrer">
+          邀請機器人
+        </a>
+        <a class="btn secondary" href="https://discord.gg/YjjdJMa8rm" target="_blank" rel="noreferrer">
+          加入官方支援群
+        </a>
+        <a class="btn secondary" href="https://github.com/Chien-JungSu/Discord-Bot" target="_blank" rel="noreferrer">
+          GitHub Repository
+        </a>
+      </div>
+    </section>
 
-      function formatUptimeText(text) {
-        return text ? text.replace(/\n/g, '<br>') : '--';
-      }
+    <section class="monitor-card" id="home-monitor">
+      <div class="monitor-header">
+        <div class="monitor-header-text">
+          <span class="monitor-icon">📡</span>
+          <div>
+            <h3>機器人監控狀態</h3>
+            <p class="monitor-subtitle">由 UptimeRobot 即時監控</p>
+          </div>
+        </div>
+        <div class="status-pill">
+          <span class="dot"></span>
+          <span id="monitor-status">載入中...</span>
+        </div>
+      </div>
 
-      async function loadUptimeStatus() {
-        try {
-          const response = await fetch('/api/uptime');
-          const data = await response.json();
+      <p class="monitor-section-label">正常運行率</p>
+      <div class="monitor-metrics">
+        <div class="metric-box">
+          <span>24 小時</span>
+          <strong id="uptime-24h">--</strong>
+        </div>
+        <div class="metric-box">
+          <span>7 天</span>
+          <strong id="uptime-7d">--</strong>
+        </div>
+        <div class="metric-box">
+          <span>30 天</span>
+          <strong id="uptime-30d">--</strong>
+        </div>
+        <div class="metric-box">
+          <span>90 天</span>
+          <strong id="uptime-90d">--</strong>
+        </div>
+      </div>
 
-          if (data.status !== 'ok') {
-            const statusText = document.getElementById('monitor-status');
-            if (statusText) {
-              statusText.textContent = data.message || '資料不可用';
-            }
-            return;
-          }
+      <div class="uptime-bars">
+        <div class="bar-row">
+          <span>24h</span>
+          <div class="bar-track">
+            <div class="bar-fill" id="bar-24h"></div>
+          </div>
+          <strong id="bar-24h-value">--</strong>
+        </div>
+        <div class="bar-row">
+          <span>7d</span>
+          <div class="bar-track">
+            <div class="bar-fill" id="bar-7d"></div>
+          </div>
+          <strong id="bar-7d-value">--</strong>
+        </div>
+        <div class="bar-row">
+          <span>30d</span>
+          <div class="bar-track">
+            <div class="bar-fill" id="bar-30d"></div>
+          </div>
+          <strong id="bar-30d-value">--</strong>
+        </div>
+        <div class="bar-row">
+          <span>90d</span>
+          <div class="bar-track">
+            <div class="bar-fill" id="bar-90d"></div>
+          </div>
+          <strong id="bar-90d-value">--</strong>
+        </div>
+      </div>
+    </section>
 
-          const statusClassFor = (value) => {
-            const numeric = Number.parseFloat(value || 0);
-            if (!Number.isFinite(numeric)) return 'status-bad';
-            if (numeric >= 99.9) return 'status-good';
-            if (numeric >= 99) return 'status-warn';
-            return 'status-bad';
-          };
+    <section class="monitor-card" id="home-stats">
+      <div class="stats-grid">
+        <div class="stat-card">
+          <p class="stat-value" id="server-count">--</p>
+          <div class="stat-label">伺服器</div>
+        </div>
 
-          const formatPercent = (value) => {
-            const numeric = Number.parseFloat(value);
-            if (!Number.isFinite(numeric)) return null;
-            return numeric.toFixed(1);
-          };
+        <div class="stat-card">
+          <p class="stat-value" id="user-count">--</p>
+          <div class="stat-label">總用戶</div>
+        </div>
 
-          const setMetric = (id, value) => {
-            const el = document.getElementById(id);
-            if (!el) return;
-            const formatted = formatPercent(value);
-            el.textContent = formatted !== null ? `${formatted}%` : '--';
-            el.classList.remove('status-good', 'status-warn', 'status-bad');
-            if (formatted !== null) el.classList.add(statusClassFor(value));
-          };
+        <div class="stat-card small">
+          <p class="stat-value" id="latency-value">--</p>
+          <div class="stat-label">延遲</div>
+        </div>
 
-          const setBar = (barId, valueId, value) => {
-            const bar = document.getElementById(barId);
-            const label = document.getElementById(valueId);
-            if (!bar || !label) return;
+        <div class="stat-card small">
+          <p class="stat-value" id="uptime-value">--</p>
+          <div class="stat-label">運行時間</div>
+        </div>
+      </div>
+    </section>
 
-            const numeric = Number.parseFloat(value || 0);
-            const safeValue = Number.isFinite(numeric) ? Math.max(0, Math.min(100, numeric)) : 0;
-            bar.style.width = `${safeValue}%`;
-            bar.classList.remove('status-warn', 'status-bad');
-            const cls = statusClassFor(value);
-            if (cls !== 'status-good') bar.classList.add(cls);
-            label.textContent = `${safeValue.toFixed(1)}%`;
-          };
+    <!-- ===== HOME：模組介紹 ===== -->
+    <section class="features" id="section-home">
+      <h2 class="features-title">模組介紹</h2>
+      <div class="features-grid">
+        <article class="card">
+          <div class="tag">General</div>
+          <h2>一般功能</h2>
+          <p class="card-desc">提供延遲測試、隨機抽選與名言笑話等日常娛樂指令。</p>
+        </article>
+        <article class="card">
+          <div class="tag">Weather</div>
+          <h2>天氣查詢</h2>
+          <p class="card-desc">整合中央氣象署 API，支援台澎金馬中英文地名即時天氣查詢。</p>
+        </article>
+        <article class="card">
+          <div class="tag">Bus</div>
+          <h2>公車資訊</h2>
+          <p class="card-desc">串接交通部 TDX API，下拉選站查詢各縣市公車即時到站時間。</p>
+        </article>
+        <article class="card">
+          <div class="tag">Server Info</div>
+          <h2>伺服器資訊</h2>
+          <p class="card-desc">一鍵顯示伺服器基本資料，包含成員數、建立時間等詳細資訊。</p>
+        </article>
+        <article class="card">
+          <div class="tag">Welcome</div>
+          <h2>歡迎訊息</h2>
+          <p class="card-desc">新成員加入時自動發送歡迎 Embed，支援規則頻道與身份組頻道連結設定。</p>
+        </article>
+        <article class="card">
+          <div class="tag">Music</div>
+          <h2>語音功能</h2>
+          <p class="card-desc">透過 Lavalink 播放 YouTube／SoundCloud 音樂，支援佇列、插播與節點監控。</p>
+        </article>
+      </div>
+      <div style="text-align:center;margin-top:28px;">
+        <button class="btn secondary" onclick="showPage('docs')" style="cursor:pointer;border:none;font-size:1rem;">
+          查看文檔
+        </button>
+      </div>
+    </section>
 
-          const status = data.status_text || '未知';
-          const statusEl = document.getElementById('monitor-status');
-          if (statusEl) statusEl.textContent = status;
+    <!-- ===== DOCS 頁面 ===== -->
+    <section id="section-docs" style="display:none;">
+      <div style="display:flex;align-items:center;gap:14px;margin-bottom:26px;">
+        <button class="btn secondary" onclick="showPage('home')" style="cursor:pointer;border:none;font-size:0.9rem;">←
+          返回</button>
+        <h2 class="features-title" style="margin:0;">完整指令文件</h2>
+      </div>
+      <div class="docs-stack">
+        <article class="card">
+          <div class="tag">General</div>
+          <h2>一般功能</h2>
+          <ul>
+            <li><strong>/ping</strong>：回傳機器人目前的 WebSocket 延遲（ms）。</li>
+            <li><strong>/choice</strong> <em>options:&lt;文字&gt;</em>：輸入以空格分隔的選項，機器人隨機選一個。</li>
+            <li><strong>/quotes</strong>：顯示「名言」或「笑話」按鈕，點擊後取得對應內容。</li>
+          </ul>
+        </article>
+        <article class="card">
+          <div class="tag">Weather</div>
+          <h2>天氣查詢</h2>
+          <ul>
+            <li><strong>/weather</strong> <em>city:&lt;縣市&gt;</em>：查詢台灣各縣市即時天氣預報，支援中文（臺北）、英文（Taichung）及離島（Matsu）地名。</li>
+            <li>資料來源：交通部中央氣象署公開 API；SSL 驗證失敗時自動重試。</li>
+          </ul>
+        </article>
+        <article class="card">
+          <div class="tag">Bus</div>
+          <h2>公車資訊</h2>
+          <ul>
+            <li><strong>/bus</strong>：先從下拉選單選擇縣市，輸入公車路線號碼，再選站牌查詢即時到站資訊。</li>
+            <li>資料來源：交通部 TDX API；查詢結果僅使用者可見（ephemeral）。</li>
+            <li>若路線不存在回覆找不到訊息；未知錯誤自動 DM 通知 Owner。</li>
+          </ul>
+        </article>
+        <article class="card">
+          <div class="tag">Server Info</div>
+          <h2>伺服器資訊</h2>
+          <ul>
+            <li><strong>/server_info</strong>：顯示目前伺服器的名稱、ID、成員數、建立時間、身份組數等詳細資訊。</li>
+          </ul>
+        </article>
+        <article class="card">
+          <div class="tag">Welcome</div>
+          <h2>歡迎訊息</h2>
+          <ul>
+            <li><strong>/welcome_active</strong> <em>welcome_channel:&lt;頻道&gt; [rules_channel]
+                [role_channel]</em>：啟用歡迎訊息，設定歡迎頻道（必填）、規則頻道與身份組頻道（選填）。需「管理伺服器」權限。</li>
+            <li><strong>/welcome_inactive</strong>：停用本伺服器歡迎訊息功能。需「管理伺服器」權限。</li>
+            <li>新成員加入時，機器人在歡迎頻道發送含大頭貼、@提及、加入時間與成員數的 Embed。</li>
+            <li>設定儲存於 <code>welcome_settings.json</code>，重啟後不遺失。</li>
+            <li>⚠️ 使用前須在 Discord Developer Portal 開啟 <strong>Server Members Intent</strong>。</li>
+          </ul>
+        </article>
+        <article class="card">
+          <div class="tag">Music</div>
+          <h2>語音功能</h2>
+          <ul>
+            <li><strong>/music_join</strong>：加入使用者目前所在的語音頻道。</li>
+            <li><strong>/music_leave</strong>：離開語音頻道並清空播放佇列。</li>
+            <li><strong>/music_play</strong> <em>query:&lt;關鍵字或網址&gt;</em>：搜尋並播放音樂；若有歌曲正在播放則排入 FIFO 佇列。支援
+              YouTube／SoundCloud 關鍵字或直接貼網址。</li>
+            <li><strong>/music_play_next</strong> <em>query:&lt;關鍵字或網址&gt;</em>：插播，插入佇列最前面，下一首優先播放。</li>
+            <li><strong>/music_queue</strong>：顯示正在播放的歌曲與接下來最多 10 首的佇列清單。</li>
+            <li><strong>/music_queue_clear</strong>：清空播放佇列（不影響正在播放的歌曲）。</li>
+            <li><strong>/music_node_status</strong>：查看 Lavalink 節點連線狀態（URI、Session ID、連線伺服器數），僅使用者可見。</li>
+            <li>語音頻道無真人成員超過 <code>EMPTY_VOICE_CHANNEL_TIMEOUT</code> 秒（預設 60）後自動離開並清空佇列。</li>
+            <li>需安裝 <code>wavelink</code> 並設定 <code>LAVALINK_URI</code> / <code>LAVALINK_PASSWORD</code>。</li>
+          </ul>
+        </article>
+      </div>
+    </section>
 
-          const statusPill = document.querySelector('.status-pill');
-          if (statusPill) {
-            const isOnline = status === '在線';
-            statusPill.style.background = isOnline ? 'rgba(52, 211, 153, 0.12)' : 'rgba(248, 113, 113, 0.12)';
-            statusPill.style.borderColor = isOnline ? 'rgba(52, 211, 153, 0.4)' : 'rgba(248, 113, 113, 0.38)';
-            statusPill.style.color = isOnline ? '#34d399' : '#f87171';
-          }
+    <div class="footer" id="home-footer">
+      <span class="footer-line">© 2026 炙彗JI器人</span>
+    </div>
+  </main>
 
-          setMetric('uptime-24h', data.uptime['24h']);
-          setMetric('uptime-7d', data.uptime['7d']);
-          setMetric('uptime-30d', data.uptime['30d']);
-          setMetric('uptime-90d', data.uptime['90d']);
+  <script>
+    function formatNumber(value) {
+      return Number(value || 0).toLocaleString('zh-Hant');
+    }
 
-          setBar('bar-24h', 'bar-24h-value', data.uptime['24h']);
-          setBar('bar-7d', 'bar-7d-value', data.uptime['7d']);
-          setBar('bar-30d', 'bar-30d-value', data.uptime['30d']);
-          setBar('bar-90d', 'bar-90d-value', data.uptime['90d']);
-        } catch (error) {
+    function formatLatency(value) {
+      return `${Number(value || 0)} ms`;
+    }
+
+    function formatUptimeText(text) {
+      return text ? text.replace(/\n/g, '<br>') : '--';
+    }
+
+    async function loadUptimeStatus() {
+      try {
+        const response = await fetch('/api/uptime');
+        const data = await response.json();
+
+        if (data.status !== 'ok') {
           const statusText = document.getElementById('monitor-status');
           if (statusText) {
-            statusText.textContent = '資料載入失敗';
+            statusText.textContent = data.message || '資料不可用';
           }
+          return;
+        }
+
+        const statusClassFor = (value) => {
+          const numeric = Number.parseFloat(value || 0);
+          if (!Number.isFinite(numeric)) return 'status-bad';
+          if (numeric >= 99.9) return 'status-good';
+          if (numeric >= 99) return 'status-warn';
+          return 'status-bad';
+        };
+
+        const formatPercent = (value) => {
+          const numeric = Number.parseFloat(value);
+          if (!Number.isFinite(numeric)) return null;
+          return numeric.toFixed(1);
+        };
+
+        const setMetric = (id, value) => {
+          const el = document.getElementById(id);
+          if (!el) return;
+          const formatted = formatPercent(value);
+          el.textContent = formatted !== null ? `${formatted}%` : '--';
+          el.classList.remove('status-good', 'status-warn', 'status-bad');
+          if (formatted !== null) el.classList.add(statusClassFor(value));
+        };
+
+        const setBar = (barId, valueId, value) => {
+          const bar = document.getElementById(barId);
+          const label = document.getElementById(valueId);
+          if (!bar || !label) return;
+
+          const numeric = Number.parseFloat(value || 0);
+          const safeValue = Number.isFinite(numeric) ? Math.max(0, Math.min(100, numeric)) : 0;
+          bar.style.width = `${safeValue}%`;
+          bar.classList.remove('status-warn', 'status-bad');
+          const cls = statusClassFor(value);
+          if (cls !== 'status-good') bar.classList.add(cls);
+          label.textContent = `${safeValue.toFixed(1)}%`;
+        };
+
+        const status = data.status_text || '未知';
+        const statusEl = document.getElementById('monitor-status');
+        if (statusEl) statusEl.textContent = status;
+
+        const statusPill = document.querySelector('.status-pill');
+        if (statusPill) {
+          const isOnline = status === '在線';
+          statusPill.style.background = isOnline ? 'rgba(52, 211, 153, 0.12)' : 'rgba(248, 113, 113, 0.12)';
+          statusPill.style.borderColor = isOnline ? 'rgba(52, 211, 153, 0.4)' : 'rgba(248, 113, 113, 0.38)';
+          statusPill.style.color = isOnline ? '#34d399' : '#f87171';
+        }
+
+        setMetric('uptime-24h', data.uptime['24h']);
+        setMetric('uptime-7d', data.uptime['7d']);
+        setMetric('uptime-30d', data.uptime['30d']);
+        setMetric('uptime-90d', data.uptime['90d']);
+
+        setBar('bar-24h', 'bar-24h-value', data.uptime['24h']);
+        setBar('bar-7d', 'bar-7d-value', data.uptime['7d']);
+        setBar('bar-30d', 'bar-30d-value', data.uptime['30d']);
+        setBar('bar-90d', 'bar-90d-value', data.uptime['90d']);
+      } catch (error) {
+        const statusText = document.getElementById('monitor-status');
+        if (statusText) {
+          statusText.textContent = '資料載入失敗';
         }
       }
+    }
 
-      // 運行時間本地即時計時（每秒自動跳動，不用一直打 API）
-      let uptimeBaseSeconds = null;
-      let uptimeBaseTimestamp = null;
-      let uptimeTickTimer = null;
+    // 運行時間本地即時計時（每秒自動跳動，不用一直打 API）
+    let uptimeBaseSeconds = null;
+    let uptimeBaseTimestamp = null;
+    let uptimeTickTimer = null;
 
-      function formatUptimeSeconds(totalSeconds) {
-        totalSeconds = Math.max(0, Math.floor(totalSeconds));
-        const days = Math.floor(totalSeconds / 86400);
-        totalSeconds %= 86400;
-        const hours = Math.floor(totalSeconds / 3600);
-        totalSeconds %= 3600;
-        const minutes = Math.floor(totalSeconds / 60);
-        const seconds = totalSeconds % 60;
-        return `${days}天, ${hours}小時\n${minutes}分, ${seconds}秒`;
+    function formatUptimeSeconds(totalSeconds) {
+      totalSeconds = Math.max(0, Math.floor(totalSeconds));
+      const days = Math.floor(totalSeconds / 86400);
+      totalSeconds %= 86400;
+      const hours = Math.floor(totalSeconds / 3600);
+      totalSeconds %= 3600;
+      const minutes = Math.floor(totalSeconds / 60);
+      const seconds = totalSeconds % 60;
+      return `${days}天, ${hours}小時\n${minutes}分, ${seconds}秒`;
+    }
+
+    function tickUptimeDisplay() {
+      if (uptimeBaseSeconds === null || uptimeBaseTimestamp === null) return;
+      const elapsed = uptimeBaseSeconds + (Date.now() - uptimeBaseTimestamp) / 1000;
+      const el = document.getElementById('uptime-value');
+      if (el) el.innerHTML = formatUptimeText(formatUptimeSeconds(elapsed));
+    }
+
+    function startUptimeTicker(initialSeconds) {
+      uptimeBaseSeconds = initialSeconds;
+      uptimeBaseTimestamp = Date.now();
+      tickUptimeDisplay();
+      if (!uptimeTickTimer) {
+        uptimeTickTimer = setInterval(tickUptimeDisplay, 1000);
       }
+    }
 
-      function tickUptimeDisplay() {
-        if (uptimeBaseSeconds === null || uptimeBaseTimestamp === null) return;
-        const elapsed = uptimeBaseSeconds + (Date.now() - uptimeBaseTimestamp) / 1000;
-        const el = document.getElementById('uptime-value');
-        if (el) el.innerHTML = formatUptimeText(formatUptimeSeconds(elapsed));
+    function stopUptimeTicker() {
+      if (uptimeTickTimer) {
+        clearInterval(uptimeTickTimer);
+        uptimeTickTimer = null;
       }
+      uptimeBaseSeconds = null;
+      uptimeBaseTimestamp = null;
+    }
 
-      function startUptimeTicker(initialSeconds) {
-        uptimeBaseSeconds = initialSeconds;
-        uptimeBaseTimestamp = Date.now();
-        tickUptimeDisplay();
-        if (!uptimeTickTimer) {
-          uptimeTickTimer = setInterval(tickUptimeDisplay, 1000);
-        }
-      }
+    async function loadBotStats() {
+      try {
+        const response = await fetch('/api/bot-stats');
+        const data = await response.json();
 
-      function stopUptimeTicker() {
-        if (uptimeTickTimer) {
-          clearInterval(uptimeTickTimer);
-          uptimeTickTimer = null;
-        }
-        uptimeBaseSeconds = null;
-        uptimeBaseTimestamp = null;
-      }
-
-      async function loadBotStats() {
-        try {
-          const response = await fetch('/api/bot-stats');
-          const data = await response.json();
-
-          if (data.status !== 'ok') {
-            document.getElementById('server-count').textContent = '--';
-            document.getElementById('user-count').textContent = '--';
-            document.getElementById('latency-value').textContent = '--';
-            document.getElementById('uptime-value').textContent = '--';
-            stopUptimeTicker();
-            return;
-          }
-
-          document.getElementById('server-count').textContent = formatNumber(data.guilds);
-          document.getElementById('user-count').textContent = formatNumber(data.users);
-          document.getElementById('latency-value').textContent = formatLatency(data.latency_ms);
-          // 用 API 回傳的 uptime_seconds 當基準，之後每秒在前端本地累加，畫面會即時跳動；
-          // 每次重新打 API 時會用最新的秒數校正，避免長時間累積誤差
-          startUptimeTicker(data.uptime_seconds);
-        } catch (error) {
+        if (data.status !== 'ok') {
           document.getElementById('server-count').textContent = '--';
           document.getElementById('user-count').textContent = '--';
           document.getElementById('latency-value').textContent = '--';
           document.getElementById('uptime-value').textContent = '--';
           stopUptimeTicker();
+          return;
         }
+
+        document.getElementById('server-count').textContent = formatNumber(data.guilds);
+        document.getElementById('user-count').textContent = formatNumber(data.users);
+        document.getElementById('latency-value').textContent = formatLatency(data.latency_ms);
+        // 用 API 回傳的 uptime_seconds 當基準，之後每秒在前端本地累加，畫面會即時跳動；
+        // 每次重新打 API 時會用最新的秒數校正，避免長時間累積誤差
+        startUptimeTicker(data.uptime_seconds);
+      } catch (error) {
+        document.getElementById('server-count').textContent = '--';
+        document.getElementById('user-count').textContent = '--';
+        document.getElementById('latency-value').textContent = '--';
+        document.getElementById('uptime-value').textContent = '--';
+        stopUptimeTicker();
       }
+    }
 
-      loadUptimeStatus();
-      loadBotStats();
+    loadUptimeStatus();
+    loadBotStats();
 
-      // 定期重新拉取資料：伺服器數/用戶數/延遲/運行時間基準每 60 秒校正一次，
-      // UptimeRobot 監控資料每 5 分鐘刷新一次（避免過度呼叫外部 API）
-      setInterval(loadBotStats, 60 * 1000);
-      setInterval(loadUptimeStatus, 5 * 60 * 1000);
-    </script>
-  </body>
+    // 定期重新拉取資料：伺服器數/用戶數/延遲/運行時間基準每 60 秒校正一次，
+    // UptimeRobot 監控資料每 5 分鐘刷新一次（避免過度呼叫外部 API）
+    setInterval(loadBotStats, 60 * 1000);
+    setInterval(loadUptimeStatus, 5 * 60 * 1000);
+
+    const HOME_IDS = ['home-hero', 'home-monitor', 'home-stats', 'home-footer'];
+
+    function showPage(page) {
+      const sHome = document.getElementById('section-home');
+      const sDocs = document.getElementById('section-docs');
+      const isDocs = page === 'docs';
+      HOME_IDS.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = isDocs ? 'none' : '';
+      });
+      sHome.style.display = isDocs ? 'none' : '';
+      sDocs.style.display = isDocs ? '' : 'none';
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  </script>
+</body>
+
 </html>

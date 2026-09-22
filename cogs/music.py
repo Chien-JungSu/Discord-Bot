@@ -330,7 +330,7 @@ class Music(commands.Cog):
                 track=next_track,
                 requester_name=requester_name,
                 color=discord.Color.blurple(),
-                footer_prefix="由佇列自動播放｜原本由",
+                footer_prefix="佇列自動播放 - 由",
             )
             try:
                 await channel.send(embed=embed)
@@ -780,8 +780,8 @@ class Music(commands.Cog):
             for idx, queue_item in enumerate(queue_snapshot[:10], start=1):
                 queued_track, requester_name = queue_item
                 lines.append(
-                    f"`{idx}.` {queued_track.title}"
-                    f"（{format_duration(getattr(queued_track, 'length', None))}｜由 {requester_name} 點播）"
+                    f"{idx}. {queued_track.title}"
+                    f"（{format_duration(getattr(queued_track, 'length', None))}）- 由 {requester_name} 點播"
                 )
             if len(queue_snapshot) > 10:
                 lines.append(f"...還有 {len(queue_snapshot) - 10} 首沒有列出")
@@ -833,7 +833,7 @@ class Music(commands.Cog):
 
         embed = discord.Embed(
             title="🖥️ Lavalink 節點狀態",
-            description=f"目前共註冊 {len(nodes)} 個節點（第8週規劃自架第二節點後，這裡會列出多個節點）。",
+            description=f"目前共有 {len(nodes)} 個節點",
             color=discord.Color.blurple(),
             timestamp=discord.utils.utcnow(),
         )
