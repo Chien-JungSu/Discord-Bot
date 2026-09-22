@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 if TYPE_CHECKING:
     import wavelink as wavelink_module
@@ -19,6 +19,14 @@ except ImportError:  # 尚未安裝 wavelink 時，讓其他 Cog 仍可正常運
 
 # Lavalink 連線逾時秒數，可用環境變數覆寫，避免連線卡住拖垮整個 bot 啟動流程
 LAVALINK_CONNECT_TIMEOUT = float(os.getenv('LAVALINK_CONNECT_TIMEOUT', '15'))
+
+# 語音頻道裡沒有真人成員（只剩機器人自己）超過這個秒數，就自動離開並清空佇列。
+# 可用環境變數覆寫；設計成有一段緩衝時間，避免使用者只是暫時斷線重連或切頻道
+# 晃一下，就把佇列清空、把機器人踢出去。
+EMPTY_VOICE_CHANNEL_TIMEOUT = float(os.getenv('EMPTY_VOICE_CHANNEL_TIMEOUT', '60'))
+
+# 多久檢查一次 Lavalink 節點的連線狀態（秒），可用環境變數覆寫。
+NODE_HEALTH_CHECK_INTERVAL = float(os.getenv('NODE_HEALTH_CHECK_INTERVAL', '30'))
 
 
 def format_duration(length_ms: int | None) -> str:
@@ -33,6 +41,25 @@ def format_duration(length_ms: int | None) -> str:
 class Music(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        # key: guild_id, value: 目前正在倒數「語音頻道空了要自動離開」的背景任務。
+        # 一個伺服器同時最多只會有一個計時器在跑。
+        self.empty_channel_timers: dict[int, asyncio.Task] = {}
+        # key: 節點 identifier，value: 是否已經為「目前這次離線」發過通知。
+        # 用來避免健康檢查每隔 NODE_HEALTH_CHECK_INTERVAL 秒就重複 DM 開發者，
+        # 只在「狀態從連線變離線」的那一刻通知一次，恢復連線後才會重置旗標。
+        self._node_alert_sent: dict[str, bool] = {}
+
+    async def cog_unload(self):
+        """Cog 被卸載時（例如重新載入模組）順便取消所有還在跑的自動離開計時器，
+        避免計時器任務變成孤兒，之後莫名其妙把機器人踢出語音頻道。
+        """
+        for task in self.empty_channel_timers.values():
+            if not task.done():
+                task.cancel()
+        self.empty_channel_timers.clear()
+
+        if self.node_health_check.is_running():
+            self.node_health_check.cancel()
 
     async def cog_load(self):
         """Cog 被 bot.load_extension() 載入時自動呼叫一次，建立節點連線池。
@@ -48,6 +75,11 @@ class Music(commands.Cog):
             print("⚠️ 尚未安裝 wavelink，Music Cog 的 /join /leave /play 將無法運作。"
                   "請先執行 pip install wavelink 並設定 Lavalink 節點。")
             return
+
+        # 不論 LAVALINK_URI 現在有沒有設定，都先把健康檢查背景任務跑起來，
+        # 這樣之後如果補設定、重新連線，也能持續監控節點狀態。
+        if not self.node_health_check.is_running():
+            self.node_health_check.start()
 
         lavalink_uri = os.getenv('LAVALINK_URI')
         lavalink_password = os.getenv('LAVALINK_PASSWORD')
@@ -85,6 +117,80 @@ class Music(commands.Cog):
             print(f"❌ 連線 Lavalink 節點失敗：{e}")
             print("   請確認 Lavalink 是否已啟動，以及 LAVALINK_URI / LAVALINK_PASSWORD 是否正確。")
             await self.bot.notify_owner_error(e, extra_info=f"Lavalink 節點連線失敗：{lavalink_uri}")
+
+    # ---------- Lavalink 節點健康檢查 ----------
+    @staticmethod
+    def _describe_node_status(node: "wavelink_module.Node") -> tuple[str, str]:
+        """把 wavelink Node 的 status 轉成 (狀態代碼字串, 給人看的中文標籤)。
+
+        不同版本的 wavelink，NodeStatus 這個 Enum 是否存在、叫什麼名字都可能
+        不一樣，這裡刻意不 import wavelink.NodeStatus 直接比對，而是用
+        `getattr(status, "name", ...)` 取出字串再比對名稱，只要 Enum member
+        名稱維持 CONNECTED / CONNECTING / DISCONNECTED 這幾個常見命名，不管是
+        哪個版本都能正常運作；真的比對不到就顯示「未知」，不會讓指令或背景
+        任務直接壞掉。
+        """
+        status = getattr(node, "status", None)
+        if status is None:
+            status_name = "UNKNOWN"
+        else:
+            status_name = getattr(status, "name", None) or str(status)
+
+        labels = {
+            "CONNECTED": "🟢 已連線",
+            "CONNECTING": "🟡 連線中",
+            "DISCONNECTED": "🔴 已離線",
+        }
+        return status_name, labels.get(status_name, f"❔ 未知（{status_name}）")
+
+    @tasks.loop(seconds=NODE_HEALTH_CHECK_INTERVAL)
+    async def node_health_check(self):
+        """新增：定期檢查所有已註冊 Lavalink 節點的連線狀態，離線時通知開發者。
+
+        wavelink 本身斷線後會自動嘗試背景重連，不會丟一個明確的「節點斷線」
+        事件給我們，所以改用 `tasks.loop` 每隔 NODE_HEALTH_CHECK_INTERVAL 秒
+        主動檢查一次 `wavelink.Pool.nodes` 裡每個節點目前的 `status`。
+
+        用 `self._node_alert_sent` 這個字典記錄「這次離線有沒有通知過」：
+        狀態變成 DISCONNECTED 且還沒通知過，就 DM 開發者一次並把旗標設為
+        True；之後只要還是離線，就不會每 30 秒洗一次版。等狀態恢復成
+        CONNECTED，才把旗標重置回 False，下次再斷線才會重新觸發通知。
+        """
+        if wavelink is None:
+            return
+
+        try:
+            nodes = wavelink.Pool.nodes
+        except Exception as e:
+            print(f">>> node_health_check 讀取節點清單失敗：{e}")
+            return
+
+        for identifier, node in nodes.items():
+            status_name, _ = self._describe_node_status(node)
+            uri = getattr(node, "uri", identifier)
+
+            if status_name == "DISCONNECTED":
+                if not self._node_alert_sent.get(identifier):
+                    self._node_alert_sent[identifier] = True
+                    print(f"❌ 健康檢查偵測到 Lavalink 節點離線：{uri}（identifier={identifier}）")
+                    synthetic_error = RuntimeError(f"Lavalink 節點離線：{uri}")
+                    await self.bot.notify_owner_error(
+                        synthetic_error,
+                        extra_info=(
+                            f"node_health_check 偵測到節點離線 identifier={identifier} uri={uri}，"
+                            f"語音功能（/music_join /music_play 等）可能暫時無法使用。"
+                        ),
+                    )
+            elif status_name == "CONNECTED" and self._node_alert_sent.get(identifier):
+                # 節點恢復連線了，重置旗標，下次再斷線才會再通知一次。
+                self._node_alert_sent[identifier] = False
+                print(f"✅ Lavalink 節點已恢復連線：{uri}（identifier={identifier}）")
+
+    @node_health_check.before_loop
+    async def before_node_health_check(self):
+        # 等 bot 完全 ready（含 on_ready 觸發過一次）再開始跑，
+        # 避免啟動初期 wavelink.Pool 還沒建立好就先檢查、白跑一次。
+        await self.bot.wait_until_ready()
 
     # ---------- wavelink 自訂事件 ----------
     @commands.Cog.listener()
@@ -168,6 +274,10 @@ class Music(commands.Cog):
         popleft() 從 FIFO 佇列最前面取出並接著播放，藉此達成播完自動連播；
         佇列空了就發一次通知，不然使用者只會看到機器人靜靜停在語音頻道裡。
 
+        佇列裡存的是 (track, requester_name) tuple，是點歌當下（/play、
+        /play_next）就記錄好的，這樣輪到這首歌自動播放時，才能在通知訊息裡
+        說明「這首是誰點的」，而不是只顯示歌名。
+
         這裡刻意把 player.autoplay 設成 disabled（見 _ensure_player / /join），
         是因為 wavelink 內建的 autoplay 也會在歌曲結束時嘗試自己接下一首（從
         wavelink 自己的 Queue 或推薦清單），如果不關掉，會跟這裡手動接管的邏輯
@@ -184,16 +294,17 @@ class Music(commands.Cog):
             song_queue = deque()
             player.song_queue = song_queue
 
+        channel = getattr(player, "home_channel", None)
+
         if not song_queue:
-            channel = getattr(player, "home_channel", None)
             if channel is not None:
                 try:
-                    await channel.send("📭 播放佇列已經全部播完囉，輸入 `/play` 繼續點歌吧！")
+                    await channel.send("📭 播放佇列已經全部播完囉，輸入 `/music_play` 繼續點歌吧！")
                 except discord.HTTPException:
                     pass
             return
 
-        next_track = song_queue.popleft()
+        next_track, requester_name = song_queue.popleft()
         try:
             await player.play(next_track)
         except Exception as e:
@@ -201,7 +312,6 @@ class Music(commands.Cog):
             await self.bot.notify_owner_error(
                 e, extra_info=f"on_wavelink_track_end 自動播放失敗 track={getattr(next_track, 'title', '?')}"
             )
-            channel = getattr(player, "home_channel", None)
             if channel is not None:
                 try:
                     await channel.send(
@@ -209,6 +319,148 @@ class Music(commands.Cog):
                     )
                 except discord.HTTPException:
                     pass
+            return
+
+        # 播放成功才會執行到這裡：把「佇列裡的下一首開始播放了」發回文字頻道，
+        # 跟 /play、/play_next 直接播放時看到的 Embed 樣式一致，只是標題與
+        # footer 用「佇列自動播放」來跟使用者手動點播做區隔。
+        if channel is not None:
+            embed = self._build_track_embed(
+                title="🎶 接下來播放",
+                track=next_track,
+                requester_name=requester_name,
+                color=discord.Color.blurple(),
+                footer_prefix="由佇列自動播放｜原本由",
+            )
+            try:
+                await channel.send(embed=embed)
+            except discord.HTTPException as exc:
+                print(f">>> 傳送佇列自動播放通知失敗: {exc}")
+
+    # ---------- 語音頻道空房自動離開 ----------
+    @commands.Cog.listener()
+    async def on_voice_state_update(
+        self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState
+    ):
+        """新增：語音頻道沒有真人成員時，自動離開並清空佇列。
+
+        discord.py 只要「任何人」（包含機器人自己）在語音頻道之間的狀態改變
+        （加入、離開、切換頻道）都會觸發這個事件，所以第一件事是先判斷這次
+        異動跟機器人所在的頻道有沒有關係，沒關係就直接 return，避免每次任何
+        伺服器、任何頻道有人講話 / 開關靜音都觸發一次不必要的檢查。
+
+        真正的判斷邏輯抽成 `_refresh_empty_channel_timer`：頻道裡只要還有
+        任何一位「非機器人」成員，就取消計時器；一旦真人成員歸零，就啟動一個
+        `EMPTY_VOICE_CHANNEL_TIMEOUT` 秒的倒數計時器，時間到了才真正離開，
+        而不是有人一離開就立刻斷線，避免誤判暫時性的斷線重連或切頻道。
+        """
+        if wavelink is None:
+            return
+
+        guild = member.guild
+        player: "wavelink_module.Player | None" = guild.voice_client
+
+        if player is None:
+            # 機器人目前不在任何語音頻道，理論上不該有殘留的計時器，
+            # 但保險起見還是清一次，避免機器人被強制斷線（例如被踢出頻道）
+            # 導致計時器變成孤兒、永遠不會被觸發也永遠不會被取消。
+            self._cancel_empty_channel_timer(guild.id)
+            return
+
+        bot_channel = player.channel
+        if bot_channel is None:
+            self._cancel_empty_channel_timer(guild.id)
+            return
+
+        # 只有在「這次異動的頻道」跟「機器人目前所在的頻道」有關時才需要重新檢查。
+        changed_channels = {before.channel, after.channel}
+        if bot_channel not in changed_channels:
+            return
+
+        await self._refresh_empty_channel_timer(guild.id, player)
+
+    async def _refresh_empty_channel_timer(self, guild_id: int, player: "wavelink_module.Player"):
+        """檢查機器人目前所在頻道還有沒有真人成員，決定要啟動還是取消倒數計時器。"""
+        channel = player.channel
+        if channel is None:
+            self._cancel_empty_channel_timer(guild_id)
+            return
+
+        humans = [m for m in channel.members if not m.bot]
+
+        if humans:
+            # 還有真人在，不用（或不用再）倒數離開。
+            self._cancel_empty_channel_timer(guild_id)
+            return
+
+        if guild_id in self.empty_channel_timers:
+            return  # 已經有計時器在跑了，不用重複建立
+
+        print(
+            f"⏳ 語音頻道「{channel}」目前沒有真人成員，"
+            f"{EMPTY_VOICE_CHANNEL_TIMEOUT:.0f} 秒後將自動離開（guild_id={guild_id}）。"
+        )
+        self.empty_channel_timers[guild_id] = asyncio.create_task(
+            self._auto_leave_after_delay(guild_id)
+        )
+
+    def _cancel_empty_channel_timer(self, guild_id: int):
+        task = self.empty_channel_timers.pop(guild_id, None)
+        if task is not None and not task.done():
+            task.cancel()
+
+    async def _auto_leave_after_delay(self, guild_id: int):
+        try:
+            await asyncio.sleep(EMPTY_VOICE_CHANNEL_TIMEOUT)
+        except asyncio.CancelledError:
+            # 倒數過程中有真人回來了（或計時器被其他流程取消），
+            # 屬於正常情況，直接結束這個背景任務即可，不用做任何清理。
+            return
+
+        # 時間到了，先把自己從字典移除，避免跟下一輪的 refresh 邏輯互相干擾。
+        self.empty_channel_timers.pop(guild_id, None)
+
+        guild = self.bot.get_guild(guild_id)
+        if guild is None:
+            return
+
+        player: "wavelink_module.Player | None" = guild.voice_client
+        if player is None:
+            return  # 機器人已經不在語音頻道了（例如被 /music_leave 手動離開過）
+
+        channel = player.channel
+        if channel is not None:
+            humans = [m for m in channel.members if not m.bot]
+            if humans:
+                # 保險檢查：理論上真人回來時 on_voice_state_update 就會取消計時器，
+                # 這裡是避免極端的時序競態（計時器已經醒來、但取消還沒生效）。
+                return
+
+        song_queue: deque = getattr(player, "song_queue", None)
+        if song_queue:
+            song_queue.clear()
+
+        home_channel = getattr(player, "home_channel", None)
+
+        try:
+            await player.disconnect()
+        except Exception as e:
+            print(f">>> 自動離開語音頻道時發生錯誤: {e}")
+            await self.bot.notify_owner_error(e, extra_info=f"自動離開語音頻道失敗 guild_id={guild_id}")
+            return
+
+        print(
+            f"👋 語音頻道已經沒有真人成員超過 {EMPTY_VOICE_CHANNEL_TIMEOUT:.0f} 秒，"
+            f"已自動離開（guild_id={guild_id}）。"
+        )
+        if home_channel is not None:
+            try:
+                await home_channel.send(
+                    f"📤 語音頻道已經空了超過 {EMPTY_VOICE_CHANNEL_TIMEOUT:.0f} 秒，"
+                    "我先自動離開並清空佇列了，想聽歌再 `/music_play` 一次就可以！"
+                )
+            except discord.HTTPException:
+                pass
 
     # ---------- 共用邏輯 ----------
     async def _ensure_player(
@@ -255,6 +507,10 @@ class Music(commands.Cog):
         # 確保一定有 song_queue 可用，避免後面存取時 AttributeError。
         if getattr(player, "song_queue", None) is None:
             player.song_queue = deque()
+
+        # 使用者現在就在頻道裡跟機器人互動，代表頻道一定不是空的，
+        # 保險起見取消任何可能殘留的自動離開計時器。
+        self._cancel_empty_channel_timer(interaction.guild.id)
 
         return player
 
@@ -304,6 +560,9 @@ class Music(commands.Cog):
         # 通知送回這裡（Lavalink 端的錯誤是非同步事件，不會經過 /join 或 /play 本身）。
         player.home_channel = interaction.channel
 
+        # 剛加入的頻道一定有下指令的這個人在，保險起見取消可能殘留的計時器。
+        self._cancel_empty_channel_timer(interaction.guild.id)
+
         await interaction.followup.send(f"🔊 已加入 {channel.mention}！", ephemeral=True)
 
     @app_commands.command(name="music_leave", description="讓機器人離開目前所在的語音頻道")
@@ -315,6 +574,8 @@ class Music(commands.Cog):
             return
 
         channel_mention = voice_client.channel.mention
+        # 手動 /leave 了，不需要（也不該）再讓背景計時器之後又觸發一次自動離開。
+        self._cancel_empty_channel_timer(interaction.guild.id)
         # 第3週新增：離開語音頻道時順便清空這個伺服器的佇列，
         # 避免下次 /join 進來時還殘留上一次沒播完的歌曲清單造成混淆。
         song_queue = getattr(voice_client, "song_queue", None)
@@ -360,7 +621,13 @@ class Music(commands.Cog):
         return tracks[0]
 
     def _build_track_embed(
-        self, title: str, track: "wavelink_module.Playable", requester: discord.abc.User, color: discord.Color
+        self,
+        title: str,
+        track: "wavelink_module.Playable",
+        requester_name: str | None,
+        color: discord.Color,
+        footer_prefix: str = "由",
+        footer_suffix: str = "點播",
     ) -> discord.Embed:
         embed = discord.Embed(
             title=title,
@@ -373,7 +640,8 @@ class Music(commands.Cog):
             embed.set_thumbnail(url=artwork)
         embed.add_field(name="👤 作者", value=getattr(track, "author", None) or "未知", inline=True)
         embed.add_field(name="⏱️ 長度", value=format_duration(getattr(track, "length", None)), inline=True)
-        embed.set_footer(text=f"由 {requester.display_name} 點播")
+        if requester_name:
+            embed.set_footer(text=f"{footer_prefix} {requester_name} {footer_suffix}")
         return embed
 
     @app_commands.command(name="music_play", description="搜尋並播放音樂，若目前正在播放則排入佇列（可輸入關鍵字或直接貼網址）")
@@ -401,11 +669,16 @@ class Music(commands.Cog):
         # ---- 第3週更新：有佇列了，不再直接蓋掉正在播放的歌曲 ----
         # player.playing 代表現在有歌在播、player.paused 代表暫停中但還沒播完，
         # 這兩種狀態都視為「有東西在佔用播放器」，新點的歌一律排到佇列尾端（FIFO）。
+        # 這裡把「點播者是誰」也一起存進佇列（track, requester_name），
+        # 這樣輪到這首歌自動播放時，通知訊息才能顯示是誰點的。
         if player.playing or player.paused:
-            player.song_queue.append(track)
+            player.song_queue.append((track, interaction.user.display_name))
             position = len(player.song_queue)
             embed = self._build_track_embed(
-                title="➕ 已加入佇列", track=track, requester=interaction.user, color=discord.Color.blurple()
+                title="➕ 已加入佇列",
+                track=track,
+                requester_name=interaction.user.display_name,
+                color=discord.Color.blurple(),
             )
             embed.add_field(name="📌 排隊位置", value=f"第 {position} 位", inline=False)
             await interaction.followup.send(embed=embed)
@@ -423,7 +696,7 @@ class Music(commands.Cog):
             return
 
         embed = self._build_track_embed(
-            title="🎶 開始播放", track=track, requester=interaction.user, color=discord.Color.blurple()
+            title="🎶 開始播放", track=track, requester_name=interaction.user.display_name, color=discord.Color.blurple()
         )
         await interaction.followup.send(embed=embed)
 
@@ -450,10 +723,13 @@ class Music(commands.Cog):
 
         if player.playing or player.paused:
             # 插播的重點：用 appendleft 塞到 FIFO 佇列的最前面，
-            # 而不是照排隊順序 append 到最後面。
-            player.song_queue.appendleft(track)
+            # 而不是照排隊順序 append 到最後面；同樣把點播者名稱存起來。
+            player.song_queue.appendleft((track, interaction.user.display_name))
             embed = self._build_track_embed(
-                title="⏭️ 已插播", track=track, requester=interaction.user, color=discord.Color.orange()
+                title="⏭️ 已插播",
+                track=track,
+                requester_name=interaction.user.display_name,
+                color=discord.Color.orange(),
             )
             embed.add_field(name="📌 排隊位置", value="下一首", inline=False)
             await interaction.followup.send(embed=embed)
@@ -471,7 +747,7 @@ class Music(commands.Cog):
             return
 
         embed = self._build_track_embed(
-            title="🎶 開始播放", track=track, requester=interaction.user, color=discord.Color.blurple()
+            title="🎶 開始播放", track=track, requester_name=interaction.user.display_name, color=discord.Color.blurple()
         )
         await interaction.followup.send(embed=embed)
 
@@ -501,12 +777,16 @@ class Music(commands.Cog):
             lines.append("")
             lines.append(f"**📜 接下來（共 {len(song_queue)} 首）：**")
             queue_snapshot = list(song_queue)
-            for idx, queued_track in enumerate(queue_snapshot[:10], start=1):
-                lines.append(f"{idx}. {queued_track.title}（{format_duration(getattr(queued_track, 'length', None))}）")
+            for idx, queue_item in enumerate(queue_snapshot[:10], start=1):
+                queued_track, requester_name = queue_item
+                lines.append(
+                    f"`{idx}.` {queued_track.title}"
+                    f"（{format_duration(getattr(queued_track, 'length', None))}｜由 {requester_name} 點播）"
+                )
             if len(queue_snapshot) > 10:
                 lines.append(f"...還有 {len(queue_snapshot) - 10} 首沒有列出")
         else:
-            lines.append("\n📭 佇列目前是空的，播完這首就結束囉，輸入 `/play` 繼續點歌吧！")
+            lines.append("\n📭 佇列目前是空的，播完這首就結束囉，輸入 `/music_play` 繼續點歌吧！")
 
         embed = discord.Embed(
             title="🎵 播放佇列",
@@ -529,6 +809,55 @@ class Music(commands.Cog):
         await interaction.response.send_message(
             f"🗑️ 已清空佇列，移除了 {removed_count} 首歌曲（正在播放的歌曲不受影響）。", ephemeral=True
         )
+
+    @app_commands.command(name="music_node_status", description="查看目前 Lavalink 節點的連線狀態")
+    async def node_status(self, interaction: discord.Interaction):
+        if wavelink is None:
+            await interaction.response.send_message("❌ 語音模組尚未安裝完成，請聯絡管理員。", ephemeral=True)
+            return
+
+        try:
+            nodes = wavelink.Pool.nodes
+        except Exception as e:
+            print(f">>> /music_node_status 讀取節點清單失敗：{e}")
+            await self.bot.notify_owner_error(e, interaction, extra_info="/music_node_status 讀取節點清單失敗")
+            await interaction.response.send_message("❌ 讀取節點狀態時發生錯誤，已回報開發者。", ephemeral=True)
+            return
+
+        if not nodes:
+            await interaction.response.send_message(
+                "⚠️ 目前沒有任何已註冊的 Lavalink 節點，請確認 `LAVALINK_URI` / `LAVALINK_PASSWORD` 是否已設定。",
+                ephemeral=True,
+            )
+            return
+
+        embed = discord.Embed(
+            title="🖥️ Lavalink 節點狀態",
+            description=f"目前共註冊 {len(nodes)} 個節點（第8週規劃自架第二節點後，這裡會列出多個節點）。",
+            color=discord.Color.blurple(),
+            timestamp=discord.utils.utcnow(),
+        )
+
+        for identifier, node in nodes.items():
+            status_name, status_label = self._describe_node_status(node)
+            uri = getattr(node, "uri", "未知網址")
+            player_count = len(getattr(node, "players", None) or {})
+
+            value_lines = [
+                f"**狀態：** {status_label}",
+                f"**目前連線的伺服器數：** {player_count}",
+            ]
+            session_id = getattr(node, "session_id", None)
+            if session_id:
+                value_lines.append(f"**Session ID：** `{session_id}`")
+
+            embed.add_field(
+                name=f"📡 {identifier}",
+                value=f"網址：{uri}\n" + "\n".join(value_lines),
+                inline=False,
+            )
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 async def setup(bot: commands.Bot):

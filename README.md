@@ -55,10 +55,12 @@ TDX_CLIENT_SECRET=交通部 TDX Client Secret
 DISCORD_OWNER_ID=你的 Discord 使用者 ID
 LAVALINK_URI=Lavalink 節點網址
 LAVALINK_PASSWORD=Lavalink 節點密碼
+EMPTY_VOICE_CHANNEL_TIMEOUT=語音頻道空掉多久後自動離開（秒，選填，預設 60）
 ```
 
 `TDX_CLIENT_ID` 與 `TDX_CLIENT_SECRET` 用於 `/bus` 公車查詢。`DISCORD_OWNER_ID` 為選填，用來接收機器人錯誤通知。若未設定，錯誤通知會略過。
 也可以使用 `OWNER_ID` 作為 `DISCORD_OWNER_ID` 的替代名稱。`LAVALINK_URI` 與 `LAVALINK_PASSWORD` 用於音樂功能的 Lavalink 連線；這兩項未設定時會略過節點連線。
+`EMPTY_VOICE_CHANNEL_TIMEOUT` 為選填，設定語音頻道裡沒有真人成員（只剩機器人自己）超過幾秒後自動離開並清空佇列；未設定時預設為 60 秒。
 
 若要啟用音樂功能，請另外安裝套件並啟動 Lavalink：
 
@@ -113,6 +115,7 @@ python main.py
 - `/bus` 若輸入不存在的公車號碼，會提示找不到站牌或到站資料；若發生未知錯誤，會自動嘗試 DM 通知 `DISCORD_OWNER_ID`。
 - `/music_join`、`/music_leave`、`/music_play`、`/music_play_next`、`/music_queue`、`/music_queue_clear` 需要已安裝 `wavelink` 並設定 `LAVALINK_URI` / `LAVALINK_PASSWORD`；未安裝或節點無法連線時，這些指令會回覆友善錯誤訊息，不影響機器人其他功能。
 - 播放佇列是各伺服器獨立的 FIFO（先進先出）佇列，實作於 `cogs/music.py` 的 `player.song_queue`（`collections.deque`）。歌曲播完（或被跳過、發生錯誤）時會觸發 wavelink 的 `on_wavelink_track_end` 事件，由監聽器從佇列最前面取出下一首並自動播放；佇列空了則會發一次通知。`player.autoplay` 因此設為 `disabled`，改由這個監聽器完全接管「播完接下一首」的邏輯，避免跟 wavelink 內建的 autoplay 互相搶播。
+- 語音頻道裡只剩機器人自己（沒有真人成員）超過 `EMPTY_VOICE_CHANNEL_TIMEOUT` 秒（預設 60 秒）就會自動離開並清空佇列，並在最近一次下指令的文字頻道發一則通知。這個功能監聽 `discord.py` 的 `on_voice_state_update` 事件，每次有人加入/離開/切換頻道時檢查機器人所在頻道還有沒有真人；沒有的話才啟動倒數計時器，且倒數期間只要有人回來就會立刻取消，避免誤判暫時性的斷線重連。
 - `/music_play` 搜尋失敗（來源網站無回應、反爬蟲封鎖等）會立即回覆錯誤訊息。歌曲成功排入播放後，若 Lavalink 節點在背景載入音訊時才失敗（例如 YouTube 判定需要登入、影片地區限制，或公開節點的來源連結失效），機器人會透過 `on_wavelink_track_exception` 監聽器把失敗原因回報到下指令當下的文字頻道，而不是只留在後台 log。目前公開 Lavalink 節點偶爾不穩定是已知風險，後續計畫改為自架節點。
 - 機器人在 `setup_hook` 內進行全域斜線指令同步，若同步失敗會在 `on_ready` 內再嘗試一次作為 fallback。
 - `cogs/web_server.py` 會在背景執行 Flask 網頁服務，首頁 `/` 顯示機器人狀態儀表板（`templates/index.html`），並提供 `/api/bot-stats`、`/api/uptime` 兩支 API。
@@ -179,10 +182,12 @@ TDX_CLIENT_SECRET=your TDX Client Secret
 DISCORD_OWNER_ID=your Discord user ID
 LAVALINK_URI=your Lavalink node URL
 LAVALINK_PASSWORD=your Lavalink node password
+EMPTY_VOICE_CHANNEL_TIMEOUT=seconds of an empty voice channel before auto-leaving (optional, default 60)
 ```
 
 `TDX_CLIENT_ID` and `TDX_CLIENT_SECRET` are required for `/bus`. `DISCORD_OWNER_ID` is optional and is used to receive bot error notifications. If it is not set, error notifications will be skipped.
 `OWNER_ID` can also be used as an alternative name for `DISCORD_OWNER_ID`. `LAVALINK_URI` and `LAVALINK_PASSWORD` configure the Lavalink connection for the music features. If either is missing, the bot skips the Lavalink connection.
+`EMPTY_VOICE_CHANNEL_TIMEOUT` is optional: how many seconds a voice channel can have no human members (bot only) before the bot auto-leaves and clears its queue. Defaults to 60 seconds.
 
 To enable the music features, install Wavelink separately and run a Lavalink node:
 
@@ -237,6 +242,7 @@ The bot also enables the `Message Content Intent` and voice-state intents for th
 - `/bus` handles unknown route numbers with a clear not-found message. Unexpected errors trigger an owner DM when `DISCORD_OWNER_ID` is configured.
 - `/music_join`, `/music_leave`, `/music_play`, `/music_play_next`, `/music_queue`, and `/music_queue_clear` use Wavelink and require a reachable Lavalink node configured with `LAVALINK_URI` and `LAVALINK_PASSWORD`. The music Cog is loaded without stopping the bot when Wavelink or Lavalink is unavailable.
 - The playback queue is a per-server FIFO queue, implemented as `player.song_queue` (a `collections.deque`) in `cogs/music.py`. When a track ends (finishes, is skipped, or errors out), wavelink fires `on_wavelink_track_end`; the listener pops the next track off the front of the queue and plays it automatically, and sends a one-time notice once the queue is empty. `player.autoplay` is set to `disabled` so this listener fully owns the "advance to next track" logic instead of racing with wavelink's built-in autoplay.
+- If a voice channel is left with only the bot (no human members) for more than `EMPTY_VOICE_CHANNEL_TIMEOUT` seconds (default 60), the bot automatically leaves and clears its queue, posting a notice to the text channel where it was last used. This listens to discord.py's `on_voice_state_update` event, checking the bot's channel every time someone joins, leaves, or switches channels; the countdown only starts once no humans remain, and is cancelled immediately if someone comes back, to avoid false positives from brief disconnects/reconnects.
 - `/music_play` reports search failures (source unreachable, anti-bot blocking, etc.) immediately. If a track is accepted but later fails to load in the background (e.g. YouTube requiring login, region restrictions, or a broken stream link on a public node), the bot reports the failure to the text channel where the command was last used via the `on_wavelink_track_exception` listener, instead of only logging it. Public Lavalink node instability is a known risk here; self-hosting a node is planned for later weeks.
 - The bot syncs global slash commands in `setup_hook`. If that fails, it retries in `on_ready` as a fallback.
 - `cogs/web_server.py` runs a background Flask web service serving a status dashboard (`templates/index.html`) and the `/api/bot-stats` and `/api/uptime` endpoints.
