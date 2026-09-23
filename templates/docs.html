@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>炙彗JI器人 - 指令文檔</title>
+  <style>
+    :root {
+      --bg: #0b1020;
+      --bg2: #111827;
+      --panel: rgba(15, 23, 42, 0.82);
+      --panel-border: rgba(148, 163, 184, 0.2);
+      --primary: #7dd3fc;
+      --secondary: #34d399;
+      --accent: #a78bfa;
+      --text: #e5eefb;
+      --muted: #b9c6db;
+      --danger: #f87171;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "Microsoft JhengHei", sans-serif;
+      background: linear-gradient(135deg, #0b1020, #111827 38%, #172554);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 32px 18px 48px;
+    }
+
+    main {
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+
+    .page-header {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      justify-content: center;
+      gap: 16px;
+      min-height: 74px;
+      margin-bottom: 24px;
+      padding-bottom: 12px;
+      border-bottom: 2px solid rgba(125, 211, 252, 0.28);
+    }
+
+    .back-link {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 10px 16px;
+      border-radius: 12px;
+      background: rgba(167, 139, 250, 0.12);
+      border: 1px solid rgba(167, 139, 250, 0.35);
+      color: var(--text);
+      text-decoration: none;
+      font-weight: 700;
+      font-size: 0.95rem;
+      min-width: 150px;
+      transition: transform 0.2s ease;
+    }
+
+    .back-link:hover {
+      transform: translateY(-1px);
+      text-decoration: none;
+    }
+
+    .page-title {
+      margin: 0;
+      text-align: center;
+      font-size: clamp(1.9rem, 3vw, 3rem);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text);
+      min-width: 200px;
+      width: 100%;
+    }
+
+    .docs-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      align-items: stretch;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--panel-border);
+      border-radius: 20px;
+      padding: 20px 20px 18px;
+      box-shadow: 0 14px 42px rgba(0, 0, 0, 0.18);
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+      min-height: 100%;
+    }
+
+    .tag {
+      display: inline-block;
+      font-size: 0.72rem;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(125, 211, 252, 0.12);
+      border: 1px solid rgba(125, 211, 252, 0.28);
+      color: var(--primary);
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      margin-bottom: 12px;
+      text-transform: uppercase;
+      width: fit-content;
+    }
+
+    .card h2 {
+      margin: 0 0 12px;
+      font-size: 1.3rem;
+      color: var(--text);
+    }
+
+    .card ul {
+      margin: 0;
+      padding-left: 1.2rem;
+      color: var(--muted);
+      line-height: 1.8;
+      list-style: disc;
+    }
+
+    .card li {
+      margin-bottom: 8px;
+      color: var(--muted);
+    }
+
+    .card li:last-child {
+      margin-bottom: 0;
+    }
+
+    code {
+      font-family: Consolas, "Courier New", monospace;
+      background: rgba(148, 163, 184, 0.08);
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      padding: 2px 6px;
+      border-radius: 6px;
+      color: var(--text);
+    }
+
+    @media (max-width: 640px) {
+      body { padding: 24px 14px 36px; }
+      .card { padding: 18px 16px; }
+      .page-header { align-items: flex-start; }
+      .page-title { width: 100%; }
+    }
+
+    .footer {
+      margin-top: 30px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.95rem;
+      line-height: 1.9;
+    }
+
+    .footer-line {
+      display: block;
+    }
+  </style>
+</head>
+
+<body>
+  <main>
+    <div class="page-header">
+      <a class="back-link" href="/">← 返回首頁</a>
+      <h1 class="page-title">指令文檔</h1>
+    </div>
+
+    <div class="docs-stack">
+      <article class="card">
+        <div class="tag">General</div>
+        <h2>一般功能</h2>
+        <ul>
+          <li><strong>/ping</strong>：回傳機器人目前的 WebSocket 延遲（ms）。</li>
+          <li><strong>/choice</strong> <em>options:&lt;文字&gt;</em>：輸入以空格分隔的選項，機器人隨機選一個。</li>
+          <li><strong>/quotes</strong>：顯示「名言」或「笑話」按鈕，點擊後取得對應內容。</li>
+          <li><strong>/steal</strong> <em>emoji:&lt;emoji 字串或引用&gt;</em>：從 Discord 表情符號 CDN 下載並新增為本伺服器自訂 emoji；支援多個 emoji 一次處理，超過檔案大小上限會發送文字提示。</li>
+        </ul>
+      </article>
+
+      <article class="card">
+        <div class="tag">Weather</div>
+        <h2>天氣查詢</h2>
+        <ul>
+          <li><strong>/weather</strong> <em>city:&lt;縣市&gt;</em>：查詢台澎金馬地區各縣市的即時天氣資訊，資料由中央氣象署提供。</li>
+        </ul>
+      </article>
+
+      <article class="card">
+        <div class="tag">Bus</div>
+        <h2>公車資訊</h2>
+        <ul>
+          <li><strong>/bus</strong>：查詢台澎金馬地區各縣市的即時公車到站資訊，資料由交通部 TDX API 提供。</li>
+        </ul>
+      </article>
+
+      <article class="card">
+        <div class="tag">Server Info</div>
+        <h2>伺服器資訊</h2>
+        <ul>
+          <li><strong>/server_info</strong>：顯示目前伺服器的名稱、ID、成員數、建立時間、身份組數等詳細資訊。</li>
+        </ul>
+      </article>
+
+      <article class="card">
+        <div class="tag">Welcome</div>
+        <h2>歡迎訊息</h2>
+        <ul>
+          <li><strong>/welcome_active</strong> <em>welcome_channel:&lt;頻道&gt; [rules_channel] [role_channel]</em>：啟用歡迎訊息，設定歡迎頻道（必填）、規則頻道與身份組頻道（選填）。需「管理伺服器」權限。</li>
+          <li><strong>/welcome_inactive</strong>：停用本伺服器歡迎訊息功能。需「管理伺服器」權限。</li>
+        </ul>
+      </article>
+
+      <article class="card">
+        <div class="tag">Music</div>
+        <h2>語音功能</h2>
+        <ul>
+          <li><strong>/music_join</strong>：加入使用者目前所在的語音頻道。</li>
+          <li><strong>/music_leave</strong>：離開語音頻道並清空播放佇列。</li>
+          <li><strong>/music_play</strong> <em>query:&lt;關鍵字或網址&gt;</em>：搜尋並播放音樂；若有歌曲正在播放則排入 FIFO 佇列。支援 YouTube／SoundCloud 關鍵字或直接貼網址。</li>
+          <li><strong>/music_play_next</strong> <em>query:&lt;關鍵字或網址&gt;</em>：插播，插入佇列最前面，下一首優先播放。</li>
+          <li><strong>/music_queue</strong>：顯示正在播放的歌曲與接下來最多 10 首的佇列清單。</li>
+          <li><strong>/music_queue_clear</strong>：清空播放佇列（不影響正在播放的歌曲）。</li>
+          <li><strong>/music_node_status</strong>：查看 Lavalink 節點連線狀態（URI、Session ID、連線伺服器數），僅使用者可見。</li>
+        </ul>
+      </article>
+    </div>
+
+    <div class="footer" id="home-footer">
+      <span class="footer-line">© 2026 炙彗JI器人</span>
+    </div>
+  </main>
+</body>
+
+</html>

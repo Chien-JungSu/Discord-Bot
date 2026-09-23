@@ -628,7 +628,7 @@
         <article class="card">
           <div class="tag">General</div>
           <h2>一般功能</h2>
-          <p class="card-desc">提供延遲測試、隨機抽選與名言笑話等日常娛樂指令。</p>
+          <p class="card-desc">提供延遲測試、隨機抽選、名言笑話與表情偷取等日常娛樂指令</p>
         </article>
         <article class="card">
           <div class="tag">Weather</div>
@@ -657,81 +657,9 @@
         </article>
       </div>
       <div style="text-align:center;margin-top:28px;">
-        <button class="btn secondary" onclick="showPage('docs')" style="cursor:pointer;border:none;font-size:1rem;">
+        <a class="btn secondary" href="/docs" style="cursor:pointer;border:none;font-size:1rem;display:inline-block;">
           查看文檔
-        </button>
-      </div>
-    </section>
-
-    <!-- ===== DOCS 頁面 ===== -->
-    <section id="section-docs" style="display:none;">
-      <div style="display:flex;align-items:center;gap:14px;margin-bottom:26px;">
-        <button class="btn secondary" onclick="showPage('home')" style="cursor:pointer;border:none;font-size:0.9rem;">←
-          返回</button>
-        <h2 class="features-title" style="margin:0;">完整指令文件</h2>
-      </div>
-      <div class="docs-stack">
-        <article class="card">
-          <div class="tag">General</div>
-          <h2>一般功能</h2>
-          <ul>
-            <li><strong>/ping</strong>：回傳機器人目前的 WebSocket 延遲（ms）。</li>
-            <li><strong>/choice</strong> <em>options:&lt;文字&gt;</em>：輸入以空格分隔的選項，機器人隨機選一個。</li>
-            <li><strong>/quotes</strong>：顯示「名言」或「笑話」按鈕，點擊後取得對應內容。</li>
-          </ul>
-        </article>
-        <article class="card">
-          <div class="tag">Weather</div>
-          <h2>天氣查詢</h2>
-          <ul>
-            <li><strong>/weather</strong> <em>city:&lt;縣市&gt;</em>：查詢台灣各縣市即時天氣預報，支援中文（臺北）、英文（Taichung）及離島（Matsu）地名。</li>
-            <li>資料來源：交通部中央氣象署公開 API；SSL 驗證失敗時自動重試。</li>
-          </ul>
-        </article>
-        <article class="card">
-          <div class="tag">Bus</div>
-          <h2>公車資訊</h2>
-          <ul>
-            <li><strong>/bus</strong>：先從下拉選單選擇縣市，輸入公車路線號碼，再選站牌查詢即時到站資訊。</li>
-            <li>資料來源：交通部 TDX API；查詢結果僅使用者可見（ephemeral）。</li>
-            <li>若路線不存在回覆找不到訊息；未知錯誤自動 DM 通知 Owner。</li>
-          </ul>
-        </article>
-        <article class="card">
-          <div class="tag">Server Info</div>
-          <h2>伺服器資訊</h2>
-          <ul>
-            <li><strong>/server_info</strong>：顯示目前伺服器的名稱、ID、成員數、建立時間、身份組數等詳細資訊。</li>
-          </ul>
-        </article>
-        <article class="card">
-          <div class="tag">Welcome</div>
-          <h2>歡迎訊息</h2>
-          <ul>
-            <li><strong>/welcome_active</strong> <em>welcome_channel:&lt;頻道&gt; [rules_channel]
-                [role_channel]</em>：啟用歡迎訊息，設定歡迎頻道（必填）、規則頻道與身份組頻道（選填）。需「管理伺服器」權限。</li>
-            <li><strong>/welcome_inactive</strong>：停用本伺服器歡迎訊息功能。需「管理伺服器」權限。</li>
-            <li>新成員加入時，機器人在歡迎頻道發送含大頭貼、@提及、加入時間與成員數的 Embed。</li>
-            <li>設定儲存於 <code>welcome_settings.json</code>，重啟後不遺失。</li>
-            <li>⚠️ 使用前須在 Discord Developer Portal 開啟 <strong>Server Members Intent</strong>。</li>
-          </ul>
-        </article>
-        <article class="card">
-          <div class="tag">Music</div>
-          <h2>語音功能</h2>
-          <ul>
-            <li><strong>/music_join</strong>：加入使用者目前所在的語音頻道。</li>
-            <li><strong>/music_leave</strong>：離開語音頻道並清空播放佇列。</li>
-            <li><strong>/music_play</strong> <em>query:&lt;關鍵字或網址&gt;</em>：搜尋並播放音樂；若有歌曲正在播放則排入 FIFO 佇列。支援
-              YouTube／SoundCloud 關鍵字或直接貼網址。</li>
-            <li><strong>/music_play_next</strong> <em>query:&lt;關鍵字或網址&gt;</em>：插播，插入佇列最前面，下一首優先播放。</li>
-            <li><strong>/music_queue</strong>：顯示正在播放的歌曲與接下來最多 10 首的佇列清單。</li>
-            <li><strong>/music_queue_clear</strong>：清空播放佇列（不影響正在播放的歌曲）。</li>
-            <li><strong>/music_node_status</strong>：查看 Lavalink 節點連線狀態（URI、Session ID、連線伺服器數），僅使用者可見。</li>
-            <li>語音頻道無真人成員超過 <code>EMPTY_VOICE_CHANNEL_TIMEOUT</code> 秒（預設 60）後自動離開並清空佇列。</li>
-            <li>需安裝 <code>wavelink</code> 並設定 <code>LAVALINK_URI</code> / <code>LAVALINK_PASSWORD</code>。</li>
-          </ul>
-        </article>
+        </a>
       </div>
     </section>
 
@@ -910,20 +838,6 @@
     setInterval(loadBotStats, 60 * 1000);
     setInterval(loadUptimeStatus, 5 * 60 * 1000);
 
-    const HOME_IDS = ['home-hero', 'home-monitor', 'home-stats', 'home-footer'];
-
-    function showPage(page) {
-      const sHome = document.getElementById('section-home');
-      const sDocs = document.getElementById('section-docs');
-      const isDocs = page === 'docs';
-      HOME_IDS.forEach(id => {
-        const el = document.getElementById(id);
-        if (el) el.style.display = isDocs ? 'none' : '';
-      });
-      sHome.style.display = isDocs ? 'none' : '';
-      sDocs.style.display = isDocs ? '' : 'none';
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    }
   </script>
 </body>
 

@@ -11,6 +11,7 @@
 - `/ping`：檢查機器人延遲
 - `/choice`：從使用者輸入的選項中隨機選一個
 - `/quotes`：顯示隨機名言或笑話，並支援互動按鈕
+- `/steal emoji:<emoji>`：從 Discord 表情符號字串或引用直接下載並複製到本伺服器；可一次處理多個 emoji，超過 256 KB 時會給出友善文字提示
 - `/weather <city>`：查詢全台各縣市即時天氣預報
 - `/bus`：使用下拉式選單查詢台灣公車即時到站資訊
 - `/server_info`：顯示目前伺服器詳細資訊
@@ -83,6 +84,7 @@ python main.py
 - `/ping`：回傳機器人目前延遲
 - `/choice options:<文字>`：輸入用空格分隔的選項，機器人會隨機選一個
 - `/quotes`：展示名言 / 笑話選擇按鈕
+- `/steal emoji:<表情符號字串或引用>`：從 Discord 的表情符號 CDN 直接下載，並建立為本伺服器自訂表情；支援多個 emoji 一次處理，超過 256 KB 會回覆友善提示，不會直接顯示原始錯誤代碼
 - `/weather city:<縣市名稱或英文>`：查詢天氣，支援如 `臺北`、`Taichung`、`Matsu` 等對照
 - `/bus`：先選擇縣市，再輸入公車號碼，接著從下拉式選單選擇站牌並查詢即時到站資訊
 - `/server_info`：顯示所在伺服器的詳細資訊
@@ -121,6 +123,7 @@ python main.py
 - 播放佇列是各伺服器獨立的 FIFO（先進先出）佇列，實作於 `cogs/music.py` 的 `player.song_queue`（`collections.deque`）。歌曲播完（或被跳過、發生錯誤）時會觸發 wavelink 的 `on_wavelink_track_end` 事件，由監聽器從佇列最前面取出下一首並自動播放；佇列空了則會發一次通知。`player.autoplay` 因此設為 `disabled`，改由這個監聽器完全接管「播完接下一首」的邏輯，避免跟 wavelink 內建的 autoplay 互相搶播。
 - 語音頻道裡只剩機器人自己（沒有真人成員）超過 `EMPTY_VOICE_CHANNEL_TIMEOUT` 秒（預設 60 秒）就會自動離開並清空佇列，並在最近一次下指令的文字頻道發一則通知。這個功能監聽 `discord.py` 的 `on_voice_state_update` 事件，每次有人加入/離開/切換頻道時檢查機器人所在頻道還有沒有真人；沒有的話才啟動倒數計時器，且倒數期間只要有人回來就會立刻取消，避免誤判暫時性的斷線重連。
 - `/music_play` 搜尋失敗（來源網站無回應、反爬蟲封鎖等）會立即回覆錯誤訊息。歌曲成功排入播放後，若 Lavalink 節點在背景載入音訊時才失敗（例如 YouTube 判定需要登入、影片地區限制，或公開節點的來源連結失效），機器人會透過 `on_wavelink_track_exception` 監聽器把失敗原因回報到下指令當下的文字頻道，而不是只留在後台 log。目前公開 Lavalink 節點偶爾不穩定是已知風險，後續計畫改為自架節點。
+- `/steal` 會解析 Discord 的 emoji 引用字串（如 `<:pepe_smile:123456789>`、`<a:cat:456789>`），依據 `emoji_id` 及是否動態組出對應 CDN 下載網址，下載圖片 bytes 後透過 `guild.create_custom_emoji()` 建立到目前伺服器；若來源超過 256 KB 或無法讀取，會回覆友善文字提示，而不是直接曝露原始錯誤代碼。
 - 機器人在 `setup_hook` 內進行全域斜線指令同步，若同步失敗會在 `on_ready` 內再嘗試一次作為 fallback。
 - `cogs/web_server.py` 會在背景執行 Flask 網頁服務，首頁 `/` 顯示機器人狀態儀表板（`templates/index.html`），並提供 `/api/bot-stats`、`/api/uptime` 兩支 API。
 
@@ -142,6 +145,7 @@ Supported features:
 - `/ping`: check bot latency
 - `/choice`: randomly select one option from user input
 - `/quotes`: show random quotes or jokes with interaction buttons
+- `/steal emoji:<emoji>`: download a Discord emoji reference or mention directly from the CDN and add it to the current guild as a custom emoji; supports multiple emoji in one call and replies with a friendly message when a source exceeds the 256 KB Discord limit
 - `/weather <city>`: query real-time weather for Taiwan cities
 - `/bus`: query Taiwan bus arrivals through dropdown menus
 - `/server_info`: display detailed server information
@@ -214,6 +218,7 @@ When launched, the bot starts the Flask background server from `cogs/web_server.
 - `/ping`: reply with current bot latency
 - `/choice options:<text>`: enter options separated by spaces and the bot chooses one randomly
 - `/quotes`: show buttons for random quote or joke
+- `/steal emoji:<emoji string or reference>`: parse a Discord emoji string, download the asset from the CDN, and create it as a custom emoji in the current server; supports multiple emoji at once and prevents failed uploads from exposing raw HTTP error codes by returning a friendly message when the asset is too large
 - `/weather city:<city name or English name>`: query weather, supports mappings like `臺北`, `Taichung`, `Matsu`
 - `/bus`: select a city, enter a bus route, choose a stop from a dropdown menu, and view real-time arrival information
 - `/server_info`: display the current server's details
@@ -252,6 +257,7 @@ The bot also enables the `Message Content Intent` and voice-state intents for th
 - The playback queue is a per-server FIFO queue, implemented as `player.song_queue` (a `collections.deque`) in `cogs/music.py`. When a track ends (finishes, is skipped, or errors out), wavelink fires `on_wavelink_track_end`; the listener pops the next track off the front of the queue and plays it automatically, and sends a one-time notice once the queue is empty. `player.autoplay` is set to `disabled` so this listener fully owns the "advance to next track" logic instead of racing with wavelink's built-in autoplay.
 - If a voice channel is left with only the bot (no human members) for more than `EMPTY_VOICE_CHANNEL_TIMEOUT` seconds (default 60), the bot automatically leaves and clears its queue, posting a notice to the text channel where it was last used. This listens to discord.py's `on_voice_state_update` event, checking the bot's channel every time someone joins, leaves, or switches channels; the countdown only starts once no humans remain, and is cancelled immediately if someone comes back, to avoid false positives from brief disconnects/reconnects.
 - `/music_play` reports search failures (source unreachable, anti-bot blocking, etc.) immediately. If a track is accepted but later fails to load in the background (e.g. YouTube requiring login, region restrictions, or a broken stream link on a public node), the bot reports the failure to the text channel where the command was last used via the `on_wavelink_track_exception` listener, instead of only logging it. Public Lavalink node instability is a known risk here; self-hosting a node is planned for later weeks.
+- `/steal` parses Discord emoji references such as `<:pepe_smile:123456789>` and `<a:cat:456789>`, builds the correct CDN path from the extracted `emoji_id`, and creates custom emoji in the current guild via `guild.create_custom_emoji()`. When a source exceeds Discord's 256 KB limit or cannot be fetched, it returns clear user-facing text instead of leaking the raw API error payload.
 - The bot syncs global slash commands in `setup_hook`. If that fails, it retries in `on_ready` as a fallback.
 - `cogs/web_server.py` runs a background Flask web service serving a status dashboard (`templates/index.html`) and the `/api/bot-stats` and `/api/uptime` endpoints.
 

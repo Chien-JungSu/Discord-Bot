@@ -116,6 +116,11 @@ def home():
     return render_template('index.html')
 
 
+@app.route('/docs')
+def docs_page():
+    return render_template('docs.html')
+
+
 @app.route('/api/bot-stats')
 def bot_stats_api():
     bot = app.config.get('BOT')
