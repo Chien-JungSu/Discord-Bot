@@ -205,12 +205,15 @@ class General(commands.Cog):
                 )
                 created.append(created_emoji)
 
-            if len(created) == 1:
-                preview = created[0].mention
-                message = f"✅ 成功偷到{len(created)}個表情符號: {preview}"
-            else:
-                preview = ' '.join(emoji_obj.mention for emoji_obj in created)
-                message = f"✅ 成功偷到{len(created)}個表情符號: {preview}"
+            formatted = []
+            for emoji_obj in created:
+                if getattr(emoji_obj, 'animated', False):
+                    formatted.append(f'<a:{emoji_obj.name}:{emoji_obj.id}>')
+                else:
+                    formatted.append(f'<:{emoji_obj.name}:{emoji_obj.id}>')
+
+            preview = ' '.join(formatted)
+            message = f"✅ 成功偷到{len(created)}個表情符號: {preview}"
 
             await interaction.followup.send(
                 message,
