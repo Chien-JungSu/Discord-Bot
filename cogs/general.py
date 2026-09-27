@@ -1,12 +1,30 @@
+import datetime
+import os
 import random
 import re
 import sys
 import traceback
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import commands
+
+OWNER_GUILD_ID = os.getenv('DISCORD_OWNER_GUILD_ID') or os.getenv('OWNER_GUILD_ID')
+try:
+    OWNER_GUILD_ID = int(OWNER_GUILD_ID) if OWNER_GUILD_ID else None
+except ValueError:
+    OWNER_GUILD_ID = None
+
+
+def owner_guild_only(command_func):
+    if OWNER_GUILD_ID is None:
+        return command_func
+    return app_commands.guilds(OWNER_GUILD_ID)(command_func)
 
 
 def parse_emoji_reference(reference: str):
@@ -69,6 +87,82 @@ def sanitize_emoji_name(name: str):
     cleaned = re.sub(r'[^a-zA-Z0-9_]', '_', name.strip())
     cleaned = cleaned.strip('_') or 'stolen_emoji'
     return cleaned[:32]
+
+
+def owner_only(interaction: discord.Interaction):
+    bot = interaction.client
+    owner_id = getattr(bot, 'owner_id', None)
+    return owner_id is not None and interaction.user.id == owner_id
+
+
+def get_available_cog_modules(bot: commands.Bot | None = None):
+    cogs_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'cogs')
+    if not os.path.isdir(cogs_dir):
+        return []
+
+    loaded_modules = set(getattr(bot, 'extensions', {}).keys()) if bot is not None else set()
+    modules = []
+    for filename in sorted(os.listdir(cogs_dir)):
+        if filename.endswith('.py') and not filename.startswith('__'):
+            module_name = f"cogs.{os.path.splitext(filename)[0]}"
+            if bot is not None and module_name not in loaded_modules:
+                continue
+            modules.append(module_name)
+    return modules
+
+
+class ReloadCogSelect(discord.ui.Select):
+    def __init__(self, bot: commands.Bot):
+        modules = get_available_cog_modules(bot)
+        options = [
+            discord.SelectOption(label=module.split('.')[-1], value=module, description=f"重載 {module}")
+            for module in modules
+        ]
+        if not options:
+            options = [
+                discord.SelectOption(label='無可用模組', value='none', description='目前沒有已載入的 cog 可重載')
+            ]
+        super().__init__(
+            placeholder='選擇要重載的模組...',
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+        self.bot = bot
+
+    async def callback(self, interaction: discord.Interaction):
+        module_name = self.values[0]
+        if module_name == 'none':
+            await interaction.response.send_message('目前沒有可重載的模組。', ephemeral=True)
+            return
+
+        if module_name not in self.bot.extensions:
+            await interaction.response.send_message(
+                f'❌ 模組 `{module_name}` 尚未載入，無法重載。',
+                ephemeral=True,
+            )
+            return
+
+        try:
+            await self.bot.reload_extension(module_name)
+            timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            print(f"✅ [{timestamp}] 已重載模組: {module_name}")
+            await interaction.response.send_message(f'✅ 已重載模組 `{module_name}`。', ephemeral=True)
+        except Exception as exc:
+            timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            print(f"❌ [{timestamp}] 重載失敗: {module_name}", file=sys.stderr)
+            traceback.print_exception(type(exc), exc, exc.__traceback__, file=sys.stderr)
+            await self.bot.notify_owner_error(exc, interaction, extra_info=f'General.reload_module target={module_name}')
+            await interaction.response.send_message(
+                f'❌ 重載模組失敗：`{module_name}`\n```py\n{exc}\n```',
+                ephemeral=True,
+            )
+
+
+class ReloadCogView(discord.ui.View):
+    def __init__(self, bot: commands.Bot):
+        super().__init__(timeout=180)
+        self.add_item(ReloadCogSelect(bot))
 
 
 class FunView(discord.ui.View):
@@ -137,6 +231,43 @@ class General(commands.Cog):
     async def ping(self, interaction: discord.Interaction):
         await interaction.response.send_message(f'延遲 `{round(self.bot.latency * 1000)}ms`')
 
+    @owner_guild_only
+    @app_commands.command(name="reload_cogs", description="重載指定模組（僅擁有者可用）")
+    @app_commands.describe(module_name="可選：直接輸入模組名稱，例如 cogs.general；不填則顯示選單")
+    @app_commands.check(owner_only)
+    async def reload_module(self, interaction: discord.Interaction, module_name: str | None = None):
+        target = (module_name or '').strip()
+        if target:
+            normalized = target if target.startswith('cogs.') else f'cogs.{target}'
+            if normalized not in self.bot.extensions:
+                await interaction.response.send_message(
+                    f'❌ 模組 `{normalized}` 尚未載入，無法重載。',
+                    ephemeral=True,
+                )
+                return
+            try:
+                await self.bot.reload_extension(normalized)
+                timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                print(f"✅ [{timestamp}] 已重載模組: {normalized}")
+                await interaction.response.send_message(f'✅ 已重載模組 `{normalized}`。', ephemeral=True)
+            except Exception as exc:
+                timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                print(f"❌ [{timestamp}] 重載失敗: {normalized}", file=sys.stderr)
+                traceback.print_exception(type(exc), exc, exc.__traceback__, file=sys.stderr)
+                await self.bot.notify_owner_error(exc, interaction, extra_info=f'General.reload_module target={normalized}')
+                await interaction.response.send_message(
+                    f'❌ 重載模組失敗：`{normalized}`\n```py\n{exc}\n```',
+                    ephemeral=True,
+                )
+            return
+
+        modules = get_available_cog_modules(self.bot)
+        if not modules:
+            await interaction.response.send_message('目前沒有已載入的 cog 可重載。', ephemeral=True)
+            return
+
+        await interaction.response.send_message('請選擇要重載的模組：', view=ReloadCogView(self.bot), ephemeral=True)
+
     @app_commands.command(name="choice", description="選擇困難救星")
     @app_commands.describe(options="請輸入選項，用空格隔開")
     async def choice(self, interaction: discord.Interaction, options: str):
@@ -153,7 +284,6 @@ class General(commands.Cog):
     @app_commands.describe(
         emoji="要偷的表情符號(可填入多個)，也可直接填入含表情符號的字串",
     )
-    @app_commands.guild_only()
     @app_commands.default_permissions(manage_emojis_and_stickers=True)
     async def steal(
         self,

@@ -22,6 +22,13 @@ except ValueError:
     print('❌ 環境變數 DISCORD_OWNER_ID 必須是 Discord 使用者 ID 的整數格式。')
     OWNER_ID = None
 
+OWNER_GUILD_ID = os.getenv('DISCORD_OWNER_GUILD_ID') or os.getenv('OWNER_GUILD_ID')
+try:
+    OWNER_GUILD_ID = int(OWNER_GUILD_ID) if OWNER_GUILD_ID else None
+except ValueError:
+    print('❌ 環境變數 DISCORD_OWNER_GUILD_ID 必須是 Discord 伺服器 ID 的整數格式。')
+    OWNER_GUILD_ID = None
+
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True       # on_member_join（歡迎訊息）需要
@@ -43,6 +50,14 @@ class MyBot(commands.Bot):
         super().__init__(command_prefix='/', intents=intents)
         self._global_synced = False
         self.owner_id = OWNER_ID
+        self.owner_guild_id = OWNER_GUILD_ID
+
+    def _print_synced_commands(self, synced_commands, scope: str):
+        if not synced_commands:
+            print(f"ℹ️ [{scope}] 本次沒有任何指令同步成功。")
+            return
+        names = [cmd.name for cmd in synced_commands]
+        print(f"ℹ️ [{scope}] 已同步指令：{names}")
 
     async def on_connect(self):
         print("ℹ️ on_connect event fired")
@@ -98,16 +113,26 @@ class MyBot(commands.Bot):
                 print(f"❌ 載入模組 {extension} 失敗：{e}")
                 traceback.print_exc()
 
-        print("⏳ [後台提示] 正在向 Discord 官方伺服器發送全域指令同步請求...")
-        try:
-            local_cmds = list(self.tree.get_commands())
-            print(f"ℹ️ 本地已註冊的 command 數量: {len(local_cmds)}")
-            if local_cmds:
-                print("ℹ️ 本地 command 名稱:", [c.name for c in local_cmds])
+        if self.owner_guild_id:
+            print(f"ℹ️ [同步策略] owner_guild_id 已設定，將先同步 owner guild ({self.owner_guild_id})。")
+            print(f"⏳ [後台提示] 正在同步 owner guild ({self.owner_guild_id}) 的指令...")
+            try:
+                guild = self.get_guild(self.owner_guild_id) or discord.Object(id=self.owner_guild_id)
+                synced = await self.tree.sync(guild=guild)
+                self._global_synced = True
+                print(f"✅ 成功同步了 {len(synced)} 個 guild 指令到伺服器 {self.owner_guild_id}！")
+                self._print_synced_commands(synced, 'guild')
+            except Exception as e:
+                print(f"⚠️ owner guild 同步失敗，將改為全域同步：{e}")
+                traceback.print_exc()
 
+        print("⏳ [後台提示] 正在向 Discord 官方伺服器發送全域指令同步請求...")
+        print("ℹ️ [同步策略] guild sync 已完成，接著實際執行全域同步以便確認全域指令狀態。")
+        try:
             synced = await self.tree.sync()
-            print(f"成功同步了 {len(synced)} 個全域斜線指令！")
             self._global_synced = True
+            print(f"✅ 成功同步了 {len(synced)} 個全域斜線指令！")
+            self._print_synced_commands(synced, 'global')
         except Exception as e:
             print(f"❌ 同步全域指令時發生錯誤: {e}")
             traceback.print_exc()
@@ -117,6 +142,8 @@ class MyBot(commands.Bot):
 
         if isinstance(error, app_commands.CommandOnCooldown):
             msg = f"系統冷卻中，請稍後再試！(還需 {error.retry_after:.1f} 秒)"
+        elif isinstance(error, app_commands.CheckFailure):
+            msg = "❌ 只有擁有者才能使用此指令。"
         else:
             msg = "發生了未知錯誤，已回報給開發者。"
 
@@ -165,15 +192,29 @@ async def on_ready():
     print('ℹ️ on_ready event fired')
     print('✅ 機器人已經百分之百在雲端準備就緒！')
 
-    try:
-        if not getattr(bot, '_global_synced', False):
-            print('🔁 on_ready fallback: 嘗試同步全域指令...')
-            synced = await bot.tree.sync()
-            print(f'🎉 fallback 成功同步了 {len(synced)} 個全域斜線指令！')
+    if getattr(bot, '_global_synced', False):
+        return
+
+    # 保底：如果 setup_hook 沒有跑完，就只做一次最後同步，避免重複執行。
+    if bot.owner_guild_id:
+        print(f'ℹ️ [同步策略] owner_guild_id 已設定，on_ready 只會嘗試同步 owner guild ({bot.owner_guild_id})。')
+        try:
+            guild = bot.get_guild(bot.owner_guild_id) or discord.Object(id=bot.owner_guild_id)
+            synced = await bot.tree.sync(guild=guild)
             bot._global_synced = True
-    except Exception as e:
-        print(f'❌ on_ready fallback 同步失敗: {e}')
-        traceback.print_exc()
+            print(f'✅ on_ready 最後同步了 {len(synced)} 個 guild 指令！')
+            bot._print_synced_commands(synced, 'guild')
+            return
+        except Exception as e:
+            print(f'⚠️ owner guild on_ready 同步失敗，改為全域同步：{e}')
+            traceback.print_exc()
+
+    print('⏳ [後台提示] 正在向 Discord 官方伺服器發送全域指令同步請求...')
+    print('ℹ️ [同步策略] owner_guild_id 未設定或 guild 同步失敗，on_ready 將執行全域同步。')
+    synced = await bot.tree.sync()
+    bot._global_synced = True
+    print(f'✅ on_ready 最終同步了 {len(synced)} 個全域斜線指令！')
+    bot._print_synced_commands(synced, 'global')
 
 
 if __name__ == "__main__":

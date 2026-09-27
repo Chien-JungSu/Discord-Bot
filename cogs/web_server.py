@@ -120,6 +120,22 @@ def home():
 def docs_page():
     return render_template('docs.html')
 
+@app.route('/health')
+def health_check():
+    bot = app.config.get('BOT')
+    if bot and bot.is_ready() and not bot.is_closed():
+        return jsonify({
+            "status": "online",
+            "bot_user": str(bot.user),
+            "latency_ms": round(bot.latency * 1000) if bot.latency else None,
+            "guilds": len(bot.guilds)
+        }), 200
+    else:
+        return jsonify({
+            "status": "offline",
+            "error": "Discord bot is disconnected or not ready"
+        }), 503
+
 
 @app.route('/api/bot-stats')
 def bot_stats_api():
