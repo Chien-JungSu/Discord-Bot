@@ -1,11 +1,13 @@
 import os
-import ssl
+from urllib.parse import quote
 
 import aiohttp
-import certifi
 import discord
 from discord import app_commands
 from discord.ext import commands
+
+from cogs.sanitize import redact_secrets
+from cogs.tls import create_verified_ssl_context
 
 CWA_API_KEY = os.getenv('CWA_API_KEY')
 
@@ -32,6 +34,7 @@ class Weather(commands.Cog):
 
     @app_commands.command(name="weather", description="查詢全台各縣市的即時天氣預報")
     @app_commands.describe(city="請輸入縣市名稱（中英皆可，英文請確保首字母大寫）")
+    @app_commands.checks.cooldown(1, 10.0, key=lambda i: i.user.id)
     async def weather(self, interaction: discord.Interaction, city: str):
         deferred = False
         try:
@@ -71,85 +74,79 @@ class Weather(commands.Cog):
             await send_result("❌ 伺服器端尚未設定氣象 API KEY，請聯絡管理員。", ephemeral=True)
             return
 
-        url = f"https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-C0032-001?Authorization={CWA_API_KEY}&locationName={formatted_city}"
+        # 修正：使用者輸入的縣市名稱必須做 URL 編碼，避免 &、#、空白等字元
+        # 竄改查詢字串（原本直接內插進 URL）。
+        url = f"https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-C0032-001?Authorization={CWA_API_KEY}&locationName={quote(formatted_city)}"
 
-        async def fetch_weather_data(use_insecure: bool = False):
-            if use_insecure:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(url, timeout=10, ssl=False) as resp:
-                        if resp.status != 200:
-                            return resp.status, await resp.text()
-                        return resp.status, await resp.json()
-
-            ssl_context = ssl.create_default_context(cafile=certifi.where())
-            ssl_context.check_hostname = True
+        try:
             async with aiohttp.ClientSession(
-                connector=aiohttp.TCPConnector(ssl=ssl_context)
+                connector=aiohttp.TCPConnector(ssl=create_verified_ssl_context())
             ) as session:
                 async with session.get(url, timeout=10) as resp:
                     if resp.status != 200:
-                        return resp.status, await resp.text()
-                    return resp.status, await resp.json()
-
-        try:
-            try:
-                status, data = await fetch_weather_data()
-            except (ssl.SSLCertVerificationError, aiohttp.ClientConnectorCertificateError, aiohttp.ClientConnectorSSLError) as ssl_err:
-                print(f">>> SSL 驗證失敗，改用 ssl=False 重試: {ssl_err}")
-                await self.bot.notify_owner_error(
-                    ssl_err, interaction,
-                    extra_info=f"weather command SSL verification failed for city={formatted_city}"
-                )
-                status, data = await fetch_weather_data(use_insecure=True)
-
-            if status != 200:
-                print(f">>> 氣象 API 非 200 回應: {status} / {data}")
-                await send_result("⚠️ 氣象署伺服器連線異常，請稍後再試！")
-                return
-
-            if not isinstance(data, dict):
-                print(f">>> 取得的資料不是 JSON 物件: {data}")
-                await send_result("⚠️ 取得資料格式異常，請稍後再試！")
-                return
-
-            locations = data.get('records', {}).get('location', [])
-            if not locations:
-                await send_result(f"找不到「{city}」的資料，請確認輸入的是台灣的縣市名稱喔！")
-                return
-
-            weather_elements = locations[0]['weatherElement']
-            elements = {}
-            for el in weather_elements:
-                name = el['elementName']
-                value = el['time'][0]['parameter']['parameterName']
-                elements[name] = value
-
-            wx = elements.get('Wx', '未知')
-            pop = elements.get('PoP', '0')
-            min_t = elements.get('MinT', '?')
-            max_t = elements.get('MaxT', '?')
-            ci = elements.get('CI', '未知')
-
-            embed = discord.Embed(
-                title=f"🌦️ {formatted_city} 最新天氣預報",
-                description=f"**天氣狀況：** {wx}",
-                color=discord.Color.from_rgb(102, 204, 255),
-                timestamp=discord.utils.utcnow()
+                        status, data = resp.status, await resp.text()
+                    else:
+                        status, data = resp.status, await resp.json()
+        except (aiohttp.ClientConnectorCertificateError, aiohttp.ClientConnectorSSLError) as ssl_err:
+            # 修正：保留完整憑證驗證，不再降級成 ssl=False（等於主動接受 MITM）。
+            # 真的發生憑證問題時直接回報開發者並回覆使用者連線異常。
+            # 修正（M2）：例外訊息會含完整 URL（內含 CWA_API_KEY），print 與 DM 前先脫敏。
+            print(f">>> 氣象 API 憑證驗證失敗: {redact_secrets(ssl_err)}")
+            await self.bot.notify_owner_error(
+                ssl_err, interaction,
+                extra_info=f"weather command SSL verification failed for city={formatted_city}"
             )
-            embed.add_field(name="🌡️ 氣溫區間", value=f"{min_t}°C ~ {max_t}°C", inline=True)
-            embed.add_field(name="🌧️ 降雨機率", value=f"{pop}%", inline=True)
-            embed.add_field(name="💡 舒適度", value=ci, inline=False)
-            embed.set_footer(text="資料來源：交通部中央氣象署")
-
-            await send_result(embed=embed)
-
+            await send_result("⚠️ 氣象署伺服器連線異常，請稍後再試！", ephemeral=True)
+            return
         except Exception as e:
-            print(f">>> 氣象 API 發生錯誤: {e}")
+            print(f">>> 氣象 API 發生錯誤: {redact_secrets(e)}")
             await self.bot.notify_owner_error(e, interaction, extra_info=f"weather command for city={formatted_city}")
             try:
                 await send_result("❌ 獲取天氣資料時發生錯誤，已回報開發者!", ephemeral=True)
             except Exception as e_send:
                 print(f">>> 無法送出錯誤回應: {e_send}")
+            return
+
+        if status != 200:
+            print(f">>> 氣象 API 非 200 回應: {status} / {data}")
+            await send_result("⚠️ 氣象署伺服器連線異常，請稍後再試！")
+            return
+
+        if not isinstance(data, dict):
+            print(f">>> 取得的資料不是 JSON 物件: {data}")
+            await send_result("⚠️ 取得資料格式異常，請稍後再試！")
+            return
+
+        locations = data.get('records', {}).get('location', [])
+        if not locations:
+            await send_result(f"找不到「{city}」的資料，請確認輸入的是台灣的縣市名稱喔！")
+            return
+
+        weather_elements = locations[0]['weatherElement']
+        elements = {}
+        for el in weather_elements:
+            name = el['elementName']
+            value = el['time'][0]['parameter']['parameterName']
+            elements[name] = value
+
+        wx = elements.get('Wx', '未知')
+        pop = elements.get('PoP', '0')
+        min_t = elements.get('MinT', '?')
+        max_t = elements.get('MaxT', '?')
+        ci = elements.get('CI', '未知')
+
+        embed = discord.Embed(
+            title=f"🌦️ {formatted_city} 最新天氣預報",
+            description=f"**天氣狀況：** {wx}",
+            color=discord.Color.from_rgb(102, 204, 255),
+            timestamp=discord.utils.utcnow()
+        )
+        embed.add_field(name="🌡️ 氣溫區間", value=f"{min_t}°C ~ {max_t}°C", inline=True)
+        embed.add_field(name="🌧️ 降雨機率", value=f"{pop}%", inline=True)
+        embed.add_field(name="💡 舒適度", value=ci, inline=False)
+        embed.set_footer(text="資料來源：交通部中央氣象署")
+
+        await send_result(embed=embed)
 
 
 async def setup(bot: commands.Bot):

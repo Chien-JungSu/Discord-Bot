@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import traceback
 
 import discord
@@ -7,6 +8,7 @@ from discord.ext import commands
 from discord import app_commands
 from dotenv import load_dotenv
 
+from cogs.sanitize import redact_secrets
 from cogs.web_server import app, start_web_server
 
 # ================= 環境變數載入 =================
@@ -23,11 +25,62 @@ except ValueError:
     OWNER_ID = None
 
 OWNER_GUILD_ID = os.getenv('DISCORD_OWNER_GUILD_ID') or os.getenv('OWNER_GUILD_ID')
+
+# ================= Owner DM 錯誤通知限流（H4） =================
+# 修正：任何使用者只要連續觸發錯誤（例如狂打外部 API 或輸入異常內容），
+# 就會透過 notify_owner_error 灌爆開發者的 DM，也可能撞到 Discord 的 DM
+# rate limit。這裡加入兩層保護：
+#   1. 去重：相同「錯誤類型 + 錯誤訊息」在 OWNER_ERROR_DEDUP_SECONDS 秒內只送一次。
+#   2. 上限：任何 60 秒滾動視窗內最多送 OWNER_ERROR_MAX_PER_WINDOW 封，
+#      超過就略過並在後台 log 提示（錯誤本身仍會完整印到 stderr，不會漏掉）。
+OWNER_ERROR_DEDUP_SECONDS = 60.0
+OWNER_ERROR_MAX_PER_WINDOW = 5
+OWNER_ERROR_WINDOW_SECONDS = 60.0
+_owner_error_last_sent: dict[str, float] = {}
+_owner_error_send_times: list[float] = []
+
+
+def _should_send_owner_error(error: Exception) -> bool:
+    """判斷這個錯誤是否應該送出 DM 通知（去重 + 速率限制）。"""
+    now = time.monotonic()
+    key = f"{type(error).__name__}:{str(error)[:200]}"
+
+    last = _owner_error_last_sent.get(key)
+    if last is not None and now - last < OWNER_ERROR_DEDUP_SECONDS:
+        return False
+
+    global _owner_error_send_times
+    _owner_error_send_times = [t for t in _owner_error_send_times if now - t < OWNER_ERROR_WINDOW_SECONDS]
+    if len(_owner_error_send_times) >= OWNER_ERROR_MAX_PER_WINDOW:
+        print(
+            f"⚠️ 達到 owner 錯誤通知上限（{OWNER_ERROR_MAX_PER_WINDOW} 封 / {OWNER_ERROR_WINDOW_SECONDS:.0f} 秒），"
+            "略過這次 DM 通知（錯誤仍會印在後台 log）。"
+        )
+        return False
+
+    _owner_error_last_sent[key] = now
+    _owner_error_send_times.append(now)
+    return True
+
+
 try:
     OWNER_GUILD_ID = int(OWNER_GUILD_ID) if OWNER_GUILD_ID else None
 except ValueError:
     print('❌ 環境變數 DISCORD_OWNER_GUILD_ID 必須是 Discord 伺服器 ID 的整數格式。')
     OWNER_GUILD_ID = None
+
+# ================= Owner DM 錯誤通知限流（H4） =================
+# 修正：任何使用者只要連續觸發錯誤（例如狂打外部 API 或輸入異常內容），
+# 就會透過 notify_owner_error 灌爆開發者的 DM，也可能撞到 Discord 的 DM
+# rate limit。這裡加入兩層保護：
+#   1. 去重：相同「錯誤類型 + 錯誤訊息」在 OWNER_ERROR_DEDUP_SECONDS 秒內只送一次。
+#   2. 上限：任何 60 秒滾動視窗內最多送 OWNER_ERROR_MAX_PER_WINDOW 封，
+#      超過就略過並在後台 log 提示（錯誤本身仍會完整印到 stderr，不會漏掉）。
+OWNER_ERROR_DEDUP_SECONDS = 60.0
+OWNER_ERROR_MAX_PER_WINDOW = 5
+OWNER_ERROR_WINDOW_SECONDS = 60.0
+_owner_error_last_sent: dict[str, float] = {}
+_owner_error_send_times: list[float] = []
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -67,6 +120,10 @@ class MyBot(commands.Bot):
         if not self.owner_id:
             return
 
+        # H4 限流：去重 + 速率限制，避免被惡意使用者灌爆 DM。
+        if not _should_send_owner_error(error):
+            return
+
         try:
             owner = self.get_user(self.owner_id)
             if owner is None:
@@ -88,11 +145,11 @@ class MyBot(commands.Bot):
                 f"**伺服器**: {guild_info}\n"
                 f"**指令**: {command_name}\n"
                 f"**錯誤類型**: {type(error).__name__}\n"
-                f"**錯誤訊息**: {str(error)}\n"
+                f"**錯誤訊息**: {redact_secrets(str(error))}\n"
             )
             if extra_info:
-                content += f"**額外資訊**: {extra_info}\n"
-            content += f"```py\n{trace}\n```"
+                content += f"**額外資訊**: {redact_secrets(extra_info)}\n"
+            content += f"```py\n{redact_secrets(trace)}\n```"
 
             await owner.send(content)
         except discord.HTTPException as exc:
@@ -142,8 +199,11 @@ class MyBot(commands.Bot):
 
         if isinstance(error, app_commands.CommandOnCooldown):
             msg = f"系統冷卻中，請稍後再試！(還需 {error.retry_after:.1f} 秒)"
+        elif isinstance(error, app_commands.MissingPermissions):
+            perms = '、'.join(error.missing_permissions) if error.missing_permissions else '所需權限'
+            msg = f"❌ 你沒有使用此指令所需的權限（{perms}）。"
         elif isinstance(error, app_commands.CheckFailure):
-            msg = "❌ 只有擁有者才能使用此指令。"
+            msg = "❌ 你沒有權限使用此指令。"
         else:
             msg = "發生了未知錯誤，已回報給開發者。"
 

@@ -8,6 +8,9 @@ import urllib.request
 
 import discord
 from flask import Flask, jsonify, render_template
+from waitress import serve
+
+from cogs.sanitize import redact_secrets
 
 BASE_DIR = os.path.dirname(os.path.dirname(__file__))
 app = Flask(__name__, template_folder=os.path.join(BASE_DIR, 'templates'))
@@ -55,15 +58,20 @@ def _fetch_uptime_data():
         with urllib.request.urlopen(req, timeout=15) as response:
             data = json.loads(response.read().decode('utf-8'))
     except Exception as exc:  # pragma: no cover - runtime dependency on external API
+        # 修正（M2）：這個 message 會原封不動回傳給任何未認證的網站訪客，
+        # 不能把原始例外字串（可能含 URL、api_key 等）直接外流。
+        print(f">>> UptimeRobot API 查詢失敗: {redact_secrets(exc)}")
         return {
             'status': 'error',
-            'message': str(exc),
+            'message': '監控服務暫時無法連線，請稍後再試。',
         }
 
     if data.get('stat') != 'ok':
+        error_message = data.get('error', {}).get('message', 'UptimeRobot API 查詢失敗')
+        print(f">>> UptimeRobot API 回應錯誤: {redact_secrets(error_message)}")
         return {
             'status': 'error',
-            'message': data.get('error', {}).get('message', 'UptimeRobot API 查詢失敗'),
+            'message': '監控服務查詢失敗，請稍後再試。',
         }
 
     monitors = data.get('monitors') or []
@@ -177,8 +185,15 @@ def uptime_api():
 
 
 def run():
+    """以 production WSGI server（waitress）啟動網頁服務。
+
+    修正（H1）：原本用 Flask 內建的 Werkzeug 開發伺服器直接對外服務，
+    官方明確警告不適合生產環境（無 slowloris 防護、連線管理脆弱）。
+    改用 waitress 後監聽行為不變：照樣綁 0.0.0.0 與 PORT（託管面板
+    綁定 0.0.0.0:20198 的部署方式不受影響）。
+    """
     port = int(os.environ.get('PORT', 20198))
-    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+    serve(app, host='0.0.0.0', port=port, threads=8)
 
 
 def start_web_server():

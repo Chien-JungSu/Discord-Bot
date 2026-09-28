@@ -3,6 +3,7 @@ import os
 import random
 import re
 import sys
+import time
 import traceback
 
 from dotenv import load_dotenv
@@ -166,12 +167,30 @@ class ReloadCogView(discord.ui.View):
 
 
 class FunView(discord.ui.View):
+    BUTTON_COOLDOWN_SECONDS = 10.0
+    _button_cooldowns: dict[int, float] = {}  # user_id -> 上次點擊時間（跨 View 實例共用）
+
     def __init__(self, bot: commands.Bot):
         super().__init__(timeout=None)  # 按鈕長期有效
         self.bot = bot
 
+    def _check_button_cooldown(self, interaction: discord.Interaction) -> tuple[bool, str]:
+        """按鈕不是 app command，app_commands.checks.cooldown 對它無效，
+        所以手動做 per-user 冷卻，避免任何人連點灌爆外部 API 與 owner DM。"""
+        now = time.monotonic()
+        last = self._button_cooldowns.get(interaction.user.id)
+        if last is not None and now - last < self.BUTTON_COOLDOWN_SECONDS:
+            remaining = self.BUTTON_COOLDOWN_SECONDS - (now - last)
+            return False, f"⏳ 按鈕冷卻中，請稍後再試（還需 {remaining:.1f} 秒）。"
+        self._button_cooldowns[interaction.user.id] = now
+        return True, ""
+
     @discord.ui.button(label="隨機名言", style=discord.ButtonStyle.primary)
     async def quote_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        allowed, cooldown_msg = self._check_button_cooldown(interaction)
+        if not allowed:
+            await interaction.response.send_message(cooldown_msg, ephemeral=True)
+            return
         await interaction.response.defer()
 
         api_url = 'https://zenquotes.io/api/random'
@@ -197,6 +216,10 @@ class FunView(discord.ui.View):
 
     @discord.ui.button(label="隨機笑話", style=discord.ButtonStyle.success)
     async def joke_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        allowed, cooldown_msg = self._check_button_cooldown(interaction)
+        if not allowed:
+            await interaction.response.send_message(cooldown_msg, ephemeral=True)
+            return
         await interaction.response.defer()
 
         async with aiohttp.ClientSession() as session:
@@ -270,12 +293,18 @@ class General(commands.Cog):
 
     @app_commands.command(name="choice", description="選擇困難救星")
     @app_commands.describe(options="請輸入選項，用空格隔開")
+    @app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
     async def choice(self, interaction: discord.Interaction, options: str):
         opts = options.split()
+        # 修正：空白輸入會讓 random.choice([]) 拋 IndexError 並觸發 owner 通知。
+        if not opts:
+            await interaction.response.send_message("❌ 請至少輸入一個選項，用空格隔開。", ephemeral=True)
+            return
         result = random.choice(opts)
         await interaction.response.send_message(f'# 選 **{result}** 就對了!!!')
 
     @app_commands.command(name="quotes", description="獲取隨機名言或笑話")
+    @app_commands.checks.cooldown(1, 10.0, key=lambda i: i.user.id)
     async def quotes(self, interaction: discord.Interaction):
         view = FunView(self.bot)
         await interaction.response.send_message("請選擇你想要看的內容：", view=view)
@@ -285,6 +314,7 @@ class General(commands.Cog):
         emoji="要偷的表情符號(可填入多個)，也可直接填入含表情符號的字串",
     )
     @app_commands.default_permissions(manage_emojis_and_stickers=True)
+    @app_commands.checks.has_permissions(manage_emojis_and_stickers=True)  # H3: 執行期檢查，伺服器端覆寫權限也擋得住
     async def steal(
         self,
         interaction: discord.Interaction,

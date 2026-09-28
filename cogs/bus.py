@@ -1,14 +1,15 @@
 import os
-import ssl
 import sys
 import traceback
 from urllib.parse import quote
 
 import aiohttp
-import certifi
 import discord
 from discord import app_commands
 from discord.ext import commands
+
+from cogs.sanitize import redact_secrets
+from cogs.tls import create_verified_ssl_context
 
 TDX_CLIENT_ID = os.getenv('TDX_CLIENT_ID')
 TDX_CLIENT_SECRET = os.getenv('TDX_CLIENT_SECRET')
@@ -74,48 +75,50 @@ def format_bus_arrival(item: dict) -> str:
     return f"**{stop_name}**（{direction}）\n{arrival}｜車牌：{plate}"
 
 
-async def fetch_tdx_token(use_insecure: bool = False) -> str:
+async def fetch_tdx_token() -> str:
     token_url = "https://tdx.transportdata.tw/auth/realms/TDXConnect/protocol/openid-connect/token"
     payload = {
         "grant_type": "client_credentials",
         "client_id": TDX_CLIENT_ID,
         "client_secret": TDX_CLIENT_SECRET,
     }
-    ssl_arg = False if use_insecure else ssl.create_default_context(cafile=certifi.where())
+    ssl_context = create_verified_ssl_context()
 
     async with aiohttp.ClientSession() as session:
-        async with session.post(token_url, data=payload, timeout=10, ssl=ssl_arg) as resp:
-            data = await resp.json()
+        async with session.post(token_url, data=payload, timeout=10, ssl=ssl_context) as resp:
             if resp.status != 200:
-                raise RuntimeError(f"TDX token API 回應 {resp.status}: {data}")
+                # 修正：先檢查 status 再解析 JSON，避免非 JSON 的錯誤回應變成難懂的解碼錯誤。
+                # 修正（M2）：錯誤回應可能含 client_id / client_secret 等機密，先脫敏。
+                raise RuntimeError(f"TDX token API 回應 {resp.status}: {redact_secrets(await resp.text())}")
+            data = await resp.json()
             return data["access_token"]
 
 
-async def fetch_bus_estimates(city_code: str, route: str, use_insecure: bool = False):
-    token = await fetch_tdx_token(use_insecure=use_insecure)
+async def fetch_bus_estimates(city_code: str, route: str):
+    token = await fetch_tdx_token()
     encoded_route = quote(route.strip(), safe="")
     url = f"https://tdx.transportdata.tw/api/basic/v2/Bus/EstimatedTimeOfArrival/City/{city_code}/{encoded_route}"
     headers = {"Authorization": f"Bearer {token}"}
     params = {"$format": "JSON"}
-    ssl_arg = False if use_insecure else ssl.create_default_context(cafile=certifi.where())
+    ssl_context = create_verified_ssl_context()
 
     async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers=headers, params=params, timeout=10, ssl=ssl_arg) as resp:
+        async with session.get(url, headers=headers, params=params, timeout=10, ssl=ssl_context) as resp:
             if resp.status != 200:
                 return resp.status, await resp.text()
             return resp.status, await resp.json()
 
 
-async def fetch_bus_stops(city_code: str, route: str, use_insecure: bool = False):
-    token = await fetch_tdx_token(use_insecure=use_insecure)
+async def fetch_bus_stops(city_code: str, route: str):
+    token = await fetch_tdx_token()
     encoded_route = quote(route.strip(), safe="")
     url = f"https://tdx.transportdata.tw/api/basic/v2/Bus/StopOfRoute/City/{city_code}/{encoded_route}"
     headers = {"Authorization": f"Bearer {token}"}
     params = {"$format": "JSON"}
-    ssl_arg = False if use_insecure else ssl.create_default_context(cafile=certifi.where())
+    ssl_context = create_verified_ssl_context()
 
     async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers=headers, params=params, timeout=10, ssl=ssl_arg) as resp:
+        async with session.get(url, headers=headers, params=params, timeout=10, ssl=ssl_context) as resp:
             if resp.status != 200:
                 return resp.status, await resp.text()
             return resp.status, await resp.json()
@@ -289,15 +292,10 @@ class Bus(commands.Cog):
             return
 
         try:
-            try:
-                status, data = await fetch_bus_stops(city_code, route)
-            except (ssl.SSLCertVerificationError, aiohttp.ClientConnectorCertificateError, aiohttp.ClientConnectorSSLError) as ssl_err:
-                print(f">>> TDX 站牌 API SSL 驗證失敗，改用 ssl=False 重試: {ssl_err}")
-                await self.bot.notify_owner_error(ssl_err, interaction, extra_info=f"bus stops SSL verification failed for city={city_code}, route={route}")
-                status, data = await fetch_bus_stops(city_code, route, use_insecure=True)
+            status, data = await fetch_bus_stops(city_code, route)
 
             if status != 200:
-                print(f">>> TDX 站牌 API 非 200 回應: {status} / {data}")
+                print(f">>> TDX 站牌 API 非 200 回應: {status} / {redact_secrets(data)}")
                 if status in (400, 404):
                     await interaction.followup.send(f"找不到「{city_name} {route}」的站牌資料，請確認公車號碼是否正確。", ephemeral=True)
                 else:
@@ -335,15 +333,10 @@ class Bus(commands.Cog):
             return
 
         try:
-            try:
-                status, data = await fetch_bus_estimates(city_code, route)
-            except (ssl.SSLCertVerificationError, aiohttp.ClientConnectorCertificateError, aiohttp.ClientConnectorSSLError) as ssl_err:
-                print(f">>> TDX SSL 驗證失敗，改用 ssl=False 重試: {ssl_err}")
-                await self.bot.notify_owner_error(ssl_err, interaction, extra_info=f"bus command SSL verification failed for city={city_code}, route={route}")
-                status, data = await fetch_bus_estimates(city_code, route, use_insecure=True)
+            status, data = await fetch_bus_estimates(city_code, route)
 
             if status != 200:
-                print(f">>> TDX 公車 API 非 200 回應: {status} / {data}")
+                print(f">>> TDX 公車 API 非 200 回應: {status} / {redact_secrets(data)}")
                 if status in (400, 404):
                     await interaction.followup.send(f"找不到「{city} {route}」的公車到站資料，請確認公車號碼是否正確。", ephemeral=True)
                 else:

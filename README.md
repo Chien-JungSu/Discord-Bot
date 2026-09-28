@@ -40,11 +40,14 @@ pip install -r requirements.txt
 - discord.py
 - python-dotenv
 - Flask
+- waitress
 - certifi
 - aiohttp
 - wavelink
 
 `wavelink` 已包含在 `requirements.txt` 中，執行 `pip install -r requirements.txt` 即可一併安裝。音樂功能另外需要準備可連線的 Lavalink 節點；未設定節點時，其他功能仍可正常啟動，但 `/music_join`、`/music_leave`、`/music_play` 系列指令無法使用。
+
+網頁儀表板改以 production WSGI server `waitress` 啟動（已加入 `requirements.txt`），監聽 `0.0.0.0` 與 `PORT` 環境變數（未設定時預設 `20198`）。
 
 ### 環境變數
 
@@ -115,7 +118,7 @@ python main.py
 
 ### 特別說明
 
-- `/weather` 會呼叫中央氣象署公開資料 API，若 SSL 驗證失敗會自動嘗試不驗證模式重試。
+- `/weather` 會呼叫中央氣象署公開資料 API，全程啟用 TLS 憑證驗證（沿用 `cogs/tls.py` 的共用 SSL context，相容舊式政府 CA 憑證鏈）；若憑證驗證失敗會直接回報連線異常，不會關閉驗證重試。
 - `/bus` 會呼叫交通部 TDX API 查詢公車路線站點與即時到站資訊。所有公車查詢訊息皆為僅使用者可見，避免干擾頻道版面。
 - `/bus` 若輸入不存在的公車號碼，會提示找不到站牌或到站資料；若發生未知錯誤，會自動嘗試 DM 通知 `DISCORD_OWNER_ID`。
 - `/music_join`、`/music_leave`、`/music_play`、`/music_play_next`、`/music_queue`、`/music_queue_clear`、`/music_node_status` 需要已安裝 `wavelink` 並設定 `LAVALINK_URI` / `LAVALINK_PASSWORD`；未安裝或節點無法連線時，這些指令會回覆友善錯誤訊息，不影響機器人其他功能。
@@ -174,6 +177,7 @@ pip install -r requirements.txt
 - discord.py
 - python-dotenv
 - Flask
+- waitress
 - certifi
 - aiohttp
 - wavelink
@@ -249,7 +253,7 @@ The bot also enables the `Message Content Intent` and voice-state intents for th
 
 ### Notes
 
-- `/weather` calls the Taiwan Central Weather Administration API. If SSL verification fails, it retries with SSL verification disabled.
+- `/weather` calls the Taiwan Central Weather Administration API with TLS certificate verification always enabled (via the shared SSL context in `cogs/tls.py`, compatible with legacy government CA chains); if certificate verification fails, it reports a connection error instead of retrying with verification disabled.
 - `/bus` calls the Taiwan TDX API for route stops and real-time arrival estimates. Bus query messages are ephemeral, so only the user who started the query can see them.
 - `/bus` handles unknown route numbers with a clear not-found message. Unexpected errors trigger an owner DM when `DISCORD_OWNER_ID` is configured.
 - `/music_join`, `/music_leave`, `/music_play`, `/music_play_next`, `/music_queue`, `/music_queue_clear`, and `/music_node_status` use Wavelink and require a reachable Lavalink node configured with `LAVALINK_URI` and `LAVALINK_PASSWORD`. The music Cog is loaded without stopping the bot when Wavelink or Lavalink is unavailable.
@@ -264,4 +268,4 @@ The bot also enables the `Message Content Intent` and voice-state intents for th
 ### Tips
 
 - To add a command, create or update a Cog under `cogs/`, then add its module path to `INITIAL_EXTENSIONS` in `main.py`.
-- For cloud deployment, ensure the `PORT` environment variable or default port `8080` is accessible.
+- For cloud deployment, ensure the `PORT` environment variable or default port `20198` is accessible. The dashboard runs on the `waitress` production WSGI server (included in `requirements.txt`).

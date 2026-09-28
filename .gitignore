@@ -6,3 +6,5 @@ __pycache__/
 .venv
 welcome_settings.json
 cogs/__pycache__/*
+.freebuff/
+.pytest_cache/

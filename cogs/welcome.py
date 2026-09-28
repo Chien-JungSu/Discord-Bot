@@ -45,6 +45,7 @@ class Welcome(commands.Cog):
     )
     @app_commands.guild_only()
     @app_commands.default_permissions(manage_guild=True)
+    @app_commands.checks.has_permissions(manage_guild=True)  # H3: 執行期檢查，伺服器端覆寫權限也擋得住
     async def welcome_active(
         self,
         interaction: discord.Interaction,
@@ -77,6 +78,7 @@ class Welcome(commands.Cog):
     @app_commands.command(name="welcome_inactive", description="取消伺服器的歡迎訊息功能")
     @app_commands.guild_only()
     @app_commands.default_permissions(manage_guild=True)
+    @app_commands.checks.has_permissions(manage_guild=True)  # H3: 執行期檢查，伺服器端覆寫權限也擋得住
     async def welcome_inactive(self, interaction: discord.Interaction):
         guild_id = str(interaction.guild.id)
         if guild_id in self.settings:
