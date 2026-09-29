@@ -14,6 +14,11 @@ from cogs.sanitize import redact_secrets
 
 BASE_DIR = os.path.dirname(os.path.dirname(__file__))
 app = Flask(__name__, template_folder=os.path.join(BASE_DIR, 'templates'))
+# 模板自動重載：production 模式下 Jinja2 預設會快取第一次渲染的模板、之後不再
+# 讀檔，導致改 templates/*.html 後要重啟機器人才會生效。開啟後每次渲染都會
+# 檢查檔案修改時間，改完 HTML 重新整理網頁即可看到新版，不用重啟機器人。
+# 成本只是每次渲染多一次 os.stat，對這種小流量儀表板可忽略。
+app.config['TEMPLATES_AUTO_RELOAD'] = True
 APP_START_TIME = time.monotonic()
 
 

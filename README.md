@@ -23,7 +23,22 @@
 - `/music_play_next <query>`：插播，搜尋一首歌曲並插入佇列最前面，下一首就會播放它
 - `/music_queue`：顯示目前伺服器的播放佇列（正在播放中的歌曲＋接下來排隊的清單）
 - `/music_queue_clear`：清空目前的播放佇列（不影響正在播放的歌曲）
+- `/music_pause`：暫停目前播放的歌曲
+- `/music_resume`：繼續播放被暫停的歌曲
+- `/music_skip`：跳過目前歌曲並播放佇列中的下一首
+- `/music_seek <time>`：跳轉到指定時間（支援秒數、`mm:ss`、`hh:mm:ss`，或 `+10`／`-15` 相對秒數）
+- `/music_stop`：停止播放並清空佇列（需全員投票同意）
+- `/music_set_channel [channel]`：設定點歌頻道，音樂指令只在該頻道回應；不帶參數則取消限制。需「管理伺服器」權限
 - `/music_node_status`：查看目前 Lavalink 節點的連線狀態（包含節點 URI、連線狀態、Session ID 及目前連線的伺服器數）
+
+#### 點歌者操作鎖
+
+`/music_pause`、`/music_resume`、`/music_skip`、`/music_stop`、`/music_seek` 五個指令受到「點歌者操作鎖」保護：
+
+- 當前曲目的點歌者若還在機器人所在的語音頻道，僅點歌者本人能直接操作；點歌者退出語音頻道後，任何人都能操作。
+- **暫停／續播**：非點歌者使用時，機器人會在原文字頻道公開發送請求，附「✅ 允許／❌ 拒絕」按鈕，只有點歌者能按；按鈕為一次性（決定後即失效），30 秒內未決定視為拒絕。
+- **停止**：任何人使用都會發起全員投票，同意／不同意按鈕即時顯示人數；任何一票不同意即否決，全員同意才會停止，按鈕同樣 30 秒有效。頻道裡只剩自己時不用投票、直接執行。投票被否決後，同一首歌在下一首開始播放前無法再次發起投票。
+- **拒絕鎖**：同一首歌的操作請求被拒絕或逾時後（含暫停／續播按鈕請求，以及被否決或逾時結算為否決的停止投票），在下一首開始播放前不得再次提出或發起；換歌後自動解鎖。
 
 專案也包含 `cogs/web_server.py`，會在背景啟動一個 Flask 網頁伺服器（搭配 `templates/index.html` 儀表板），提供機器人狀態 API（伺服器數、延遲、運行時間等），方便部署於需要存活檢查的雲端平台。
 
@@ -160,7 +175,22 @@ Supported features:
 - `/music_play_next <query>`: play next (jump the queue), search a track and insert it at the front of the queue
 - `/music_queue`: show the current server's playback queue (now playing + upcoming tracks)
 - `/music_queue_clear`: clear the current playback queue (does not affect the currently playing track)
+- `/music_pause`: pause the currently playing track
+- `/music_resume`: resume a paused track
+- `/music_skip`: skip the current track and play the next one in the queue
+- `/music_seek <time>`: seek to a position (seconds, `mm:ss`, `hh:mm:ss`, or relative `+10` / `-15`)
+- `/music_stop`: stop playback and clear the queue (requires a group vote)
+- `/music_set_channel [channel]`: restrict music commands to a single text channel; run without arguments to lift the restriction. Requires **Manage Server** permission
 - `/music_node_status`: view the connection status of all registered Lavalink nodes (URI, status, Session ID, and connected guild count)
+
+#### Requester control lock
+
+The five commands `/music_pause`, `/music_resume`, `/music_skip`, `/music_stop`, and `/music_seek` are protected by a requester control lock:
+
+- While the current track's requester stays in the bot's voice channel, only they can control that track; once the requester leaves the voice channel, anyone may control it.
+- **Pause/Resume**: when used by someone else, the bot posts a public request in the original text channel with "✅ Allow / ❌ Deny" buttons. Only the requester can press them; the buttons are one-shot (disabled once decided) and unanswered requests are denied after 30 seconds.
+- **Stop**: any use starts a group vote with agree/disagree buttons showing live tallies; a single disagreement vetoes the request, and only unanimous agreement stops playback. Buttons are valid for 30 seconds. If the channel only has one human, the command executes directly without a vote. Once vetoed, no new stop vote can be started for that track until the next one begins.
+- **Rejection lock**: once a request for a track is denied (or times out) — including pause/resume button requests and a vetoed (or timed-out-as-denied) stop vote — no new request or vote can be started for that track until the next one starts playing; the lock clears when the track changes.
 
 The project also includes `cogs/web_server.py`, which starts a Flask web server in the background (backing a `templates/index.html` dashboard) that exposes bot status APIs (guild count, latency, uptime, etc.) for cloud deployments that require a keep-alive endpoint.
 

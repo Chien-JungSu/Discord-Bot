@@ -234,9 +234,16 @@
           <li><strong>/music_seek</strong> <em>time:&lt;時間&gt;</em>：跳轉到指定時間，支援秒數、<code>mm:ss</code>、<code>hh:mm:ss</code>，或以 <code>+10</code>／<code>-15</code> 表示的相對秒數；直播歌曲不支援跳轉。回覆會附上操作者戳記。</li>
           <li><strong>/music_loop</strong> <em>[mode]</em>：切換循環模式（關閉 → 單曲 → 佇列，可指定模式或留空依序切換）。回覆會附上操作者戳記。</li>
           <li><strong>/music_skip</strong>：跳過目前歌曲並播放佇列中的下一首。回覆會附上操作者戳記。</li>
-          <li><strong>/music_stop</strong>：停止播放並清空佇列（機器人會留在語音頻道）。回覆會附上操作者戳記。</li>
+          <li><strong>/music_stop</strong>：停止播放並清空佇列（需全員投票同意，見下方操作鎖說明）。</li>
           <li><strong>/music_node_status</strong>：查看 Lavalink 節點連線狀態（URI、Session ID、連線伺服器數），僅使用者可見。</li>
           <li><strong>/music_set_channel</strong> <em>[channel]</em>：設定點歌頻道，設定後音樂指令只在該頻道回應；不帶參數則取消限制，恢復全頻道可用。需「管理伺服器」權限。</li>
+          <li><strong>點歌者操作鎖（/music_pause、/music_resume、/music_skip、/music_stop、/music_seek）</strong>：每首歌的點歌者若還在機器人所在的語音頻道，僅點歌者能直接操作該曲；點歌者退出語音頻道後，任何人都能操作。
+            <ul>
+              <li><strong>暫停／續播／跳過／跳轉</strong>：非點歌者使用時會被直接拒絕（僅提示可見）。其中<strong>暫停與續播</strong>會另外在原文字頻道公開發送請求，附「✅ 允許／❌ 拒絕」按鈕，只有點歌者能按，按完按鈕即失效（一次性），<strong>30 秒</strong>內未決定視為拒絕。</li>
+              <li><strong>停止</strong>：任何人使用都會發起全員投票，同意／不同意按鈕即時顯示人數，<strong>任何一票不同意即否決</strong>、全員同意才會停止；按鈕同樣 <strong>30 秒</strong>有效且結果出爐後失效。頻道裡只剩自己時不用投票。投票被否決後，同一首歌在下一首開始播放前無法再次發起投票。</li>
+              <li><strong>拒絕鎖</strong>：同一首歌的請求被拒絕或逾時後——含暫停／續播的按鈕請求，以及<strong>被否決（或逾時結算為否決）的停止投票</strong>——在下一首開始播放前<strong>不得再次提出或發起</strong>。</li>
+            </ul>
+          </li>
         </ul>
       </article>
     </div>

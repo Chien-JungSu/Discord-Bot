@@ -9,7 +9,7 @@ from collections import deque
 from typing import TYPE_CHECKING, Any
 
 import discord
-from discord import app_commands
+from discord import app_commands, ui
 from discord.ext import commands, tasks
 
 if TYPE_CHECKING:
@@ -103,6 +103,179 @@ def format_position(ms: int) -> str:
     return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
 
 
+# ---------- 點歌者限定操作：按鈕確認與全員投票 ----------
+# 按鈕互動的有效期限（秒）；超過後按鈕自動失效。
+CONTROL_REQUEST_TIMEOUT = 30
+
+
+class RequesterApprovalView(ui.View):
+    """非點歌者想暫停／續播時，向點歌者請求允許的按鈕。
+
+    規則：只有點歌者本人能按；兩顆按鈕都是一次性的（按完整組 disabled）。
+    timeout 到期自動視為拒絕，避免佔著按鈕讓指令結果懸而未決。
+    """
+
+    def __init__(self, cog: "Music", requester_id: int, requester_name: str, track=None):
+        super().__init__(timeout=CONTROL_REQUEST_TIMEOUT)
+        self.cog = cog
+        self.requester_id = requester_id
+        self.requester_name = requester_name
+        self.track = track  # 被拒絕時用來鎖住「同一首歌不得再提請求」
+        self.message: discord.Message | None = None
+        self.decided = False
+        self.result = None
+        self.after_decision = None  # async callable(allowed: bool)；點歌者決定後執行實際操作
+
+    def _finish(self, allowed: bool, interaction: discord.Interaction):
+        self.decided = True
+        self.result = allowed
+        for item in self.children:
+            item.disabled = True  # 一次性：決定後整組按鈕失效
+        label = "✅ 允許" if allowed else "❌ 拒絕"
+        return f"{label} — 由 {self.requester_name} 決定"
+
+    async def on_timeout(self):
+        # 超時視為拒絕；把畫面上的按鈕停用，讓使用者知道已經失效
+        if self.decided or self.message is None:
+            return
+        self.decided = True
+        self.result = False
+        self.cog._resolve_control_request(self.requester_id, allowed=False, view=self)
+        for item in self.children:
+            item.disabled = True
+        try:
+            await self.message.edit(
+                content=f"⌛ 操作請求已逾時（{CONTROL_REQUEST_TIMEOUT} 秒），視為拒絕。",
+                view=self,
+            )
+        except discord.HTTPException:
+            pass
+
+    @ui.button(label="允許", style=discord.ButtonStyle.success, emoji="✅")
+    async def approve(self, interaction: discord.Interaction, button: ui.Button):
+        if interaction.user.id != self.requester_id:
+            await interaction.response.send_message("🔒 只有點這首歌的人能決定！", ephemeral=True)
+            return
+        if self.decided:
+            await interaction.response.send_message("ℹ️ 這個請求已經被決定過了。", ephemeral=True)
+            return
+        self.cog._resolve_control_request(self.requester_id, allowed=True, view=self)
+        text = self._finish(True, interaction)
+        await interaction.response.edit_message(content=text, view=self)
+        if self.after_decision is not None:
+            await self.after_decision(True)
+
+    @ui.button(label="拒絕", style=discord.ButtonStyle.danger, emoji="❌")
+    async def deny(self, interaction: discord.Interaction, button: ui.Button):
+        if interaction.user.id != self.requester_id:
+            await interaction.response.send_message("🔒 只有點這首歌的人能決定！", ephemeral=True)
+            return
+        if self.decided:
+            await interaction.response.send_message("ℹ️ 這個請求已經被決定過了。", ephemeral=True)
+            return
+        self.cog._resolve_control_request(self.requester_id, allowed=False, view=self)
+        text = self._finish(False, interaction)
+        await interaction.response.edit_message(content=text, view=self)
+        if self.after_decision is not None:
+            await self.after_decision(False)
+
+
+class StopVoteView(ui.View):
+    """停止播放的全員投票：同意／不同意按鈕即時顯示人數。
+
+    任何一票不同意就否決，全員同意（或所有在場的人都投了同意）才停止。
+    每個人只能投一票、不能改票；按鈕在結果出爐後整組失效。
+    投票被否決時會鎖住該首歌：下一首開始播放前不得再發起停止投票（拒絕鎖）。
+    """
+
+    def __init__(self, cog: "Music", guild_id: int, initiator_id: int, initiator_name: str,
+                 voter_ids: set[int], track=None):
+        super().__init__(timeout=CONTROL_REQUEST_TIMEOUT)
+        self.cog = cog
+        self.guild_id = guild_id
+        self.initiator_id = initiator_id
+        self.initiator_name = initiator_name
+        self.track = track  # 發起投票當下正在播的歌；被否決時用來鎖住「同一首歌不得再發起」
+        self.voter_ids = voter_ids          # 投票當下在語音頻道的真人 ID
+        self.votes: dict[int, bool] = {}    # user_id -> True(同意) / False(不同意)
+        self.message: discord.Message | None = None
+        self.finished = False
+        self.approved = None
+        self.on_approved = None  # async callable()；投票通過後執行實際停止流程
+
+    def _ballot_text(self, footer: str) -> str:
+        yes = sum(1 for v in self.votes.values() if v)
+        no = sum(1 for v in self.votes.values() if not v)
+        return (
+            f"🗳️ {self.initiator_name} 提議停止播放並清空佇列。\n"
+            f"✅ 同意：{yes} 人　❌ 不同意：{no} 人\n{footer}"
+        )
+
+    def _finish(self, approved: bool, footer: str) -> str:
+        self.finished = True
+        self.approved = approved
+        self.cog._resolve_stop_vote(self.guild_id, approved=approved, view=self)
+        for item in self.children:
+            item.disabled = True  # 結果出爐，按鈕全部失效
+        return self._ballot_text(footer)
+
+    async def _maybe_execute(self, approved: bool):
+        """結算後若通過且掛了執行回呼，就實際執行停止流程。"""
+        if approved and self.on_approved is not None:
+            await self.on_approved()
+
+    def _auto_resolve(self) -> bool:
+        """所有在場的人都投了就提前結算：全同意 -> 通過，否則否決。"""
+        return all(uid in self.votes for uid in self.voter_ids)
+
+    async def on_timeout(self):
+        if self.finished or self.message is None:
+            return
+        # 逾時結算：已有任何人投不同意 -> 否決；否則視為同意
+        approved = all(self.votes.get(uid, True) for uid in self.voter_ids)
+        text = self._finish(approved, "⌛ 投票逾時，自動結算。")
+        try:
+            await self.message.edit(content=text, view=self)
+        except discord.HTTPException:
+            pass
+        await self._maybe_execute(approved)
+
+    async def _vote(self, interaction: discord.Interaction, choice: bool):
+        if interaction.user.id not in self.voter_ids:
+            await interaction.response.send_message("🔒 只有在語音頻道裡的人能投票！", ephemeral=True)
+            return
+        if interaction.user.id in self.votes:
+            await interaction.response.send_message("ℹ️ 你已經投過票了，不能重複投票或改票。", ephemeral=True)
+            return
+        if self.finished:
+            await interaction.response.send_message("ℹ️ 投票已經結束了。", ephemeral=True)
+            return
+
+        self.votes[interaction.user.id] = choice
+        if not choice:
+            # 任何人拒絕 -> 立即否決
+            text = self._finish(False, "❌ 有人不同意，停止請求已否決。")
+            await interaction.response.edit_message(content=text, view=self)
+            await self._maybe_execute(False)
+            return
+
+        if self._auto_resolve():
+            text = self._finish(True, "🎉 全員同意！")
+            await interaction.response.edit_message(content=text, view=self)
+            await self._maybe_execute(True)
+            return
+
+        await interaction.response.edit_message(content=self._ballot_text("按鈕會即時更新人數。"), view=self)
+
+    @ui.button(label="同意", style=discord.ButtonStyle.success, emoji="👍")
+    async def agree(self, interaction: discord.Interaction, button: ui.Button):
+        await self._vote(interaction, True)
+
+    @ui.button(label="不同意", style=discord.ButtonStyle.danger, emoji="👎")
+    async def disagree(self, interaction: discord.Interaction, button: ui.Button):
+        await self._vote(interaction, False)
+
+
 class Music(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -116,6 +289,12 @@ class Music(commands.Cog):
         # key: guild_id 字串，value: 點歌頻道 ID。
         # 只載入一次，之後修改時同步更新記憶體 + 檔案。
         self.music_channel_settings: dict = _load_music_settings()
+        # 進行中的點歌者操作請求：key=點歌者 ID，value={locked, action, view}
+        self._pending_requests: dict[int, dict] = {}
+        # 進行中的停止投票：key=guild ID，value=StopVoteView
+        self._stop_votes: dict[int, StopVoteView] = {}
+        # 被拒絕過的曲目（同一首歌被拒後不得再提請求）：key=track identifier
+        self._rejected_track_keys: dict = {}
 
     async def cog_unload(self):
         """Cog 被卸載時（例如重新載入模組）順便取消所有還在跑的自動離開計時器，
@@ -125,6 +304,10 @@ class Music(commands.Cog):
             if not task.done():
                 task.cancel()
         self.empty_channel_timers.clear()
+        # 重載後按鈕 View 的 timer 會跟著舊模組消失，狀態一併清掉，避免殘留鎖
+        self._pending_requests.clear()
+        self._stop_votes.clear()
+        self._rejected_track_keys.clear()
 
         if self.node_health_check.is_running():
             self.node_health_check.cancel()
@@ -366,29 +549,35 @@ class Music(commands.Cog):
         player.end_intent = None
         loop_mode = getattr(player, "loop_mode", "off")
         requester_name = getattr(player, "current_requester", None) or "未知"
+        requester_id = getattr(player, "current_requester_id", None)
         ended_track = getattr(payload, "track", None)
         if reason in ("loadfailed", "load_failed"):
             ended_track = None
 
+        # 曲目結束（換歌／被跳過／停止）：解除這首歌的操作請求鎖與拒絕鎖
+        self._cleanup_control_state(ended_track)
+
         if intent == "stop":
             # /music_stop 已清空佇列並回覆使用者，這裡不需要再發「播完了」通知
             player.current_requester = None
+            player.current_requester_id = None
             return
 
         next_item = None
         is_repeat = False
         if ended_track is not None and loop_mode == "single" and intent != "skip":
-            next_item = (ended_track, requester_name)
+            next_item = (ended_track, requester_name, requester_id)
             is_repeat = True
         else:
             if ended_track is not None and loop_mode == "all":
                 # 佇列循環：剛結束（或被跳過）的歌排到佇列最後面
-                song_queue.append((ended_track, requester_name))
+                song_queue.append((ended_track, requester_name, requester_id))
             if song_queue:
                 next_item = song_queue.popleft()
 
         if next_item is None:
             player.current_requester = None
+            player.current_requester_id = None
             if channel is not None:
                 try:
                     await channel.send("📭 播放佇列已經全部播完囉，輸入 `/music_play` 繼續點歌吧！")
@@ -396,9 +585,9 @@ class Music(commands.Cog):
                     pass
             return
 
-        next_track, next_requester = next_item
+        next_track, next_requester, next_requester_id = self._split_queue_item(next_item)
         try:
-            await self._play_track(player, next_track, next_requester)
+            await self._play_track(player, next_track, next_requester, next_requester_id)
         except Exception as e:
             print(f">>> 自動播放下一首時發生錯誤：{e}")
             await self.bot.notify_owner_error(
@@ -422,6 +611,20 @@ class Music(commands.Cog):
                 color=discord.Color.blurple(),
                 footer_prefix="佇列自動播放 - 由",
             )
+            # 佇列裡還有歌時，順帶提示「下一首」是哪首，讓聽的人有預期
+            # （走到這裡時 next_track 已從佇列 popleft，所以 song_queue[0] 就是下一首）
+            if song_queue:
+                upcoming_track, upcoming_requester, _ = self._split_queue_item(song_queue[0])
+                upcoming_value = (
+                    f"[{upcoming_track.title}]({upcoming_track.uri})"
+                    if getattr(upcoming_track, "uri", None)
+                    else upcoming_track.title
+                )
+                embed.add_field(
+                    name="📜 下一首",
+                    value=f"{upcoming_value}\n由 {upcoming_requester} 點播",
+                    inline=False,
+                )
             try:
                 await channel.send(embed=embed)
             except discord.HTTPException as exc:
@@ -771,7 +974,7 @@ class Music(commands.Cog):
         # 這裡把「點播者是誰」也一起存進佇列（track, requester_name），
         # 這樣輪到這首歌自動播放時，通知訊息才能顯示是誰點的。
         if player.playing or player.paused:
-            player.song_queue.append((track, interaction.user.display_name))
+            player.song_queue.append((track, interaction.user.display_name, interaction.user.id))
             position = len(player.song_queue)
             embed = self._build_track_embed(
                 title="➕ 已加入佇列",
@@ -785,7 +988,7 @@ class Music(commands.Cog):
 
         # ---- 佇列與播放器都是空的，直接開始播放 ----
         try:
-            await self._play_track(player, track, interaction.user.display_name)
+            await self._play_track(player, track, interaction.user.display_name, interaction.user.id)
         except Exception as e:
             print(f">>> 播放音樂時發生錯誤：{e}")
             await self.bot.notify_owner_error(
@@ -826,7 +1029,7 @@ class Music(commands.Cog):
         if player.playing or player.paused:
             # 插播的重點：用 appendleft 塞到 FIFO 佇列的最前面，
             # 而不是照排隊順序 append 到最後面；同樣把點播者名稱存起來。
-            player.song_queue.appendleft((track, interaction.user.display_name))
+            player.song_queue.appendleft((track, interaction.user.display_name, interaction.user.id))
             embed = self._build_track_embed(
                 title="⏭️ 已插播",
                 track=track,
@@ -839,7 +1042,7 @@ class Music(commands.Cog):
 
         # 目前沒有東西在播，插播跟一般 /play 沒有差別，直接播放。
         try:
-            await self._play_track(player, track, interaction.user.display_name)
+            await self._play_track(player, track, interaction.user.display_name, interaction.user.id)
         except Exception as e:
             print(f">>> 插播音樂時發生錯誤：{e}")
             await self.bot.notify_owner_error(
@@ -883,7 +1086,7 @@ class Music(commands.Cog):
             lines.append(f"**📜 接下來（共 {len(song_queue)} 首）：**")
             queue_snapshot = list(song_queue)
             for idx, queue_item in enumerate(queue_snapshot[:10], start=1):
-                queued_track, requester_name = queue_item
+                queued_track, requester_name, _ = self._split_queue_item(queue_item)
                 lines.append(
                     f"{idx}. {queued_track.title}"
                     f"（{format_duration(getattr(queued_track, 'length', None))}）- 由 {requester_name} 點播"
@@ -921,15 +1124,52 @@ class Music(commands.Cog):
             f"🗑️ 已清空佇列，移除了 {removed_count} 首歌曲（正在播放的歌曲不受影響）。", ephemeral=True
         )
 
+    def _cleanup_control_state(self, track) -> None:
+        """曲目結束（換歌／被跳過／停止）時，清掉該曲的拒絕鎖與還在等的操作請求。
+
+        「同一首歌被拒後不得再提請求」只限於這首歌的這次播放；
+        下一首開始播放（或這首再次被播出）時就重新給機會。
+        """
+        if track is not None:
+            self._rejected_track_keys.pop(self._track_key(track), None)
+        for rid, state in list(self._pending_requests.items()):
+            if getattr(state.get("view"), "track", None) is track:
+                self._pending_requests.pop(rid, None)
+
     # ---------- 第4週新增：播放控制 ----------
     @staticmethod
-    async def _play_track(player: "wavelink_module.Player", track: "wavelink_module.Playable", requester_name: str):
+    def _split_queue_item(queue_item: tuple) -> tuple:
+        """把佇列項目拆成 (track, 點歌者名稱, 點歌者ID)。
+
+        佇列只存在於記憶體，但 cog 重載時同一個 Player 可能殘留舊版的
+        2-tuple (track, 名稱)，這裡相容兩種長度，避免直接解包噴 ValueError。
+        舊資料沒有 ID，以 None 表示。
+        """
+        if len(queue_item) >= 3:
+            track, requester_name, requester_id = queue_item[0], queue_item[1], queue_item[2]
+        else:
+            track, requester_name = queue_item[0], queue_item[1]
+            requester_id = None
+        return track, requester_name, requester_id
+
+    async def _play_track(
+        self,
+        player: "wavelink_module.Player",
+        track: "wavelink_module.Playable",
+        requester_name: str,
+        requester_id: int | None = None,
+    ):
         """統一的開始播放入口：先記下「目前這首是誰點的」再播。
 
         循環模式要把剛結束的歌重新排回去，那時候佇列裡已經沒有這首歌的點播者資訊，
         所以必須在播放當下存進 player.current_requester。
+        current_requester_id 給點歌者限定操作（_check_requester_control）用：
+        名稱可能重複或改名，ID 才能可靠對應成員。
         """
         player.current_requester = requester_name
+        player.current_requester_id = requester_id
+        # 開始播放時清除這首歌之前的拒絕鎖（例如上次播放被拒、這次重新播出）
+        self._rejected_track_keys.pop(self._track_key(track), None)
         await player.play(track)
 
     async def _get_control_player(self, interaction: discord.Interaction) -> "wavelink_module.Player | None":
@@ -960,6 +1200,104 @@ class Music(commands.Cog):
         暫停／跳過都在公開頻道 ping 操作者本人。
         """
         return f"（操作者：{interaction.user.display_name}）"
+
+    # ---------- 點歌者限定操作 ----------
+    def _get_current_requester(self, player: "wavelink_module.Player") -> tuple[int | None, str | None]:
+        """取得當前曲目的點歌者 (ID, 名稱)；沒有播放中曲目或無紀錄回傳 (None, None)。"""
+        if getattr(player, "current", None) is None:
+            return None, None
+        requester_id = getattr(player, "current_requester_id", None)
+        requester_name = getattr(player, "current_requester", None)
+        if requester_id is None:
+            return None, None
+        return requester_id, requester_name
+
+    async def _requester_can_directly_control(self, interaction: discord.Interaction, player) -> bool:
+        """操作者是否可以直接控制（點歌者本人，或點歌者已不在機器人的語音頻道）。
+        必須在 _get_control_player 之後呼叫（此時 player.channel 一定存在）。"""
+        requester_id, _ = self._get_current_requester(player)
+        if requester_id is None:
+            return True
+        if interaction.user.id == requester_id:
+            return True
+        requester = interaction.guild.get_member(requester_id)
+        if requester is None or requester.voice is None or requester.voice.channel is None \
+                or requester.voice.channel.id != player.channel.id:
+            return True  # 點歌者已不在機器人的語音頻道，開放任何人操作
+        return False
+
+    async def _check_requester_control(self, interaction: discord.Interaction) -> bool:
+        """（skip / seek 用）點歌者限定：當前曲目的點歌者還在機器人所在語音頻道時，
+        只有點歌者本人可以直接操作；點歌者已退出則任何人都能操作。
+
+        回傳 False 時已用 ephemeral 訊息告知使用者，呼叫端應立即 return。
+        """
+        player = interaction.guild.voice_client
+        if getattr(player, "current", None) is None:
+            return True  # 沒有播放中曲目：不套用點歌者限定，讓呼叫端走原本的錯誤路徑
+
+        if await self._requester_can_directly_control(interaction, player):
+            return True
+
+        requester_id, requester_name = self._get_current_requester(player)
+        await interaction.response.send_message(
+            f"🔒 這首歌是 {requester_name or '某人'} 點的，他還在語音頻道裡，只有他能操作！",
+            ephemeral=True,
+        )
+        return False
+
+    # ---------- 操作請求（允許/拒絕按鈕）與停止投票的狀態 ----------
+    def _voice_voter_ids(self, player) -> set[int]:
+        """取得機器人語音頻道內所有真人成員的 ID（投票資格）。"""
+        channel = getattr(player, "channel", None)
+        if channel is None:
+            return set()
+        return {m.id for m in channel.members if not m.bot}
+
+    def _register_control_request(self, requester_id: int, action_label: str, view) -> None:
+        """記錄進行中的操作請求；決定（允許/拒絕/逾時）後由 _resolve_control_request 移除。"""
+        self._pending_requests[requester_id] = {"action": action_label, "view": view}
+
+    def _resolve_control_request(self, requester_id: int, allowed: bool, view=None) -> None:
+        """請求被決定（按鈕或逾時）時呼叫：移除進行中紀錄。
+        被拒絕時寫入 _rejected_track_keys，同一首歌在下一首開始播放前不得再次提出。
+        """
+        self._pending_requests.pop(requester_id, None)
+        track = getattr(view, "track", None) if view is not None else None
+        if not allowed and track is not None:
+            self._rejected_track_keys[self._track_key(track)] = True
+
+    def _register_stop_vote(self, guild_id: int, view) -> None:
+        self._stop_votes[guild_id] = view
+
+    def _resolve_stop_vote(self, guild_id: int, approved: bool, view=None) -> None:
+        """投票結束時移除進行中投票，讓下一輪 /music_stop 可以再發起。
+        未通過（被否決或逾時結算為否決）時寫入 _rejected_track_keys，
+        同一首歌在下一首開始播放前不得再次發起停止投票。
+        """
+        self._stop_votes.pop(guild_id, None)
+        track = getattr(view, "track", None) if view is not None else None
+        if not approved and track is not None:
+            self._rejected_track_keys[self._track_key(track)] = True
+
+    @staticmethod
+    def _track_key(track) -> object:
+        """曲目識別 key：優先用 identifier，沒有時退化用 id()（同一次播放物件內仍唯一）。"""
+        key = getattr(track, "identifier", None)
+        return key if key is not None else id(track)
+
+    def _is_track_rejected(self, player) -> bool:
+        """當前播放的這首歌是否已被拒絕過操作請求（拒絕鎖到換歌為止）。"""
+        current = getattr(player, "current", None)
+        if current is None:
+            return False
+        return self._track_key(current) in self._rejected_track_keys
+
+    def _clear_rejection(self, track) -> None:
+        """換到下一首歌（或停止播放）時清除該首歌的拒絕鎖。"""
+        if track is None:
+            return
+        self._rejected_track_keys.pop(self._track_key(track), None)
 
     # ---------- 點歌頻道限制（/music_set_channel） ----------
     def _get_music_channel_id(self, guild_id: int) -> int | None:
@@ -1037,6 +1375,68 @@ class Music(commands.Cog):
             )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
+    async def _run_pause_or_resume(self, interaction: discord.Interaction, player, want_pause: bool):
+        """點歌者按了「允許」（或操作者本人有權）之後，實際執行暫停／續播。"""
+        if want_pause:
+            if not player.current or player.paused:
+                await interaction.followup.send("ℹ️ 現在沒有可以暫停的歌曲。", ephemeral=True)
+                return
+            await player.pause(True)
+            await interaction.followup.send(f"⏸️ 已暫停{self._operator_stamp(interaction)}")
+        else:
+            if not player.paused:
+                await interaction.followup.send("ℹ️ 目前不是暫停狀態。", ephemeral=True)
+                return
+            await player.pause(False)
+            await interaction.followup.send(f"▶️ 繼續播放{self._operator_stamp(interaction)}")
+
+    async def _handle_pause_resume_request(self, interaction: discord.Interaction, player, want_pause: bool):
+        """pause / resume 的攔截邏輯：非點歌者使用時，改為向點歌者請求允許。
+
+        流程：在原文字頻道發送提示 + 允許/拒絕按鈕（只有點歌者能按、一次性、
+        30 秒逾時視為拒絕）。同一首歌被拒絕後，在下一首開始播放前不得再提請求。
+        """
+        action_label = "暫停" if want_pause else "續播"
+        requester_id, requester_name = self._get_current_requester(player)
+
+        # 同一首歌已經有請求在等點歌者決定：先等它結束
+        if requester_id in self._pending_requests:
+            await interaction.response.send_message(
+                "⌳ 這首歌已經有操作請求還在等待點歌者決定，請先等它結束。", ephemeral=True
+            )
+            return
+        # 同一首歌之前被拒絕過：換下一首之前不得再提
+        if self._is_track_rejected(player):
+            await interaction.response.send_message(
+                "🚫 這首歌的操作請求已被拒絕，在下一首開始播放前無法再次提出。", ephemeral=True
+            )
+            return
+
+        current = player.current
+        if want_pause and (not current or player.paused):
+            await interaction.response.send_message("ℹ️ 現在沒有可以暫停的歌曲。", ephemeral=True)
+            return
+        if not want_pause and not player.paused:
+            await interaction.response.send_message("ℹ️ 目前不是暫停狀態。", ephemeral=True)
+            return
+
+        view = RequesterApprovalView(self, requester_id, requester_name or "未知", track=current)
+        self._register_control_request(requester_id, action_label, view)
+
+        async def after_decision(allowed: bool):
+            if allowed:
+                await self._run_pause_or_resume(interaction, player, want_pause)
+
+        view.after_decision = after_decision
+
+        # 在原文字頻道公開發送請求（不 ephemeral，讓點歌者看得到按鈕）
+        await interaction.response.send_message(
+            f"🙋 {interaction.user.display_name} 想要{action_label}「{current.title}」，"
+            f"等待點歌者 {requester_name or '未知'} 決定（{CONTROL_REQUEST_TIMEOUT} 秒內）：",
+            view=view,
+        )
+        view.message = await interaction.original_response()
+
     @app_commands.command(name="music_pause", description="暫停目前播放的歌曲")
     @app_commands.guild_only()
     async def pause(self, interaction: discord.Interaction):
@@ -1048,11 +1448,16 @@ class Music(commands.Cog):
         if not player.current:
             await interaction.response.send_message("ℹ️ 目前沒有正在播放的歌曲。", ephemeral=True)
             return
-        if player.paused:
-            await interaction.response.send_message("ℹ️ 已經是暫停狀態了。", ephemeral=True)
+
+        if await self._requester_can_directly_control(interaction, player):
+            if player.paused:
+                await interaction.response.send_message("ℹ️ 已經是暫停狀態了。", ephemeral=True)
+                return
+            await player.pause(True)
+            await interaction.response.send_message(f"⏸️ 已暫停{self._operator_stamp(interaction)}")
             return
-        await player.pause(True)
-        await interaction.response.send_message(f"⏸️ 已暫停{self._operator_stamp(interaction)}")
+
+        await self._handle_pause_resume_request(interaction, player, want_pause=True)
 
     @app_commands.command(name="music_resume", description="繼續播放")
     @app_commands.guild_only()
@@ -1062,11 +1467,16 @@ class Music(commands.Cog):
         player = await self._get_control_player(interaction)
         if player is None:
             return
-        if not player.paused:
-            await interaction.response.send_message("ℹ️ 目前不是暫停狀態。", ephemeral=True)
+
+        if await self._requester_can_directly_control(interaction, player):
+            if not player.paused:
+                await interaction.response.send_message("ℹ️ 目前不是暫停狀態。", ephemeral=True)
+                return
+            await player.pause(False)
+            await interaction.response.send_message(f"▶️ 繼續播放{self._operator_stamp(interaction)}")
             return
-        await player.pause(False)
-        await interaction.response.send_message(f"▶️ 繼續播放{self._operator_stamp(interaction)}")
+
+        await self._handle_pause_resume_request(interaction, player, want_pause=False)
 
     @app_commands.command(name="music_skip", description="跳過目前歌曲")
     @app_commands.guild_only()
@@ -1075,6 +1485,8 @@ class Music(commands.Cog):
             return
         player = await self._get_control_player(interaction)
         if player is None:
+            return
+        if not await self._check_requester_control(interaction):
             return
         current = player.current
         if not current:
@@ -1097,7 +1509,28 @@ class Music(commands.Cog):
             await self.bot.notify_owner_error(e, interaction, extra_info="/music_skip 失敗")
             await interaction.followup.send("❌ 跳過歌曲時發生錯誤，已回報開發者。", ephemeral=True)
 
-    @app_commands.command(name="music_stop", description="停止播放並清空佇列（機器人會留在語音頻道）")
+    async def _execute_stop(self, interaction: discord.Interaction, player):
+        """實際執行停止：清佇列、關循環、停播。投票通過或（未來）直接授權時共用。"""
+        song_queue: deque = getattr(player, "song_queue", None)
+        # 順序很重要：先清佇列、關循環，再停止；否則 track_end 會又撈出下一首或重播
+        if song_queue:
+            song_queue.clear()
+        player.loop_mode = "off"
+        self._clear_rejection(getattr(player, "current", None))
+        await interaction.followup.send(f"⏹️ 已停止播放並清空佇列{self._operator_stamp(interaction)}")
+        if player.current:
+            try:
+                if player.paused:
+                    await player.pause(False)
+                player.end_intent = "stop"
+                await player.skip(force=True)
+            except Exception as e:
+                player.end_intent = None
+                print(f">>> /music_stop 失敗：{e}")
+                await self.bot.notify_owner_error(e, interaction, extra_info="/music_stop 失敗")
+                await interaction.followup.send("❌ 停止播放時發生錯誤，已回報開發者。", ephemeral=True)
+
+    @app_commands.command(name="music_stop", description="停止播放並清空佇列（需全員投票同意）")
     @app_commands.guild_only()
     async def stop_(self, interaction: discord.Interaction):
         if not await self._check_music_channel(interaction):
@@ -1110,22 +1543,43 @@ class Music(commands.Cog):
             await interaction.response.send_message("ℹ️ 目前沒有正在播放的歌曲，佇列也是空的。", ephemeral=True)
             return
 
-        # 順序很重要：先清佇列、關循環，再停止；否則 track_end 會又撈出下一首或重播
-        if song_queue:
-            song_queue.clear()
-        player.loop_mode = "off"
-        await interaction.response.send_message(f"⏹️ 已停止播放並清空佇列{self._operator_stamp(interaction)}")
-        if player.current:
-            try:
-                if player.paused:
-                    await player.pause(False)
-                player.end_intent = "stop"
-                await player.skip(force=True)
-            except Exception as e:
-                player.end_intent = None
-                print(f">>> /music_stop 失敗：{e}")
-                await self.bot.notify_owner_error(e, interaction, extra_info="/music_stop 失敗")
-                await interaction.followup.send("❌ 停止播放時發生錯誤，已回報開發者。", ephemeral=True)
+        # 同一個伺服器同時只允許一場停止投票
+        if interaction.guild.id in self._stop_votes:
+            await interaction.response.send_message(
+                "⌳ 已經有停止投票正在進行中，請先等它結束。", ephemeral=True
+            )
+            return
+
+        # 這首歌的投票剛被否決（或逾時結算為否決）：下一首開始播放前不得再發起
+        if self._is_track_rejected(player):
+            await interaction.response.send_message(
+                "🚫 這首歌的停止投票已被否決，在下一首開始播放前無法再次發起。", ephemeral=True
+            )
+            return
+
+        voter_ids = self._voice_voter_ids(player)
+        # 頻道裡只有操作者自己（或投票資格異常）時不用投票，直接執行
+        if not voter_ids or voter_ids == {interaction.user.id}:
+            await interaction.response.defer()
+            await self._execute_stop(interaction, player)
+            return
+
+        view = StopVoteView(
+            self, interaction.guild.id, interaction.user.id, interaction.user.display_name, voter_ids,
+            track=player.current,
+        )
+        self._register_stop_vote(interaction.guild.id, view)
+
+        async def on_approved():
+            await self._execute_stop(interaction, player)
+
+        view.on_approved = on_approved
+
+        await interaction.response.send_message(
+            view=view,
+            content=view._ballot_text(f"⏱️ {CONTROL_REQUEST_TIMEOUT} 秒內有效，全員同意才會停止；有人不同意即否決。"),
+        )
+        view.message = await interaction.original_response()
 
     @app_commands.command(name="music_loop", description="切換循環模式（不選則依 關閉→單曲→佇列 順序切換）")
     @app_commands.describe(mode="指定循環模式；不填則自動切換到下一個模式")
@@ -1156,6 +1610,8 @@ class Music(commands.Cog):
             return
         player = await self._get_control_player(interaction)
         if player is None:
+            return
+        if not await self._check_requester_control(interaction):
             return
         track = player.current
         if not track:
