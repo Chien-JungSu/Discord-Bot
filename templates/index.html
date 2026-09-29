@@ -61,6 +61,20 @@
       font-size: 14px;
       font-weight: 700;
       letter-spacing: 0.08em;
+      transition: background 0.25s ease, border-color 0.25s ease, color 0.25s ease;
+    }
+
+    /* hero 狀態戳記的離線／維護配色：JS 依實際 UptimeRobot 狀態切換 */
+    .status.status-warn {
+      background: rgba(251, 191, 36, 0.1);
+      border-color: rgba(251, 191, 36, 0.45);
+      color: #fbbf24;
+    }
+
+    .status.status-bad {
+      background: rgba(248, 113, 113, 0.1);
+      border-color: rgba(248, 113, 113, 0.45);
+      color: var(--danger);
     }
 
     .status a {
@@ -502,10 +516,10 @@
 <body>
   <main>
     <section class="hero" id="home-hero">
-      <div class="status">
+      <div class="status" id="hero-status">
         <span class="dot"></span>
         <a href="https://stats.uptimerobot.com/AVDH7BXq2X/803979719" target="_blank" rel="noreferrer">
-          機器人狀態：在線中
+          機器人狀態：<span id="hero-status-text">載入中...</span>
         </a>
       </div>
 
@@ -681,6 +695,49 @@
       return text ? text.replace(/\n/g, '<br>') : '--';
     }
 
+    // hero 頂部狀態戳記：與下方監控卡片共用同一份 /api/uptime 資料，
+    // 依 UptimeRobot 的 status_code 切換文字與配色，不再是寫死的「在線中」。
+    const HERO_STATUS_TEXT_URL_ONLINE = 2;
+
+    function updateHeroStatus(statusCode, fallbackText) {
+      const textEl = document.getElementById('hero-status-text');
+      const pillEl = document.getElementById('hero-status');
+      if (!textEl || !pillEl) return;
+
+      // 與後端 status_text 對應的 UptimeRobot 狀態碼：0 暫停 / 1 待命 / 2 在線 / 8 維護 / 9 離線
+      const labelByCode = {
+        0: '已暫停',
+        1: '待命中',
+        2: '在線中',
+        8: '維護中',
+        9: '離線',
+      };
+      const styleByCode = {
+        2: '',            // 預設綠色
+        8: 'status-warn', // 維護→黄色
+        0: 'status-warn',
+        1: 'status-warn',
+        9: 'status-bad',  // 離線→紅色
+      };
+
+      const code = Number(statusCode);
+      const hasCode = Number.isFinite(code) && code in labelByCode;
+      textEl.textContent = hasCode ? labelByCode[code] : (fallbackText || '未知');
+
+      pillEl.classList.remove('status-warn', 'status-bad');
+      const style = hasCode ? styleByCode[code] : 'status-bad';
+      if (style) pillEl.classList.add(style);
+    }
+
+    function updateHeroStatusUnavailable(message) {
+      const textEl = document.getElementById('hero-status-text');
+      const pillEl = document.getElementById('hero-status');
+      if (!textEl || !pillEl) return;
+      textEl.textContent = message || '狀態未知';
+      pillEl.classList.remove('status-warn', 'status-bad');
+      pillEl.classList.add('status-bad');
+    }
+
     async function loadUptimeStatus() {
       try {
         const response = await fetch('/api/uptime');
@@ -691,6 +748,7 @@
           if (statusText) {
             statusText.textContent = data.message || '資料不可用';
           }
+          updateHeroStatusUnavailable('狀態未知');
           return;
         }
 
@@ -735,6 +793,9 @@
         const statusEl = document.getElementById('monitor-status');
         if (statusEl) statusEl.textContent = status;
 
+        // hero 戳記用同一份資料更新（status_code 來自 UptimeRobot monitor.status）
+        updateHeroStatus(data.status_code, status);
+
         const statusPill = document.querySelector('.status-pill');
         if (statusPill) {
           const isOnline = status === '在線';
@@ -757,6 +818,7 @@
         if (statusText) {
           statusText.textContent = '資料載入失敗';
         }
+        updateHeroStatusUnavailable('狀態載入失敗');
       }
     }
 

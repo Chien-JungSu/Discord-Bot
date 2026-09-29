@@ -90,6 +90,41 @@ def sanitize_emoji_name(name: str):
     return cleaned[:32]
 
 
+async def sync_app_commands_after_reload(bot: commands.Bot) -> str:
+    """重載 cog 後把最新的指令樹同步到 Discord，回傳給使用者看的同步結果摘要。
+
+    同步策略與 main.py 的 setup_hook() 一致：
+    - 有設定 owner_guild_id 時，先同步 owner guild（guild 範圍的同步是立即生效
+      的，開發者重載完馬上就能用到新的指令參數），再做一次全域同步。
+    - 全域同步在 Discord 端可能需要一段時間才會散播到所有伺服器，這是
+      Discord API 的限制，只能靠 guild sync 先讓 owner 伺服器即時生效來緩解。
+    - 同步失敗不應該讓「重載成功」變成失敗（模組本身已經載好了），所以每個
+      步驟各自 try/except，把錯誤印到後台並回報在訊息裡。
+    """
+    results = []
+
+    owner_guild_id = getattr(bot, 'owner_guild_id', None)
+    if owner_guild_id:
+        try:
+            guild = bot.get_guild(owner_guild_id) or discord.Object(id=owner_guild_id)
+            synced = await bot.tree.sync(guild=guild)
+            print(f"✅ [reload 後同步] 已同步 {len(synced)} 個 guild 指令到伺服器 {owner_guild_id}")
+            results.append(f"guild `{owner_guild_id}` 同步 {len(synced)} 個指令")
+        except Exception as exc:
+            print(f"❌ [reload 後同步] owner guild 同步失敗: {exc}", file=sys.stderr)
+            results.append(f"guild `{owner_guild_id}` 同步失敗：{exc}")
+
+    try:
+        synced = await bot.tree.sync()
+        print(f"✅ [reload 後同步] 已同步 {len(synced)} 個全域指令")
+        results.append(f"全域同步 {len(synced)} 個指令")
+    except Exception as exc:
+        print(f"❌ [reload 後同步] 全域同步失敗: {exc}", file=sys.stderr)
+        results.append(f"全域同步失敗：{exc}")
+
+    return "；".join(results)
+
+
 def owner_only(interaction: discord.Interaction):
     bot = interaction.client
     owner_id = getattr(bot, 'owner_id', None)
@@ -144,20 +179,31 @@ class ReloadCogSelect(discord.ui.Select):
             )
             return
 
+        # 修正：重載會改變指令樹（新增 / 修改 / 刪除 app command），但先前重載完
+        # 沒有重新 sync，Discord 端的指令選單還是舊的，要重啟機器人才會更新。
+        # sync 需要打 Discord API、可能超過 interaction 3 秒的回應時限，所以先
+        # defer 之後再重載 + 同步，最後用 followup 一次回報結果。
+        await interaction.response.defer(ephemeral=True)
         try:
             await self.bot.reload_extension(module_name)
             timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             print(f"✅ [{timestamp}] 已重載模組: {module_name}")
-            await interaction.response.send_message(f'✅ 已重載模組 `{module_name}`。', ephemeral=True)
         except Exception as exc:
             timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             print(f"❌ [{timestamp}] 重載失敗: {module_name}", file=sys.stderr)
             traceback.print_exception(type(exc), exc, exc.__traceback__, file=sys.stderr)
             await self.bot.notify_owner_error(exc, interaction, extra_info=f'General.reload_module target={module_name}')
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f'❌ 重載模組失敗：`{module_name}`\n```py\n{exc}\n```',
                 ephemeral=True,
             )
+            return
+
+        sync_summary = await sync_app_commands_after_reload(self.bot)
+        await interaction.followup.send(
+            f'✅ 已重載模組 `{module_name}`。\n🔄 指令同步完成（{sync_summary}）。',
+            ephemeral=True,
+        )
 
 
 class ReloadCogView(discord.ui.View):
@@ -268,20 +314,29 @@ class General(commands.Cog):
                     ephemeral=True,
                 )
                 return
+            # 修正：與下拉選單路徑相同，重載後自動同步指令樹到 Discord。
+            # 先 defer 再做事，避免 sync 打 API 時超過 3 秒回應時限。
+            await interaction.response.defer(ephemeral=True)
             try:
                 await self.bot.reload_extension(normalized)
                 timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 print(f"✅ [{timestamp}] 已重載模組: {normalized}")
-                await interaction.response.send_message(f'✅ 已重載模組 `{normalized}`。', ephemeral=True)
             except Exception as exc:
                 timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 print(f"❌ [{timestamp}] 重載失敗: {normalized}", file=sys.stderr)
                 traceback.print_exception(type(exc), exc, exc.__traceback__, file=sys.stderr)
                 await self.bot.notify_owner_error(exc, interaction, extra_info=f'General.reload_module target={normalized}')
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     f'❌ 重載模組失敗：`{normalized}`\n```py\n{exc}\n```',
                     ephemeral=True,
                 )
+                return
+
+            sync_summary = await sync_app_commands_after_reload(self.bot)
+            await interaction.followup.send(
+                f'✅ 已重載模組 `{normalized}`。\n🔄 指令同步完成（{sync_summary}）。',
+                ephemeral=True,
+            )
             return
 
         modules = get_available_cog_modules(self.bot)

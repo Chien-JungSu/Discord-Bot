@@ -190,7 +190,7 @@
         <div class="tag">Weather</div>
         <h2>天氣查詢</h2>
         <ul>
-          <li><strong>/weather</strong> <em>city:&lt;縣市&gt;</em>：查詢台澎金馬地區各縣市的即時天氣資訊，資料由中央氣象署提供。連線全程啟用 TLS 憑證驗證，不因憑證問題關閉驗證。</li>
+          <li><strong>/weather</strong> <em>city:&lt;縣市&gt;</em>：查詢台澎金馬地區各縣市的即時天氣資訊，資料由中央氣象署提供。</li>
         </ul>
       </article>
 
@@ -198,7 +198,7 @@
         <div class="tag">Bus</div>
         <h2>公車資訊</h2>
         <ul>
-          <li><strong>/bus</strong>：查詢台澎金馬地區各縣市的即時公車到站資訊，資料由交通部 TDX API 提供。連線全程啟用 TLS 憑證驗證，不因憑證問題關閉驗證。</li>
+          <li><strong>/bus</strong>：查詢台澎金馬地區各縣市的即時公車到站資訊，資料由交通部 TDX API 提供。</li>
         </ul>
       </article>
 
@@ -229,7 +229,14 @@
           <li><strong>/music_play_next</strong> <em>query:&lt;關鍵字或網址&gt;</em>：插播，插入佇列最前面，下一首優先播放。</li>
           <li><strong>/music_queue</strong>：顯示正在播放的歌曲與接下來最多 10 首的佇列清單。</li>
           <li><strong>/music_queue_clear</strong>：清空播放佇列（不影響正在播放的歌曲）。</li>
+          <li><strong>/music_pause</strong>：暫停目前播放的歌曲，回覆會附上操作者戳記。</li>
+          <li><strong>/music_resume</strong>：繼續播放被暫停的歌曲，回覆會附上操作者戳記。</li>
+          <li><strong>/music_seek</strong> <em>time:&lt;時間&gt;</em>：跳轉到指定時間，支援秒數、<code>mm:ss</code>、<code>hh:mm:ss</code>，或以 <code>+10</code>／<code>-15</code> 表示的相對秒數；直播歌曲不支援跳轉。回覆會附上操作者戳記。</li>
+          <li><strong>/music_loop</strong> <em>[mode]</em>：切換循環模式（關閉 → 單曲 → 佇列，可指定模式或留空依序切換）。回覆會附上操作者戳記。</li>
+          <li><strong>/music_skip</strong>：跳過目前歌曲並播放佇列中的下一首。回覆會附上操作者戳記。</li>
+          <li><strong>/music_stop</strong>：停止播放並清空佇列（機器人會留在語音頻道）。回覆會附上操作者戳記。</li>
           <li><strong>/music_node_status</strong>：查看 Lavalink 節點連線狀態（URI、Session ID、連線伺服器數），僅使用者可見。</li>
+          <li><strong>/music_set_channel</strong> <em>[channel]</em>：設定點歌頻道，設定後音樂指令只在該頻道回應；不帶參數則取消限制，恢復全頻道可用。需「管理伺服器」權限。</li>
         </ul>
       </article>
     </div>

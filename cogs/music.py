@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import re
+import tempfile
 from collections import deque
 from typing import TYPE_CHECKING, Any
 
@@ -38,6 +41,68 @@ def format_duration(length_ms: int | None) -> str:
     return f"{minutes:02d}:{seconds:02d}"
 
 
+# ---------- 第4週新增：循環模式與 Seek 時間換算 ----------
+# 循環模式狀態機：off -> single -> all -> off（/music_loop 不帶參數時依序切換）
+LOOP_LABELS = {
+    "off": "🔁 循環：關閉",
+    "single": "🔂 循環：單曲",
+    "all": "🔁 循環：整個佇列",
+}
+LOOP_NEXT = {"off": "single", "single": "all", "all": "off"}
+
+# 點歌頻道限制的設定檔：key 是 guild_id 字串，value 是 {"music_channel_id": int}。
+# 沒有設定的伺服器 = 不限制，任何頻道都可以使用音樂指令。
+MUSIC_SETTINGS_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'music_settings.json')
+
+
+def _load_music_settings() -> dict:
+    """讀取各伺服器的點歌頻道設定；檔案不存在或損壞時回傳空 dict（=全部不限制）。"""
+    if os.path.exists(MUSIC_SETTINGS_FILE):
+        try:
+            with open(MUSIC_SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"⚠️ music_settings.json 讀取失敗，所有伺服器將暫時不限頻道：{e}")
+            return {}
+    return {}
+
+
+def _save_music_settings(data: dict):
+    """原子寫入設定檔（先寫暫存檔再 os.replace），避免寫到一半斷電留下半份 JSON。
+    模式與 welcome.py 的 _save_welcome_settings 一致。"""
+    dir_path = os.path.dirname(MUSIC_SETTINGS_FILE)
+    try:
+        with tempfile.NamedTemporaryFile('w', encoding='utf-8', dir=dir_path, delete=False, suffix='.tmp') as tmp:
+            json.dump(data, tmp, ensure_ascii=False, indent=2)
+            tmp_path = tmp.name
+        os.replace(tmp_path, MUSIC_SETTINGS_FILE)
+    except Exception as e:
+        print(f"❌ 儲存點歌頻道設定失敗: {e}")
+        raise
+
+
+_TIME_RE = re.compile(r"^(?:(\d+):)?(?:(\d+):)?(\d+)$")
+
+
+def parse_time_to_ms(text: str) -> int | None:
+    """'90' / '1:30' / '1:02:03' -> 毫秒；格式錯誤回傳 None。"""
+    m = _TIME_RE.match(text.strip())
+    if not m:
+        return None
+    seconds = 0
+    for part in (p for p in m.groups() if p is not None):  # 由高位到低位
+        seconds = seconds * 60 + int(part)
+    return seconds * 1000
+
+
+def format_position(ms: int) -> str:
+    """播放位置（毫秒）-> m:ss 或 h:mm:ss。不能用 format_duration：位置 0 會被當成「直播」。"""
+    total = max(int(ms), 0) // 1000
+    h, rem = divmod(total, 3600)
+    m, sec = divmod(rem, 60)
+    return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
+
+
 class Music(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -48,6 +113,9 @@ class Music(commands.Cog):
         # 用來避免健康檢查每隔 NODE_HEALTH_CHECK_INTERVAL 秒就重複 DM 開發者，
         # 只在「狀態從連線變離線」的那一刻通知一次，恢復連線後才會重置旗標。
         self._node_alert_sent: dict[str, bool] = {}
+        # key: guild_id 字串，value: 點歌頻道 ID。
+        # 只載入一次，之後修改時同步更新記憶體 + 檔案。
+        self.music_channel_settings: dict = _load_music_settings()
 
     async def cog_unload(self):
         """Cog 被卸載時（例如重新載入模組）順便取消所有還在跑的自動離開計時器，
@@ -266,27 +334,24 @@ class Music(commands.Cog):
 
     @commands.Cog.listener()
     async def on_wavelink_track_end(self, payload: Any):
-        """第3週新增：串接播放佇列的核心事件。
+        """第3週：串接播放佇列（播完自動連播）。第4週：加入循環模式與 skip / stop 意圖判斷。
 
-        不論一首歌是正常播完、被跳過還是發生錯誤，Lavalink 都會在該首歌結束時
-        觸發這個事件一次（細節寫在 payload.reason，這裡先不細分）。我們只要在
-        這個時機點檢查「這個伺服器自己的佇列」還有沒有下一首：有的話就用
-        popleft() 從 FIFO 佇列最前面取出並接著播放，藉此達成播完自動連播；
-        佇列空了就發一次通知，不然使用者只會看到機器人靜靜停在語音頻道裡。
+        因為 autoplay 已關閉，「歌曲結束 → 下一首」完全由這裡決定，所以循環模式也
+        必須在這裡實作（不能用 wavelink 內建的 queue.mode，你的佇列是自己的 song_queue）。
 
-        佇列裡存的是 (track, requester_name) tuple，是點歌當下（/play、
-        /play_next）就記錄好的，這樣輪到這首歌自動播放時，才能在通知訊息裡
-        說明「這首是誰點的」，而不是只顯示歌名。
-
-        這裡刻意把 player.autoplay 設成 disabled（見 _ensure_player / /join），
-        是因為 wavelink 內建的 autoplay 也會在歌曲結束時嘗試自己接下一首（從
-        wavelink 自己的 Queue 或推薦清單），如果不關掉，會跟這裡手動接管的邏輯
-        搶著呼叫 player.play()，兩邊互相打架。關掉之後，「歌曲結束 → 接下一首」
-        完全由我們自己的佇列與這個監聽器控制，這也是這週想練習的「非同步事件
-        驅動」重點。
+        判斷依據有兩個：
+        1. payload.reason：replaced / cleanup 代表曲目被取代或 player 正在銷毀，
+           不能再接下一首；loadFailed 的曲目不參與循環，否則壞掉的歌會無限重試。
+        2. player.end_intent：/music_skip、/music_stop 在呼叫 player.skip() 之前會先
+           寫入 "skip" / "stop"。Lavalink 對「被跳過」與「自然播完」都只會送 track_end，
+           靠這個旗標才分得出來（單曲循環時被 skip 就不能重播同一首）。
         """
         player = getattr(payload, "player", None)
         if player is None:
+            return
+
+        reason = str(getattr(payload, "reason", "") or "").lower()
+        if reason in ("replaced", "cleanup"):
             return
 
         song_queue: deque = getattr(player, "song_queue", None)
@@ -296,7 +361,34 @@ class Music(commands.Cog):
 
         channel = getattr(player, "home_channel", None)
 
-        if not song_queue:
+        # 讀出並立刻消耗旗標，避免影響下一首
+        intent = getattr(player, "end_intent", None)
+        player.end_intent = None
+        loop_mode = getattr(player, "loop_mode", "off")
+        requester_name = getattr(player, "current_requester", None) or "未知"
+        ended_track = getattr(payload, "track", None)
+        if reason in ("loadfailed", "load_failed"):
+            ended_track = None
+
+        if intent == "stop":
+            # /music_stop 已清空佇列並回覆使用者，這裡不需要再發「播完了」通知
+            player.current_requester = None
+            return
+
+        next_item = None
+        is_repeat = False
+        if ended_track is not None and loop_mode == "single" and intent != "skip":
+            next_item = (ended_track, requester_name)
+            is_repeat = True
+        else:
+            if ended_track is not None and loop_mode == "all":
+                # 佇列循環：剛結束（或被跳過）的歌排到佇列最後面
+                song_queue.append((ended_track, requester_name))
+            if song_queue:
+                next_item = song_queue.popleft()
+
+        if next_item is None:
+            player.current_requester = None
             if channel is not None:
                 try:
                     await channel.send("📭 播放佇列已經全部播完囉，輸入 `/music_play` 繼續點歌吧！")
@@ -304,9 +396,9 @@ class Music(commands.Cog):
                     pass
             return
 
-        next_track, requester_name = song_queue.popleft()
+        next_track, next_requester = next_item
         try:
-            await player.play(next_track)
+            await self._play_track(player, next_track, next_requester)
         except Exception as e:
             print(f">>> 自動播放下一首時發生錯誤：{e}")
             await self.bot.notify_owner_error(
@@ -321,14 +413,12 @@ class Music(commands.Cog):
                     pass
             return
 
-        # 播放成功才會執行到這裡：把「佇列裡的下一首開始播放了」發回文字頻道，
-        # 跟 /play、/play_next 直接播放時看到的 Embed 樣式一致，只是標題與
-        # footer 用「佇列自動播放」來跟使用者手動點播做區隔。
-        if channel is not None:
+        # 單曲循環重播時不發通知，避免同一首歌每次播完都洗版
+        if channel is not None and not is_repeat:
             embed = self._build_track_embed(
                 title="🎶 接下來播放",
                 track=next_track,
-                requester_name=requester_name,
+                requester_name=next_requester,
                 color=discord.Color.blurple(),
                 footer_prefix="佇列自動播放 - 由",
             )
@@ -516,7 +606,10 @@ class Music(commands.Cog):
 
     # ---------- 指令 ----------
     @app_commands.command(name="music_join", description="讓機器人加入你目前所在的語音頻道")
+    @app_commands.guild_only()
     async def join(self, interaction: discord.Interaction):
+        if not await self._check_music_channel(interaction):
+            return
         if wavelink is None:
             await interaction.response.send_message("❌ 語音模組尚未安裝完成，請聯絡管理員。", ephemeral=True)
             return
@@ -566,7 +659,10 @@ class Music(commands.Cog):
         await interaction.followup.send(f"🔊 已加入 {channel.mention}！", ephemeral=True)
 
     @app_commands.command(name="music_leave", description="讓機器人離開目前所在的語音頻道")
+    @app_commands.guild_only()
     async def leave(self, interaction: discord.Interaction):
+        if not await self._check_music_channel(interaction):
+            return
         voice_client = interaction.guild.voice_client
 
         if voice_client is None:
@@ -646,7 +742,10 @@ class Music(commands.Cog):
 
     @app_commands.command(name="music_play", description="搜尋並播放音樂，若目前正在播放則排入佇列（可輸入關鍵字或直接貼網址）")
     @app_commands.describe(query="歌曲名稱 / 關鍵字，或是 YouTube、SoundCloud 網址")
+    @app_commands.guild_only()
     async def play(self, interaction: discord.Interaction, query: str):
+        if not await self._check_music_channel(interaction):
+            return
         if wavelink is None:
             await interaction.response.send_message("❌ 語音模組尚未安裝完成，請聯絡管理員。", ephemeral=True)
             return
@@ -686,7 +785,7 @@ class Music(commands.Cog):
 
         # ---- 佇列與播放器都是空的，直接開始播放 ----
         try:
-            await player.play(track)
+            await self._play_track(player, track, interaction.user.display_name)
         except Exception as e:
             print(f">>> 播放音樂時發生錯誤：{e}")
             await self.bot.notify_owner_error(
@@ -702,7 +801,10 @@ class Music(commands.Cog):
 
     @app_commands.command(name="music_play_next", description="（插播）搜尋一首歌曲並插入佇列最前面，下一首就會播放它")
     @app_commands.describe(query="歌曲名稱 / 關鍵字，或是 YouTube、SoundCloud 網址")
+    @app_commands.guild_only()
     async def play_next(self, interaction: discord.Interaction, query: str):
+        if not await self._check_music_channel(interaction):
+            return
         if wavelink is None:
             await interaction.response.send_message("❌ 語音模組尚未安裝完成，請聯絡管理員。", ephemeral=True)
             return
@@ -737,7 +839,7 @@ class Music(commands.Cog):
 
         # 目前沒有東西在播，插播跟一般 /play 沒有差別，直接播放。
         try:
-            await player.play(track)
+            await self._play_track(player, track, interaction.user.display_name)
         except Exception as e:
             print(f">>> 插播音樂時發生錯誤：{e}")
             await self.bot.notify_owner_error(
@@ -752,7 +854,10 @@ class Music(commands.Cog):
         await interaction.followup.send(embed=embed)
 
     @app_commands.command(name="music_queue", description="顯示目前伺服器的播放佇列")
+    @app_commands.guild_only()
     async def queue_(self, interaction: discord.Interaction):
+        if not await self._check_music_channel(interaction):
+            return
         player = interaction.guild.voice_client
 
         if player is None:
@@ -788,6 +893,9 @@ class Music(commands.Cog):
         else:
             lines.append("\n📭 佇列目前是空的，播完這首就結束囉，輸入 `/music_play` 繼續點歌吧！")
 
+        lines.append("")
+        lines.append(LOOP_LABELS.get(getattr(player, "loop_mode", "off"), LOOP_LABELS["off"]))
+
         embed = discord.Embed(
             title="🎵 播放佇列",
             description="\n".join(lines),
@@ -796,7 +904,10 @@ class Music(commands.Cog):
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="music_queue_clear", description="清空目前的播放佇列（不影響正在播放的歌曲）")
+    @app_commands.guild_only()
     async def queue_clear(self, interaction: discord.Interaction):
+        if not await self._check_music_channel(interaction):
+            return
         player = interaction.guild.voice_client
         song_queue: deque = getattr(player, "song_queue", None) if player else None
 
@@ -810,8 +921,274 @@ class Music(commands.Cog):
             f"🗑️ 已清空佇列，移除了 {removed_count} 首歌曲（正在播放的歌曲不受影響）。", ephemeral=True
         )
 
+    # ---------- 第4週新增：播放控制 ----------
+    @staticmethod
+    async def _play_track(player: "wavelink_module.Player", track: "wavelink_module.Playable", requester_name: str):
+        """統一的開始播放入口：先記下「目前這首是誰點的」再播。
+
+        循環模式要把剛結束的歌重新排回去，那時候佇列裡已經沒有這首歌的點播者資訊，
+        所以必須在播放當下存進 player.current_requester。
+        """
+        player.current_requester = requester_name
+        await player.play(track)
+
+    async def _get_control_player(self, interaction: discord.Interaction) -> "wavelink_module.Player | None":
+        """控制指令共用的防呆：機器人在語音頻道、且操作者跟機器人在同一個頻道。
+        回傳 None 代表已經回覆錯誤訊息，呼叫端直接 return。"""
+        if wavelink is None:
+            await interaction.response.send_message("❌ 語音模組尚未安裝完成，請聯絡管理員。", ephemeral=True)
+            return None
+
+        player = interaction.guild.voice_client
+        if not isinstance(player, wavelink.Player):
+            await interaction.response.send_message("ℹ️ 我目前不在任何語音頻道中。", ephemeral=True)
+            return None
+
+        voice = getattr(interaction.user, "voice", None)
+        if voice is None or voice.channel is None or voice.channel.id != player.channel.id:
+            await interaction.response.send_message(
+                f"❌ 你必須跟我在同一個語音頻道（{player.channel.mention}）才能使用控制指令！", ephemeral=True
+            )
+            return None
+        return player
+
+    @staticmethod
+    def _operator_stamp(interaction: discord.Interaction) -> str:
+        """操作者戳記：加在播放控制指令的成功回覆後面，標記這次操作是誰做的。
+
+        用 display_name 而不是 mention：戳記只是事後對照用，不希望每次
+        暫停／跳過都在公開頻道 ping 操作者本人。
+        """
+        return f"（操作者：{interaction.user.display_name}）"
+
+    # ---------- 點歌頻道限制（/music_set_channel） ----------
+    def _get_music_channel_id(self, guild_id: int) -> int | None:
+        """取得伺服器設定的點歌頻道 ID；沒設定（不限頻道）回傳 None。"""
+        setting = self.music_channel_settings.get(str(guild_id))
+        if not setting:
+            return None
+        return setting.get('music_channel_id')
+
+    async def _check_music_channel(self, interaction: discord.Interaction) -> bool:
+        """檢查目前頻道是否允許使用音樂指令。
+
+        規則：沒設定點歌頻道時全頻道開放；設定後只有該頻道可以用。
+        不通過時直接回覆使用者，呼叫端回傳後應立即 return。
+        """
+        allowed_id = self._get_music_channel_id(interaction.guild_id)
+        if allowed_id is None or interaction.channel_id == allowed_id:
+            return True
+
+        channel = interaction.guild.get_channel(allowed_id) if interaction.guild else None
+        mention = channel.mention if channel else f"ID {allowed_id}（頻道可能已被刪除）"
+        await interaction.response.send_message(
+            f"🚫 這個伺服器的音樂指令只能在 {mention} 使用，請去那裡再試一次！",
+            ephemeral=True,
+        )
+        return False
+
+    @app_commands.command(name="music_set_channel", description="設定點歌頻道：音樂指令只在該頻道生效（不帶參數則取消限制）")
+    @app_commands.describe(channel="點歌專用頻道；留空則取消限制，音樂指令恢復全頻道可用")
+    @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.checks.has_permissions(manage_guild=True)  # 執行期檢查，伺服器端覆寫權限也擋得住
+    async def music_set_channel(
+        self,
+        interaction: discord.Interaction,
+        channel: discord.TextChannel | None = None,
+    ):
+        guild_id = str(interaction.guild.id)
+
+        if channel is None:
+            # 不帶參數 = 取消限制，音樂指令恢復所有頻道都能用
+            if guild_id not in self.music_channel_settings:
+                await interaction.response.send_message(
+                    "ℹ️ 這個伺服器本來就沒有設定點歌頻道，音樂指令目前所有頻道都能使用。", ephemeral=True
+                )
+                return
+            del self.music_channel_settings[guild_id]
+        else:
+            self.music_channel_settings[guild_id] = {'music_channel_id': channel.id}
+
+        try:
+            _save_music_settings(self.music_channel_settings)
+        except Exception as e:
+            await self.bot.notify_owner_error(e, interaction, extra_info="music_set_channel: 儲存設定失敗")
+            await interaction.response.send_message(
+                "❌ 儲存設定時發生錯誤，設定可能在重新啟動後遺失，已回報開發者。", ephemeral=True
+            )
+            return
+
+        if channel is None:
+            embed = discord.Embed(
+                title="🔓 已取消點歌頻道限制",
+                description="音樂指令現在所有頻道都能使用了。",
+                color=discord.Color.green(),
+            )
+        else:
+            embed = discord.Embed(
+                title="🔒 點歌頻道已設定",
+                description=(
+                    f"音樂指令現在只能在 {channel.mention} 使用。\n"
+                    "在其他頻道輸入音樂指令會被擋下。\n\n"
+                    "再執行一次 `/music_set_channel`（不選頻道）即可取消限制。"
+                ),
+                color=discord.Color.green(),
+            )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="music_pause", description="暫停目前播放的歌曲")
+    @app_commands.guild_only()
+    async def pause(self, interaction: discord.Interaction):
+        if not await self._check_music_channel(interaction):
+            return
+        player = await self._get_control_player(interaction)
+        if player is None:
+            return
+        if not player.current:
+            await interaction.response.send_message("ℹ️ 目前沒有正在播放的歌曲。", ephemeral=True)
+            return
+        if player.paused:
+            await interaction.response.send_message("ℹ️ 已經是暫停狀態了。", ephemeral=True)
+            return
+        await player.pause(True)
+        await interaction.response.send_message(f"⏸️ 已暫停{self._operator_stamp(interaction)}")
+
+    @app_commands.command(name="music_resume", description="繼續播放")
+    @app_commands.guild_only()
+    async def resume(self, interaction: discord.Interaction):
+        if not await self._check_music_channel(interaction):
+            return
+        player = await self._get_control_player(interaction)
+        if player is None:
+            return
+        if not player.paused:
+            await interaction.response.send_message("ℹ️ 目前不是暫停狀態。", ephemeral=True)
+            return
+        await player.pause(False)
+        await interaction.response.send_message(f"▶️ 繼續播放{self._operator_stamp(interaction)}")
+
+    @app_commands.command(name="music_skip", description="跳過目前歌曲")
+    @app_commands.guild_only()
+    async def skip(self, interaction: discord.Interaction):
+        if not await self._check_music_channel(interaction):
+            return
+        player = await self._get_control_player(interaction)
+        if player is None:
+            return
+        current = player.current
+        if not current:
+            await interaction.response.send_message("ℹ️ 目前沒有正在播放的歌曲。", ephemeral=True)
+            return
+
+        await interaction.response.send_message(
+            f"⏭️ 已跳過：**{current.title}**{self._operator_stamp(interaction)}"
+        )
+        try:
+            # 暫停中直接 skip 的話，下一首可能會沿用暫停狀態，先解除
+            if player.paused:
+                await player.pause(False)
+            # 先寫入意圖，on_wavelink_track_end 才知道這次是「被跳過」而不是「自然播完」
+            player.end_intent = "skip"
+            await player.skip(force=True)
+        except Exception as e:
+            player.end_intent = None
+            print(f">>> /music_skip 失敗：{e}")
+            await self.bot.notify_owner_error(e, interaction, extra_info="/music_skip 失敗")
+            await interaction.followup.send("❌ 跳過歌曲時發生錯誤，已回報開發者。", ephemeral=True)
+
+    @app_commands.command(name="music_stop", description="停止播放並清空佇列（機器人會留在語音頻道）")
+    @app_commands.guild_only()
+    async def stop_(self, interaction: discord.Interaction):
+        if not await self._check_music_channel(interaction):
+            return
+        player = await self._get_control_player(interaction)
+        if player is None:
+            return
+        song_queue: deque = getattr(player, "song_queue", None)
+        if not player.current and not song_queue:
+            await interaction.response.send_message("ℹ️ 目前沒有正在播放的歌曲，佇列也是空的。", ephemeral=True)
+            return
+
+        # 順序很重要：先清佇列、關循環，再停止；否則 track_end 會又撈出下一首或重播
+        if song_queue:
+            song_queue.clear()
+        player.loop_mode = "off"
+        await interaction.response.send_message(f"⏹️ 已停止播放並清空佇列{self._operator_stamp(interaction)}")
+        if player.current:
+            try:
+                if player.paused:
+                    await player.pause(False)
+                player.end_intent = "stop"
+                await player.skip(force=True)
+            except Exception as e:
+                player.end_intent = None
+                print(f">>> /music_stop 失敗：{e}")
+                await self.bot.notify_owner_error(e, interaction, extra_info="/music_stop 失敗")
+                await interaction.followup.send("❌ 停止播放時發生錯誤，已回報開發者。", ephemeral=True)
+
+    @app_commands.command(name="music_loop", description="切換循環模式（不選則依 關閉→單曲→佇列 順序切換）")
+    @app_commands.describe(mode="指定循環模式；不填則自動切換到下一個模式")
+    @app_commands.choices(mode=[
+        app_commands.Choice(name="關閉", value="off"),
+        app_commands.Choice(name="單曲循環", value="single"),
+        app_commands.Choice(name="佇列循環", value="all"),
+    ])
+    @app_commands.guild_only()
+    async def loop_(self, interaction: discord.Interaction, mode: app_commands.Choice[str] | None = None):
+        if not await self._check_music_channel(interaction):
+            return
+        player = await self._get_control_player(interaction)
+        if player is None:
+            return
+        current_mode = getattr(player, "loop_mode", "off")
+        new_mode = mode.value if mode is not None else LOOP_NEXT[current_mode]
+        player.loop_mode = new_mode
+        await interaction.response.send_message(
+            f"{LOOP_LABELS[new_mode]}{self._operator_stamp(interaction)}"
+        )
+
+    @app_commands.command(name="music_seek", description="跳轉到指定時間，例如 90、1:30、+10、-15")
+    @app_commands.describe(time="絕對時間（秒 / mm:ss / hh:mm:ss），或以 +/- 開頭的相對秒數")
+    @app_commands.guild_only()
+    async def seek(self, interaction: discord.Interaction, time: str):
+        if not await self._check_music_channel(interaction):
+            return
+        player = await self._get_control_player(interaction)
+        if player is None:
+            return
+        track = player.current
+        if not track:
+            await interaction.response.send_message("ℹ️ 目前沒有正在播放的歌曲。", ephemeral=True)
+            return
+        if not getattr(track, "is_seekable", True) or getattr(track, "is_stream", False):
+            await interaction.response.send_message("❌ 這首歌不支援跳轉（可能是直播）。", ephemeral=True)
+            return
+
+        text = time.strip()
+        if text[:1] in ("+", "-") and text[1:].isdigit():
+            target = player.position + int(text) * 1000  # 相對跳轉
+        else:
+            target = parse_time_to_ms(text)
+            if target is None:
+                await interaction.response.send_message(
+                    "❌ 時間格式錯誤，請用 `90`、`1:30`、`1:02:03`、`+10` 或 `-15`。", ephemeral=True
+                )
+                return
+
+        # 夾在合法範圍內，結尾留 1 秒，避免直接跳到最後觸發 track_end
+        target = max(0, min(target, max(track.length - 1000, 0)))
+        await player.seek(target)
+        await interaction.response.send_message(
+            f"⏩ 已跳轉至 `{format_position(target)} / {format_position(track.length)}`"
+            f"{self._operator_stamp(interaction)}"
+        )
+
     @app_commands.command(name="music_node_status", description="查看目前 Lavalink 節點的連線狀態")
+    @app_commands.guild_only()
     async def node_status(self, interaction: discord.Interaction):
+        if not await self._check_music_channel(interaction):
+            return
         if wavelink is None:
             await interaction.response.send_message("❌ 語音模組尚未安裝完成，請聯絡管理員。", ephemeral=True)
             return
