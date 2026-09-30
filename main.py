@@ -94,6 +94,7 @@ INITIAL_EXTENSIONS = [
     'cogs.bus',           # /bus
     'cogs.server_info',   # /server_info
     'cogs.welcome',       # /welcome_active /welcome_inactive + on_member_join
+    'cogs.reaction_roles',  # /reaction_roles 表符身份組（重用 cogs.welcome 的設定檔工具）
     'cogs.music',         # /music_join /music_leave /music_play ...（第1週新增，之後每週持續擴充）
 ]
 
@@ -199,6 +200,14 @@ class MyBot(commands.Bot):
 
         if isinstance(error, app_commands.CommandOnCooldown):
             msg = f"系統冷卻中，請稍後再試！(還需 {error.retry_after:.1f} 秒)"
+        elif isinstance(error, app_commands.TransformerError):
+            # 參數轉換失敗（例如在需要文字頻道的參數選了語音/論壇頻道），
+            # 屬於使用者輸入問題，直接給出友善提示即可，不需要回報開發者。
+            transformer_name = getattr(error.transformer, '_error_display_name', type(error.transformer).__name__) if error.transformer else '未知型別'
+            msg = (
+                f"❌ 參數無法轉換成 {transformer_name}（收到的值：{error.value!r}）。\n"
+                f"請在 Discord 的選單中重新選擇正確型別的選項。"
+            )
         elif isinstance(error, app_commands.MissingPermissions):
             perms = '、'.join(error.missing_permissions) if error.missing_permissions else '所需權限'
             msg = f"❌ 你沒有使用此指令所需的權限（{perms}）。"

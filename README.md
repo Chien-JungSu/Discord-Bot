@@ -17,6 +17,7 @@
 - `/server_info`：顯示目前伺服器詳細資訊
 - `/welcome_active`：設定伺服器歡迎訊息（歡迎頻道必填，規則頻道與身份組頻道選填）
 - `/welcome_inactive`：取消伺服器歡迎訊息功能
+- `/reaction_roles`：發送「按表符領身份組」訊息（每伺服器可多則），成員按表符自動獲得身份組、取消表符自動收回；需「管理伺服器」權限
 - `/music_join`：加入使用者目前所在的語音頻道
 - `/music_leave`：離開目前所在的語音頻道
 - `/music_play <query>`：搜尋並播放音樂；若目前已在播放，會自動排入佇列（支援關鍵字或直接貼 YouTube／SoundCloud 網址）
@@ -108,6 +109,7 @@ python main.py
 - `/server_info`：顯示所在伺服器的詳細資訊
 - `/welcome_active welcome_channel:<頻道> [rules_channel:<頻道>] [role_channel:<頻道>]`：啟用歡迎訊息，設定歡迎頻道（必填）、規則頻道（選填）、身份組頻道（選填）。需要「管理伺服器」權限。
 - `/welcome_inactive`：停用本伺服器的歡迎訊息功能。需要「管理伺服器」權限。
+- `/reaction_roles message:<文字> pairs:<表符 身份組 表符 身份組 …> [channel:<頻道>]`：發送表符身份組訊息（表符＋身份組一對一、以空白分隔，最多 20 組），未指定頻道時自動使用 `/welcome_active` 設定的身份組領取頻道；發送後機器人會自動按下所有表符，成員按下表符獲得身份組、取消表符則收回。每個伺服器可同時保留多則領取訊息（上限 10 則）。需要「管理伺服器」權限。
 - `/music_join`：機器人加入你目前所在的語音頻道；需要已安裝 `wavelink` 並設定 Lavalink。
 - `/music_leave`：機器人離開目前所在的語音頻道，並清空該伺服器的播放佇列。
 - `/music_play query:<關鍵字或網址>`：搜尋並播放音樂；若機器人尚未加入語音頻道會自動加入。若目前已經有歌曲在播放（或暫停中），新點的歌會依序排入佇列（FIFO），而不是直接取代。
@@ -115,6 +117,20 @@ python main.py
 - `/music_queue`：顯示目前伺服器正在播放的歌曲，以及接下來排隊中的清單（最多列出前 10 首）。
 - `/music_queue_clear`：清空目前伺服器的播放佇列，正在播放中的歌曲不受影響。
 - `/music_node_status`：查看目前所有已註冊 Lavalink 節點的連線狀態（URI、連線狀態、Session ID、目前連線的伺服器數）；僅使用者可見。
+
+### 表符身份組功能說明
+
+`/reaction_roles` 用來發送「按表符領身份組」的訊息：機器人送出訊息後會自己先把所有指定的表符按一輪，成員按下表符即可獲得對應身份組，取消表符則自動收回；每個伺服器可同時保留多則領取訊息（上限 10 則，達上限時會提示先刪除舊訊息），設定儲存於 `reaction_roles.json`，重啟後不會遺失（舊的單則訊息格式會自動遷移）。
+
+**反應限速**：成員對「同一個表符」的發放／收回動作最快每 5 秒生效一次；冷卻期間內重複按／取消同一個表符會被靜默忽略（不同表符、不同成員互不影響），避免高頻點擊洗身份組。冷卻狀態儲存於 `reaction_roles_cooldowns.json`，重啟後仍有效。
+
+`pairs` 參數的拆分規則：
+
+- 以**空白分隔**的自動拆分：`pairs` 會先依空白切成 token，依序「表符 → 身份組 → 表符 → 身份組…」兩兩一組解析，例如：`🎉 @帥 🎮 @打電動`。
+- 表符支援 Unicode 表符與自訂表符代碼（`<:name:id>`、`<a:name:id>`，需真實的 13～20 位 ID）；純文字（如英文單字）不會被誤判成表符，中文身份組名稱可以安全使用。
+- 身份組支援三種寫法：@提及（`<@&id>`）、純數字 ID、身份組名稱（不分大小寫）。因為名稱本身不能含空白，**含空白的名稱請改用 @提及或 ID**。
+- 同一個表符只能對應一個身份組；單一訊息最多 20 組（Discord 反應數上限）。
+- 解析失敗時會停在第一個無法解析的位置並回覆中文錯誤訊息（指出第 N 組與原因：無法辨識的表符、表符重複、缺少身份組、找不到身份組、超過上限），先前已成功解析的配對仍會保留在錯誤訊息外的檢查流程中；任何錯誤存在時都不會發送訊息。
 
 ### 歡迎訊息功能說明
 
@@ -169,6 +185,7 @@ Supported features:
 - `/server_info`: display detailed server information
 - `/welcome_active`: set up a server welcome message (welcome channel required; rules and role channels optional)
 - `/welcome_inactive`: disable the server welcome message feature
+- `/reaction_roles`: post a reaction-role message with emoji + role pairs (multiple messages per server); members gain the role by reacting and lose it when un-reacting. Requires **Manage Server** permission
 - `/music_join`: join the voice channel where the user is currently connected
 - `/music_leave`: leave the current voice channel
 - `/music_play <query>`: search and play music; automatically queues the track if something is already playing (accepts keywords, or a YouTube/SoundCloud URL)
@@ -258,6 +275,7 @@ When launched, the bot starts the Flask background server from `cogs/web_server.
 - `/server_info`: display the current server's details
 - `/welcome_active welcome_channel:<channel> [rules_channel:<channel>] [role_channel:<channel>]`: enable welcome messages with a required welcome channel and optional rules/role channels. Requires **Manage Server** permission.
 - `/welcome_inactive`: disable welcome messages for this server. Requires **Manage Server** permission.
+- `/reaction_roles message:<text> pairs:<emoji role emoji role ...> [channel:<channel>]`: post a reaction-role message to the role channel configured via `/welcome_active` (or the given channel). Emoji + role pairs are space-separated, one-to-one, up to 20 pairs; the bot reacts with every emoji first, and members gain or lose the matching role as they add or remove reactions. Each server keeps up to 10 reaction-role messages at once. Requires **Manage Server** permission.
 - `/music_join`: join the user's current voice channel. Requires `wavelink` and a configured Lavalink node.
 - `/music_leave`: leave the current voice channel, and clear that server's playback queue.
 - `/music_play query:<keywords or URL>`: search and play music; auto-joins your voice channel if the bot isn't connected yet. If something is already playing (or paused), the new track is appended to the FIFO queue instead of replacing it.
@@ -265,6 +283,20 @@ When launched, the bot starts the Flask background server from `cogs/web_server.
 - `/music_queue`: show what's currently playing plus the upcoming tracks in the queue (up to the first 10).
 - `/music_queue_clear`: clear the current server's queue. The currently playing track is not affected.
 - `/music_node_status`: view the connection status of all registered Lavalink nodes (URL, connection state, Session ID, connected guild count). Ephemeral (only visible to you).
+
+### Reaction Roles Feature
+
+`/reaction_roles` posts a reaction-role message: after sending it, the bot reacts with every configured emoji first, so members can gain the matching role by reacting and lose it when the reaction is removed. Each server can keep multiple reaction-role messages at once (up to 10; the command asks you to remove old ones when full). Settings are stored in `reaction_roles.json` and persist across restarts (the old single-message format is migrated automatically).
+
+**Reaction rate limit**: per (member, emoji) pair, a grant/revoke takes effect at most once every 5 seconds; repeated clicks/un-reacts on the same emoji during the cooldown are silently ignored (other emojis and other members are unaffected), preventing role spam through rapid toggling. Cooldown state is stored in `reaction_roles_cooldowns.json` and survives restarts.
+
+How the `pairs` parameter is parsed:
+
+- **Space-separated auto-splitting**: the string is split on whitespace into tokens, then consumed two at a time (emoji → role → emoji → role ...), e.g. `🎉 @Mods 🎮 @Gamer`.
+- Both Unicode emoji and custom emoji codes (`<:name:id>`, `<a:name:id>`, with a real 13-20 digit ID) are accepted; plain text (e.g. English words) is never mistaken for an emoji, and CJK role names are safe to use.
+- Roles can be given three ways: an @mention (`<@&id>`), a numeric ID, or a role name (case-insensitive). Since names cannot contain spaces, **use a mention or ID for names with spaces**.
+- Each emoji may map to only one role; a single message supports up to 20 pairs (Discord's reaction limit).
+- On a parse failure the parser stops at the first unresolvable token and replies with a Chinese error message (pair number and reason: unrecognized emoji, duplicate emoji, missing role, role not found, or over the limit); successfully parsed pairs up to that point are still kept for the remaining validation. No message is sent if any error exists.
 
 ### Welcome Message Feature
 

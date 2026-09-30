@@ -370,6 +370,7 @@ class General(commands.Cog):
     )
     @app_commands.default_permissions(manage_emojis_and_stickers=True)
     @app_commands.checks.has_permissions(manage_emojis_and_stickers=True)  # H3: 執行期檢查，伺服器端覆寫權限也擋得住
+    @app_commands.guild_only()
     async def steal(
         self,
         interaction: discord.Interaction,
