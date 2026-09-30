@@ -4,9 +4,6 @@ Flask
 _pycache_/
 __pycache__/
 .venv
-welcome_settings.json
-reaction_roles.json
-reaction_roles_cooldowns.json
 cogs/__pycache__/*
 .freebuff/
 .pytest_cache/

@@ -228,6 +228,15 @@
       </article>
 
       <article class="card">
+        <div class="tag">Auto Reply</div>
+        <h2>關鍵字自動回覆</h2>
+        <ul>
+          <li><strong>/auto_reply_add</strong> <em>keyword:&lt;關鍵字&gt; reply:&lt;回覆內容&gt; [channel:&lt;頻道&gt;]</em>：新增自動回覆規則。成員訊息「包含」關鍵字（不分大小寫、忽略多餘空白）時，機器人會引用該訊息自動回覆，且一律不 @ 任何人；未指定 <em>channel</em> 時整個伺服器生效。每個伺服器上限 10 條規則；一則訊息最多觸發第一條命中的規則；同一成員對同一條規則 3 秒內重複觸發不會重複回覆。需「管理伺服器」權限。</li>
+          <li><strong>/auto_reply_remove</strong>：刪除自動回覆規則。送出後自動抓取目前<strong>已生效</strong>的偵測關鍵字製成下拉選單供選取；選取後會先顯示確認訊息（附「確認刪除／取消」按鈕，只有執行指令的人能按，60 秒未操作自動失效）。需「管理伺服器」權限。</li>
+        </ul>
+      </article>
+
+      <article class="card">
         <div class="tag">Music</div>
         <h2>語音功能</h2>
         <ul>
