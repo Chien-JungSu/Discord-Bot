@@ -288,6 +288,8 @@ def main():
                 return None
             channel_id_str = str(message.channel.id)
             for rule in self._get_rules(gid):
+                if not ar._rule_enabled(rule):
+                    continue  # 被暫停的規則保留設定但不觸發
                 scope = rule.get('scope')
                 if scope and scope != ar.SCOPE_ALL and scope != channel_id_str:
                     continue
@@ -352,8 +354,8 @@ def main():
 
         # ---------- 13. 編輯介面的按鈕與輸入框結構 ----------
         rule_ui = cog3._get_rules(gid)[2]
-        check([b.label for b in ar.AutoReplyEditActionView(cog3, None, rule_ui).children] == ['編輯關鍵字', '編輯回覆內容', '取消'],
-              '編輯介面只有三顆按鈕')
+        check([b.label for b in ar.AutoReplyEditActionView(cog3, None, rule_ui).children] == ['編輯關鍵字', '編輯回覆內容', '⏸️ 暫停規則', '取消'],
+              '編輯介面只有四顆按鈕（含暫停）')
 
         kw_modal = ar.AutoReplyEditKeywordsModal(cog3, None, rule_ui, page=1)
         check(len(kw_modal.inputs) == ar.FIELDS_PER_PAGE, '關鍵字視窗每頁 5 個輸入框')
@@ -425,16 +427,67 @@ def main():
         check('最多' in (inter_over.sent[0]['content'] or ''), '填滿兩頁超過上限時擋下並說明上限')
         check(ar._rule_keywords(big_rule) == before_over, '超過上限時不會存檔（原本的清單不動）')
 
-        # ---------- 15. /auto_reply_list 的總覽 embed ----------
-        big_rule['replies'] = [f'回覆{i}' * 60 for i in range(ar.MAX_REPLIES_PER_RULE)]
+        # ---------- 15. /auto_reply_list 的分頁 embed ----------
+        big_rule['replies'] = [f'回覆{i}' * 200 for i in range(ar.MAX_REPLIES_PER_RULE)]
         big_rule['reply'] = big_rule['replies'][0]
-        overview = ar.build_rules_overview_embed(cog3._get_rules(gid), FakeGuild(gid))
-        check(len(overview.fields) == len(cog3._get_rules(gid)), '總覽：一條規則一個欄位')
-        check(str(len(cog3._get_rules(gid))) in overview.title, '總覽：標題帶上規則數')
-        check(ar._rule_keywords(big_rule)[0] in overview.fields[2].value, '總覽：欄位內含關鍵字')
-        check('還有' in overview.fields[2].value, f'總覽：回覆超過 {ar.MAX_REPLIES_SHOWN_IN_LIST} 則時只顯示前幾則')
-        check(len(overview) <= 6000, f'總覽：embed 總長度在 Discord 上限內（{len(overview)}）')
-        check(all(len(f.value) <= 1024 for f in overview.fields), '總覽：每個欄位在 Discord 上限內')
+        page_embed = ar.build_rule_page_embed(big_rule, FakeGuild(gid), 3, 8)
+        check('第 3/8 頁' in page_embed.title, '分頁：一頁一條規則，標題帶頁碼')
+        check(ar._rule_keywords(big_rule)[0] in page_embed.description, '分頁：內含關鍵字')
+        check('回覆內容' in page_embed.description and '🌐' in page_embed.description, '分頁：內含回覆內容與生效範圍')
+        check(len(page_embed) <= 6000 and len(page_embed.description) <= 4096,
+              f'分頁：長內容會截斷且 embed 長度在 Discord 上限內（{len(page_embed)}）')
+        check(len(page_embed.description) <= ar.LIST_DESCRIPTION_MAX, '分頁：內文不超過字數預算')
+        check(f"{ar.LIST_REPLY_TEXT_LIMIT - 1}…".replace('-', '') in page_embed.description.replace('-', '')
+              or '…' in page_embed.description, '分頁：過長的單則回覆會截斷')
+        # 預算真的不夠時（例如未來調高回覆上限）要標示省略，而不是硬塞爆 embed
+        saved_max = ar.LIST_DESCRIPTION_MAX
+        ar.LIST_DESCRIPTION_MAX = 300
+        tight = ar.build_rule_page_embed(big_rule, ui_guild, 1, 1)
+        ar.LIST_DESCRIPTION_MAX = saved_max
+        check('省略' in tight.description and '/auto_reply_edit' in tight.description,
+              '分頁：放不下的回覆會標示省略並提示去哪裡看完整內容')
+        check(len(tight.description) <= 300, '分頁：預算極小時也不會超過上限')
+
+        list_rules = cog3._get_rules(gid)
+        list_view = ar.AutoReplyListView(cog3, ui_guild, list_rules)
+        check([b.label for b in list_view.children] == ['◀️ 上一頁', '下一頁 ▶️'], '分頁：只有上一頁／下一頁兩顆按鈕')
+        check(list_view.prev_button.disabled and not list_view.next_button.disabled, '分頁：第一頁不能往前翻')
+        list_view.page = len(list_rules) - 1
+        list_view._sync_buttons()
+        check(not list_view.prev_button.disabled and list_view.next_button.disabled, '分頁：最後一頁不能往後翻')
+        check(ar.build_rule_page_embed(list_rules[list_view.page], ui_guild, len(list_rules), len(list_rules)).title,
+              '分頁：可以組出最後一頁的 embed')
+
+        # ---------- 16. 暫停／恢復但保留設定（編輯介面的暫停鈕） ----------
+        check(ar._rule_enabled(big_rule), '預設啟用')
+        check(cog3.set_rule_enabled(gid, big_rule['id'], False), 'set_rule_enabled 暫停規則')
+        check(not ar._rule_enabled(big_rule), '暫停後 _rule_enabled 為 False')
+        check(ar._rule_keywords(big_rule) and ar._rule_replies(big_rule), '暫停後關鍵字與回覆設定仍完整保留')
+        check('⏸️ 已暫停' in ar.build_rule_page_embed(big_rule, ui_guild, 1, 1).description, '總覽會標示已暫停')
+        check(not cog3.set_rule_enabled(gid, 999, False), 'set_rule_enabled 找不到規則回傳 False')
+        check(ar.AutoReplyEditActionView(cog3, ui_guild, big_rule).toggle_rule_button.label == '▶️ 恢復規則',
+              '編輯介面：已暫停的規則暫停鈕寫著「恢復規則」')
+        check(ar.AutoReplyEditActionView(cog3, ui_guild, list_rules[0]).toggle_rule_button.label == '⏸️ 暫停規則',
+              '編輯介面：啟用中的規則暫停鈕寫著「暫停規則」')
+        edit_view = ar.AutoReplyEditActionView(cog3, ui_guild, big_rule)
+        check([b.label for b in edit_view.children][:3] == ['編輯關鍵字', '編輯回覆內容', '▶️ 恢復規則'],
+              '編輯介面：暫停按鈕排在取消之前')
+        toggle_inter = FakeInteraction()
+        asyncio.run(edit_view.toggle_rule_button.callback(toggle_inter))
+        check(ar._rule_enabled(big_rule), '按編輯介面的恢復鈕可恢復規則')
+        check(edit_view.toggle_rule_button.label == '⏸️ 暫停規則', '恢復後按鈕文字同步換回暫停')
+        check('已恢復自動回覆規則' in toggle_inter.sent[0]['title'], '恢復後回報結果訊息')
+        asyncio.run(edit_view.toggle_rule_button.callback(FakeInteraction()))
+        check(not ar._rule_enabled(big_rule), '再按一次可暫停規則')
+        check(ar._rule_keywords(big_rule) and ar._rule_replies(big_rule), '在編輯介面暫停也不會動到設定')
+
+        check(not ar._rule_enabled(big_rule), '編輯介面操作後 big_rule 為暫停狀態')
+        hook3 = _HookCog(cog3.settings)
+        hit_text = f'請問一下 {ar._rule_keywords(big_rule)[0]} 這件事'
+        check(hook3.detect(FakeMessage(hit_text, 999, 90, guild=guild)) is None, '已暫停的規則不再觸發回覆')
+        cog3.set_rule_enabled(gid, big_rule['id'], True)
+        check(hook3.detect(FakeMessage(hit_text, 999, 91, guild=guild)) is not None, '恢復後規則重新觸發回覆')
+        check('enabled' not in migrated_rule or migrated_rule['enabled'] is True, '舊格式資料載入後視為啟用')
 
     print()
     print(f'共 {len(PASS) + len(FAIL)} 項測試：{len(PASS)} 通過，{len(FAIL)} 失敗')
