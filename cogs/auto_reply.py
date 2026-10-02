@@ -31,6 +31,12 @@ MAX_RULE_NAME_LENGTH = 40
 MAX_REPLIES_PER_RULE = 10
 # 單一規則最多可以有幾個關鍵字（訊息命中「任一」關鍵字就會觸發該規則）
 MAX_KEYWORDS_PER_RULE = 10
+# 編輯用的彈出視窗每一頁放幾個輸入框。
+# Discord 限制：每個彈出視窗最多只能放 5 個輸入框，所以關鍵字／回覆各 10 項要分兩頁（第 1–5 項、第 6–10 項）。
+FIELDS_PER_PAGE = 5
+# /auto_reply_list 總覽 embed 中，每條規則最多顯示幾則回覆（避免單一 embed 超過 Discord 的字數上限）
+MAX_REPLIES_SHOWN_IN_LIST = 3
+
 # 生效範圍的內部表示：'all'（整個伺服器）或頻道 ID 字串（僅限該文字頻道）
 SCOPE_ALL = 'all'
 
@@ -255,6 +261,34 @@ def build_delete_confirm_embed(rule: dict, guild: discord.Guild) -> discord.Embe
     return embed
 
 
+def build_rules_overview_embed(rules: list, guild: discord.Guild) -> discord.Embed:
+    """所有規則的總覽 embed（/auto_reply_list 用）：一條規則一個欄位，顯示關鍵字、回覆內容與生效範圍。
+
+    Discord 單一 embed 的總字數有上限，所以每條規則的回覆只顯示前 MAX_REPLIES_SHOWN_IN_LIST 則，
+    其餘用「還有 N 則」帶過，並把每個欄位再截斷到安全長度。
+    """
+    embed = discord.Embed(
+        title=f'📋 自動回覆規則總覽（{len(rules)}/{MAX_RULES_PER_GUILD}）',
+        description='以下為此伺服器目前**已生效**的自動回覆規則。',
+        color=discord.Color.blue(),
+    )
+    for index, rule in enumerate(rules, start=1):
+        keywords = _rule_keywords(rule)
+        replies = _rule_replies(rule)
+        shown = replies[:MAX_REPLIES_SHOWN_IN_LIST]
+        lines = [f'{i}. {_truncate(reply, 60)}' for i, reply in enumerate(shown, start=1)]
+        if len(replies) > len(shown):
+            lines.append(f'…還有 {len(replies) - len(shown)} 則')
+        value = (
+            f'**關鍵字**（共 {len(keywords)} 個）：{_keywords_text(rule, 80)}\n'
+            f'**回覆內容**（共 {len(replies)} 則）：\n' + '\n'.join(lines) + '\n'
+            f'**生效範圍**：{_scope_text(rule.get("scope"), guild)}'
+        )
+        embed.add_field(name=f'{index}. {_truncate(_rule_name(rule), 40)}', value=_truncate(value, 1000), inline=False)
+    embed.set_footer(text='要修改規則用 /auto_reply_edit；要刪除整條規則用 /auto_reply_remove。')
+    return embed
+
+
 class AutoReplyRuleSelect(discord.ui.Select):
     """刪除用的下拉選單：選項就是目前「已生效」的自動回覆規則（規則名稱，舊規則退回關鍵字）。"""
 
@@ -367,10 +401,304 @@ class ConfirmDeleteView(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=self)
 
 
+class AutoReplyEditSelect(discord.ui.Select):
+    """編輯用的下拉選單：選項是目前所有自動回覆規則（規則名稱，舊規則退回關鍵字）。"""
+
+    def __init__(self, cog: 'AutoReply', guild: discord.Guild, rules: list):
+        self.cog = cog
+        self.guild = guild
+        self.rules = rules
+        options = []
+        for index, rule in enumerate(rules, start=1):
+            name = _truncate(_rule_name(rule), 80)
+            desc = f'{_scope_text(rule.get("scope"), guild)}｜{_keywords_text(rule, 40)}'
+            options.append(discord.SelectOption(
+                label=f'{index}. {name}'[:100],
+                description=_truncate(desc, 100),
+                value=str(rule.get('id')),
+            ))
+        super().__init__(
+            placeholder='選擇要編輯的自動回覆規則…',
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        rule = next((r for r in self.rules if str(r.get('id')) == self.values[0]), None)
+        if rule is None:
+            await interaction.response.send_message('❌ 找不到這條規則，它可能已被其他管理員刪除。', ephemeral=True)
+            return
+        # 選完在同一則訊息上顯示規則詳情＋編輯按鈕
+        view = AutoReplyEditActionView(self.cog, self.guild, rule)
+        view.initiator_id = interaction.user.id
+        await interaction.response.edit_message(
+            embed=build_rule_summary_embed(rule, self.guild),
+            view=view,
+        )
+        try:
+            view.message = await interaction.original_response()
+        except discord.HTTPException:
+            pass
+
+
+class AutoReplyEditView(discord.ui.View):
+    def __init__(self, cog: 'AutoReply', guild: discord.Guild, rules: list):
+        super().__init__(timeout=180)
+        self.add_item(AutoReplyEditSelect(cog, guild, rules))
+
+
+class AutoReplyEditActionView(discord.ui.View):
+    """選取規則後的編輯按鈕：編輯關鍵字／編輯回覆內容／取消，只有執行指令的人能按。
+    按鈕按下後不會停用，方便連續編輯；180 秒沒動作才自動失效。
+    """
+
+    def __init__(self, cog: 'AutoReply', guild: discord.Guild, rule: dict):
+        super().__init__(timeout=180)
+        self.cog = cog
+        self.guild = guild
+        self.rule = rule
+        self.initiator_id: Optional[int] = None
+        self.message: Optional[discord.Message] = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if self.initiator_id is not None and interaction.user.id != self.initiator_id:
+            await interaction.response.send_message('❌ 只有執行編輯指令的人才能操作這些按鈕。', ephemeral=True)
+            return False
+        return True
+
+    def _disable_all(self):
+        for item in self.children:
+            if isinstance(item, discord.ui.Button):
+                item.disabled = True
+
+    async def on_timeout(self):
+        self._disable_all()
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+    @discord.ui.button(label='編輯關鍵字', style=discord.ButtonStyle.primary, emoji='✏️')
+    async def edit_keywords_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(AutoReplyEditKeywordsModal(self.cog, self.guild, self.rule))
+
+    @discord.ui.button(label='編輯回覆內容', style=discord.ButtonStyle.success, emoji='💬')
+    async def edit_replies_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(AutoReplyEditRepliesModal(self.cog, self.guild, self.rule))
+
+    @discord.ui.button(label='取消', style=discord.ButtonStyle.secondary)
+    async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self._disable_all()
+        embed = discord.Embed(
+            title='已離開編輯',
+            description='自動回覆規則保持不變。',
+            color=discord.Color.light_grey(),
+        )
+        await interaction.response.edit_message(embed=embed, view=self)
+
+
+class AutoReplyListEditModal(discord.ui.Modal):
+    """編輯「關鍵字清單」或「回覆內容清單」的彈出視窗基底類別（兩種清單共用同一套流程）。
+
+    互動方式：
+    - 每頁 FIELDS_PER_PAGE（5）個輸入框，預先帶入目前清單的內容，可直接改、可留空、也可往空格補
+    - **留空＝刪除該項**；沒編到的那一頁（第 6–10 項）保持原樣，不會被動到
+    - 送出後若整份清單都空了，會再問是否要刪除整條規則（不會安靜地存成空清單）
+    """
+
+    IS_KEYWORD = True  # True＝編輯關鍵字、False＝編輯回覆內容
+    LABEL = '項目'
+    ITEM_MAX_LENGTH = MAX_KEYWORD_LENGTH
+    MAX_ITEMS = MAX_KEYWORDS_PER_RULE
+    SUCCESS_TITLE = '✅ 已更新'
+    MORE_BUTTON_LABEL = '編輯下一頁'
+    MODAL_KIND = 'item'
+
+    def __init__(self, cog: 'AutoReply', guild: discord.Guild, rule: dict, page: int = 1):
+        super().__init__(title=self._build_title(rule, page))
+        self.cog = cog
+        self.guild = guild
+        self.rule = rule
+        self.page = page
+        self.start = (page - 1) * FIELDS_PER_PAGE  # 這一頁是清單的第幾項開始
+        items = self._current_items()
+        self.inputs: list = []
+        for offset in range(FIELDS_PER_PAGE):
+            number = self.start + offset + 1
+            text_input = discord.ui.TextInput(
+                label=f'{self.LABEL} {number}',
+                placeholder=f'{self.LABEL} {number}（最多 {self.ITEM_MAX_LENGTH} 字，留空＝刪除）',
+                default=items[number - 1][: self.ITEM_MAX_LENGTH] if number <= len(items) else '',
+                required=False,  # 留空＝刪除該項，所以不是必填
+                max_length=self.ITEM_MAX_LENGTH,
+                custom_id=f'auto_reply_{self.MODAL_KIND}_p{page}_{offset}',
+                style=discord.TextStyle.short if self.IS_KEYWORD else discord.TextStyle.paragraph,
+            )
+            self.inputs.append(text_input)
+            self.add_item(text_input)
+
+    def _build_title(self, rule: dict, page: int) -> str:
+        """視窗標題（Discord 上限 45 字）：標明這一頁負責第幾項到第幾項。"""
+        start = (page - 1) * FIELDS_PER_PAGE + 1
+        end = start + FIELDS_PER_PAGE - 1
+        return _truncate(f'編輯{self.LABEL} {start}-{end}：{_rule_name(rule)}', 45)
+
+    def _current_items(self) -> list:
+        """規則目前的這一份清單（關鍵字／回覆內容）。"""
+        return _rule_keywords(self.rule) if self.IS_KEYWORD else _rule_replies(self.rule)
+
+    def _summary(self) -> str:
+        return _keywords_text(self.rule) if self.IS_KEYWORD else _format_replies_block(self.rule)
+
+    def _apply(self, items: list) -> bool:
+        if self.IS_KEYWORD:
+            return self.cog.set_rule_keywords(self.guild.id, self.rule.get('id'), items)
+        return self.cog.set_rule_replies(self.guild.id, self.rule.get('id'), items)
+
+    async def _ask_delete_rule(self, interaction: discord.Interaction):
+        """整份清單都留空時：這條規則已經沒有可用的項目了，先問要不要整條刪掉。"""
+        view = ConfirmDeleteView(self.cog, self.guild, self.rule)
+        view.initiator_id = interaction.user.id
+        await interaction.response.send_message(
+            content=(
+                f'⚠️ 你把**{self.LABEL}**的每一格都留空了（留空＝刪除該項），'
+                f'這條規則就沒有{self.LABEL}可以用了。\n是否要刪除整條規則？'
+            ),
+            embed=build_delete_confirm_embed(self.rule, self.guild),
+            view=view,
+            ephemeral=True,
+        )
+        try:
+            view.message = await interaction.original_response()
+        except discord.HTTPException:
+            pass  # 拿不到訊息物件只是沒辦法在逾時時把按鈕變灰，功能不受影響
+
+    async def on_submit(self, interaction: discord.Interaction):
+        # 這一頁輸入框填的項目（留空的格子自動跳過＝刪除該項）
+        page_items = [clean for clean in (_clean_field_value(t.value, self.IS_KEYWORD) for t in self.inputs) if clean]
+        old_items = self._current_items()
+        tail_items = old_items[self.start + FIELDS_PER_PAGE:]  # 沒編到的那一頁保持原樣
+        items, duplicates = _merge_page_items(page_items, tail_items, self.IS_KEYWORD)
+
+        errors = _validate_item_list(items, self.ITEM_MAX_LENGTH, self.MAX_ITEMS, self.LABEL)
+        if errors:
+            await interaction.response.send_message(
+                f'❌ 無法儲存{self.LABEL}：\n\n' + '\n'.join(errors),
+                ephemeral=True,
+            )
+            return
+
+        if not items:
+            await self._ask_delete_rule(interaction)  # 全空＝這條規則已經沒用了，問要不要刪掉
+            return
+
+        if not self._apply(items):
+            await interaction.response.send_message('❌ 找不到這條規則，它可能已被其他管理員刪除。', ephemeral=True)
+            return
+        try:
+            _save_auto_reply_settings(self.cog.settings)
+        except Exception as e:
+            self._apply(old_items)  # 回滾記憶體狀態
+            traceback.print_exc()
+            await self.cog.bot.notify_owner_error(e, interaction, extra_info='auto_reply_edit: 儲存設定失敗')
+            await interaction.response.send_message('❌ 儲存設定時發生錯誤，變更未生效，已回報開發者。', ephemeral=True)
+            return
+
+        await self._send_success(interaction, items, old_items, duplicates)
+
+    async def _send_success(self, interaction, items: list, old_items: list, duplicates: list):
+        added = [x for x in items if x not in old_items]
+        removed = [x for x in old_items if x not in items]
+        lines = [
+            f'**規則名稱**：{_rule_name(self.rule)}',
+            f'**{self.LABEL}**（共 {len(items)} 項）：\n{self._summary()}',
+        ]
+        if added:
+            lines.append('**新增**：' + '、'.join(_truncate(x, 40) for x in added))
+        if removed:
+            lines.append('**已刪除**：' + '、'.join(_truncate(x, 40) for x in removed))
+        if duplicates:
+            lines.append('（已略過重複關鍵字：' + '、'.join(duplicates) + '）')
+        if not self.IS_KEYWORD:
+            lines.append('🎲 隨機回覆模式：每次觸發從上面隨機挑選一則。' if len(items) > 1
+                         else 'ℹ️ 只剩一則回覆，已是固定回覆模式（不再隨機挑選）。')
+        embed = discord.Embed(title=self.SUCCESS_TITLE, description='\n'.join(lines), color=discord.Color.green())
+
+        # 項目超過一頁時，第 6–10 項要再開下一頁視窗來編輯
+        view = None
+        if len(items) > FIELDS_PER_PAGE:
+            view = AutoReplyEditSecondPageView(self.cog, self.guild, self.rule, type(self), self.MORE_BUTTON_LABEL)
+            embed.set_footer(text=f'第 {FIELDS_PER_PAGE + 1}-{len(items)} 項在下一頁，可按下方按鈕繼續編輯。')
+        message = await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        if view is not None:
+            view.message = message
+
+
+class AutoReplyEditSecondPageView(discord.ui.View):
+    """存檔後想繼續編輯第 6–10 項時的按鈕（每個彈出視窗最多 5 個輸入框，所以要分頁）。"""
+
+    def __init__(self, cog: 'AutoReply', guild: discord.Guild, rule: dict, modal_cls, label: str):
+        super().__init__(timeout=180)
+        self.cog = cog
+        self.guild = guild
+        self.rule = rule
+        self.modal_cls = modal_cls
+        self.initiator_id: Optional[int] = None
+        self.message: Optional[discord.Message] = None
+        button = discord.ui.Button(label=label, style=discord.ButtonStyle.primary, emoji='✏️')
+        button.callback = self._open_next_page  # discord.ui.Button 的 callback 要另外指派
+        self.add_item(button)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if self.initiator_id is not None and interaction.user.id != self.initiator_id:
+            await interaction.response.send_message('❌ 只有執行編輯指令的人才能操作這些按鈕。', ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+    async def _open_next_page(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(self.modal_cls(self.cog, self.guild, self.rule, page=2))
+
+
+class AutoReplyEditKeywordsModal(AutoReplyListEditModal):
+    """編輯關鍵字清單：每頁 5 格、最多 10 個關鍵字（訊息命中任一個即觸發）。"""
+
+    IS_KEYWORD = True
+    LABEL = '關鍵字'
+    ITEM_MAX_LENGTH = MAX_KEYWORD_LENGTH
+    MAX_ITEMS = MAX_KEYWORDS_PER_RULE
+    SUCCESS_TITLE = '✅ 已更新關鍵字'
+    MORE_BUTTON_LABEL = '編輯第 6-10 個關鍵字'
+    MODAL_KIND = 'keywords'
+
+
+class AutoReplyEditRepliesModal(AutoReplyListEditModal):
+    """編輯回覆內容清單：每頁 5 格、最多 10 則回覆（超過一則時觸發會隨機挑選）。"""
+
+    IS_KEYWORD = False
+    LABEL = '回覆內容'
+    ITEM_MAX_LENGTH = MAX_REPLY_LENGTH
+    MAX_ITEMS = MAX_REPLIES_PER_RULE
+    SUCCESS_TITLE = '✅ 已更新回覆內容'
+    MORE_BUTTON_LABEL = '編輯第 6-10 則回覆'
+    MODAL_KIND = 'replies'
+
+
 class AutoReply(commands.Cog):
     """關鍵字自動回覆：管理員新增「規則名稱、偵測關鍵字 → 機器人回覆內容 → 生效範圍」規則，
     成員訊息包含關鍵字時機器人自動回覆；一條規則可以有多個關鍵字（命中任一即觸發）與多則回覆內容
     （多於一則時每次觸發隨機挑選，即隨機回覆模式）。每個伺服器上限 MAX_RULES_PER_GUILD 條規則。
+    提供四個指令：/auto_reply_add 新增、/auto_reply_edit 編輯、/auto_reply_list 檢視、/auto_reply_remove 刪除。
     """
 
     def __init__(self, bot: commands.Bot):
@@ -590,10 +918,68 @@ class AutoReply(commands.Cog):
         )
         if warning:
             embed.add_field(name='⚠️ 權限提醒', value=warning, inline=False)
-        embed.set_footer(text='訊息內容「包含」關鍵字即觸發（不分大小寫、忽略多餘空白）；同一人對同一條規則 3 秒內不重複回覆。')
+        embed.set_footer(text='訊息內容「包含」關鍵字即觸發（不分大小寫、忽略多餘空白）；同一人對同一條規則 3 秒內不重複回覆。之後可用 /auto_reply_edit 的輸入框自行增修關鍵字與回覆內容（留空＝刪除該項；超過一則回覆時會隨機挑選）。')
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @app_commands.command(name='auto_reply_remove', description='刪除自動回覆規則（從目前「已生效」的自動回覆中選取，刪除前需確認）')
+    @app_commands.command(name='auto_reply_edit', description='編輯自動回覆規則：在輸入框中自行編輯關鍵字與回覆內容（留空＝刪除該項；超過一則回覆時自動開啟隨機回覆模式）')
+    @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.checks.has_permissions(manage_guild=True)  # H3: 執行期檢查，伺服器端覆寫權限也擋得住
+    async def auto_reply_edit(self, interaction: discord.Interaction):
+        if interaction.guild is None:  # guild_only 已擋，這裡只是型別上的保險
+            return
+        guild = interaction.guild
+
+        rules = self._get_rules(guild.id)
+        if not rules:
+            embed = discord.Embed(
+                title='ℹ️ 目前沒有任何自動回覆規則',
+                description='此伺服器尚未新增任何自動回覆規則，先用 `/auto_reply_add` 新增吧！',
+                color=discord.Color.light_grey(),
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        view = AutoReplyEditView(self, guild, rules)
+        embed = discord.Embed(
+            title='✏️ 編輯自動回覆規則',
+            description=(
+                f'此伺服器目前有 **{len(rules)}/{MAX_RULES_PER_GUILD}** 條自動回覆規則。\n'
+                '請從下方選單選擇要編輯的規則（選項即為**規則名稱**，舊規則會顯示偵測關鍵字），'
+                '選取後可按「**編輯關鍵字**」或「**編輯回覆內容**」開啟輸入框自行填寫：\n'
+                '• 每個輸入框對應清單中的一項，並已預先帶入現有內容，可直接修改\n'
+                '• **留空＝刪除該項**；每頁 5 格、最多 10 項，第 6–10 項可按存檔訊息上的按鈕開下一頁\n'
+                '• 關鍵字或回覆內容**全部留空**時，會再問你要不要把整條規則刪掉'
+            ),
+            color=discord.Color.blurple(),
+        )
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    @app_commands.command(name='auto_reply_list', description='列出目前所有自動回覆規則（規則名稱、關鍵字、回覆內容、生效範圍）')
+    @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.checks.has_permissions(manage_guild=True)  # H3: 執行期檢查，伺服器端覆寫權限也擋得住
+    async def auto_reply_list(self, interaction: discord.Interaction):
+        if interaction.guild is None:  # guild_only 已擋，這裡只是型別上的保險
+            return
+        guild = interaction.guild
+
+        rules = self._get_rules(guild.id)
+        if not rules:
+            embed = discord.Embed(
+                title='ℹ️ 目前沒有任何自動回覆規則',
+                description='此伺服器尚未新增任何自動回覆規則，先用 `/auto_reply_add` 新增吧！',
+                color=discord.Color.light_grey(),
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        await interaction.response.send_message(
+            embed=build_rules_overview_embed(rules, guild),
+            ephemeral=True,
+        )
+
+    @app_commands.command(name='auto_reply_remove', description='刪除自動回覆規則（從目前「已生效」的規則中選取，刪除前需確認）')
     @app_commands.guild_only()
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.checks.has_permissions(manage_guild=True)  # H3: 執行期檢查，伺服器端覆寫權限也擋得住
