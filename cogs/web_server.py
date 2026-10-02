@@ -5,6 +5,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+from typing import Optional
 
 import discord
 from flask import Flask, jsonify, render_template
@@ -19,7 +20,34 @@ app = Flask(__name__, template_folder=os.path.join(BASE_DIR, 'templates'))
 # 檢查檔案修改時間，改完 HTML 重新整理網頁即可看到新版，不用重啟機器人。
 # 成本只是每次渲染多一次 os.stat，對這種小流量儀表板可忽略。
 app.config['TEMPLATES_AUTO_RELOAD'] = True
-APP_START_TIME = time.monotonic()
+
+# ---------- 機器人實際上線時間（以 Discord 連線為準） ----------
+# 為什麼不用「行程啟動時間」：行程活著不等於機器人活著。discord.py 掉線後會
+# 自動重連，若以模組匯入的時間當基準，重連後儀表板會顯示「已連續運行好幾天」，
+# 明明中間斷線過。儀表板要的是「機器人實際連線了多久」，所以基準點綁在
+# on_connect / on_disconnect（由 main.py 的事件呼叫），重連就歸零。
+# 這個值由 Discord 事件執行緒寫入、waitress 工作執行緒讀取；單純的 float 指派
+# 與讀取在 CPython 的 GIL 下是原子的，不需要額外加鎖。
+_bot_connected_since: Optional[float] = None
+
+
+def mark_bot_connected() -> None:
+    """由 main.py 的 on_connect 事件呼叫：從現在開始計算上線時間。"""
+    global _bot_connected_since
+    _bot_connected_since = time.monotonic()
+
+
+def mark_bot_disconnected() -> None:
+    """由 main.py 的 on_disconnect 事件呼叫：標記為離線，上線時間暫停計算。"""
+    global _bot_connected_since
+    _bot_connected_since = None
+
+
+def get_bot_uptime() -> tuple[Optional[float], bool]:
+    """回傳 (已連線秒數, 是否在線)。尚未連線或已斷線時回傳 (None, False)。"""
+    if _bot_connected_since is None:
+        return None, False
+    return time.monotonic() - _bot_connected_since, True
 
 
 def _format_uptime_seconds(total_seconds: float) -> str:
@@ -169,8 +197,9 @@ def bot_stats_api():
     # 修正: guild.member_count 在缺少 Server Members Intent 或快取尚未就緒時可能是 None，
     # 直接 sum() 會丟 TypeError 導致整支 API 回傳 500，前端因此全部顯示 "--"
     total_users = sum((guild.member_count or 0) for guild in bot.guilds)
-    uptime_seconds = time.monotonic() - APP_START_TIME
-    uptime_text = _format_uptime_seconds(uptime_seconds)
+    # 上線時間 = 這次 Discord 連線持續了多久（不是行程跑了多久）
+    uptime_seconds, connected = get_bot_uptime()
+    uptime_text = _format_uptime_seconds(uptime_seconds) if connected else '離線中'
     version = os.getenv('APP_VERSION') or getattr(bot, 'version', None) or discord.__version__
 
     return jsonify({
@@ -178,7 +207,8 @@ def bot_stats_api():
         'guilds': total_servers,
         'users': total_users,
         'latency_ms': latency_ms,
-        'uptime_seconds': uptime_seconds,
+        'connected': connected,
+        'uptime_seconds': uptime_seconds if connected else 0,
         'uptime_text': uptime_text,
         'version': version,
     })

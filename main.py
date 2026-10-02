@@ -9,7 +9,7 @@ from discord import app_commands
 from dotenv import load_dotenv
 
 from cogs.sanitize import redact_secrets
-from cogs.web_server import app, start_web_server
+from cogs.web_server import app, start_web_server, mark_bot_connected, mark_bot_disconnected
 
 # ================= 環境變數載入 =================
 dotenv_path = os.path.join(os.path.dirname(__file__), '.env')
@@ -254,6 +254,30 @@ class MyBot(commands.Bot):
 
 bot = MyBot()
 app.config['BOT'] = bot
+
+
+@bot.event
+async def on_connect():
+    # 儀表板的「運行時間」是以這次連線為準：每次（重）連線都重新計時，
+    # 這樣掉線過就會看得出來，而不是一直顯示從行程啟動算起的天數。
+    mark_bot_connected()
+    print('🟢 已與 Discord 建立連線，上線時間重新開始計算。')
+
+
+@bot.event
+async def on_resumed():
+    # 重要：掉線後如果 session 還能續傳，discord.py 會派發 resumed 而不是 connect
+    # （見 state.py 的 parse_resumed），所以這裡也要重新計時，
+    # 否則儀表板會卡在「離線中」永遠不會恢復計數。
+    mark_bot_connected()
+    print('🟢 已恢復與 Discord 的連線（session resume），上線時間重新開始計算。')
+
+
+@bot.event
+async def on_disconnect():
+    # 非主動關閉時 discord.py 會自動重連，重連後的 on_connect / on_resumed 會再重新計時。
+    mark_bot_disconnected()
+    print('🔴 與 Discord 的連線已中斷（若非主動關閉，將自動重連）。')
 
 
 @bot.event

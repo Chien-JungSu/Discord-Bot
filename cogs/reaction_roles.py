@@ -190,7 +190,8 @@ class ReactionRoles(commands.Cog):
     """表符身份組：發送領取訊息並依成員的反應自動發放／收回身份組。
 
     每個伺服器可同時保留多則領取訊息（上限 MAX_MESSAGES_PER_GUILD），
-    反應事件則依 (guild, user, emoji) 限速，防止高頻點擊／取消洗身份組。
+    反應事件則依 (guild, user, emoji) 限速，防止高頻點擊／取消洗身份組；
+    發送時預設開啟「僅限有效表符」，成員按了不對應身份組的表符會被自動移除。
     """
 
     def __init__(self, bot: commands.Bot):
@@ -235,6 +236,7 @@ class ReactionRoles(commands.Cog):
         message="要發送的訊息文字（建議說明每個表符對應的身份組）",
         pairs="表符＋身份組配對，以空白分隔：`表符 身份組 表符 身份組 …`，例如：`🎉 @帥 🎮 @打電動`（最多 20 組）",
         channel="要發送到的頻道（選填；未填時自動使用 /welcome_active 設定的身份組領取頻道）",
+        strict="是否只保留有效表符（預設開啟）：成員按了不對應任何身份組的表符時，機器人會自動移除該反應（需機器人在該頻道有「管理訊息」權限）",
     )
     @app_commands.guild_only()
     @app_commands.default_permissions(manage_guild=True)
@@ -245,6 +247,7 @@ class ReactionRoles(commands.Cog):
         message: str,
         pairs: str,
         channel: Optional[discord.abc.GuildChannel] = None,
+        strict: bool = True,
     ):
         if interaction.guild is None:  # guild_only 已擋，這裡只是型別上的保險
             return
@@ -348,6 +351,8 @@ class ReactionRoles(commands.Cog):
                 missing_perms.append("發送訊息")
             if not perms.add_reactions:
                 missing_perms.append("新增反應")
+            if strict and not perms.manage_messages:
+                missing_perms.append("管理訊息（僅限有效表符模式需要，用來移除無效反應）")
         if missing_perms:
             embed = discord.Embed(
                 title="❌ 機器人權限不足",
@@ -404,6 +409,8 @@ class ReactionRoles(commands.Cog):
             'channel_id': target_channel.id,
             'message_id': sent.id,
             'pairs': saved_pairs,
+            # 防止亂按：True = 移除不對應任何身份組的表符反應（舊設定沒有此欄位時視為開啟）
+            'strict': bool(strict),
         })
         try:
             _save_reaction_roles(self.settings)
@@ -429,6 +436,12 @@ class ReactionRoles(commands.Cog):
         embed.set_footer(
             text=f"成員按下表符可獲得身份組，取消表符則自動收回。（{len(messages)}/{MAX_MESSAGES_PER_GUILD} 則）"
         )
+        if strict:
+            embed.add_field(
+                name="🛡️ 僅限有效表符",
+                value="成員按下不對應身份組的其他表符時，機器人會自動移除該反應（需「管理訊息」權限）。",
+                inline=False,
+            )
         if failed_emojis:
             embed.add_field(
                 name="⚠️ 部分表符按下失敗",
@@ -488,6 +501,9 @@ class ReactionRoles(commands.Cog):
             None,
         )
         if role_id is None:
+            # 防止亂按：這則訊息設為「僅限有效表符」時，把不對應身份組的反應移除掉
+            if granting and mapping.get('strict', True):
+                await self._remove_invalid_reaction(payload)
             return
 
         guild = self.bot.get_guild(payload.guild_id)
@@ -529,6 +545,39 @@ class ReactionRoles(commands.Cog):
             )
         except discord.HTTPException as e:
             print(f"❌ reaction_roles：{action}身份組 {role.name} 時發生錯誤: {e}")
+
+    async def _remove_invalid_reaction(self, payload: discord.RawReactionActionEvent) -> None:
+        """移除「不對應任何身份組」的表符反應（防止亂按領取訊息）。
+
+        機器人要移除別人的反應，必須在該頻道擁有 manage_messages 權限；沒有
+        權限或訊息已不存在時就靜默略過（只在主控台留下紀錄），不會打擾使用者。
+        """
+        emoji_str = str(payload.emoji)
+        # 連續狂按同一個無效表符時只移除一次，避免反應被拿來洗 API 請求
+        if self._check_cooldown(payload.guild_id, payload.user_id, f'invalid:{emoji_str}'):
+            return
+        channel = self.bot.get_channel(payload.channel_id)
+        if not isinstance(channel, discord.abc.Messageable):
+            return  # 快取中沒有這個頻道（機器人可能已看不到它）
+        try:
+            message = await channel.fetch_message(payload.message_id)
+        except discord.NotFound:
+            return  # 訊息已被刪除
+        except discord.HTTPException as e:
+            print(f"❌ reaction_roles：讀取訊息 {payload.message_id} 以移除無效表符失敗: {e}")
+            return
+        try:
+            # 只需要 user id，不必另外把成員物件抓出來
+            await message.remove_reaction(payload.emoji, discord.Object(payload.user_id))
+        except discord.NotFound:
+            return  # 使用者已自行移除，或該反應已不存在
+        except discord.Forbidden:
+            print(
+                f"❌ reaction_roles：無法移除無效表符 {emoji_str}，"
+                f"機器人在頻道 {payload.channel_id} 缺少「管理訊息」權限。"
+            )
+        except discord.HTTPException as e:
+            print(f"❌ reaction_roles：移除無效表符 {emoji_str} 失敗: {e}")
 
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):

@@ -86,6 +86,17 @@
       text-decoration: underline;
     }
 
+    /* 呼吸球跟著狀態戳記換色：只有文字變紅／黃、球還是綠色會誤導成「還活著」 */
+    .status.status-warn .dot {
+      background: #fbbf24;
+      box-shadow: 0 0 12px #fbbf24;
+    }
+
+    .status.status-bad .dot {
+      background: var(--danger);
+      box-shadow: 0 0 12px var(--danger);
+    }
+
     .dot {
       width: 10px;
       height: 10px;
@@ -249,6 +260,29 @@
     .status-pill .dot {
       width: 9px;
       height: 9px;
+    }
+
+    /* 監控卡片的狀態藥丸：異常時藥丸與裡面的呼吸球都要換色（與 hero 戳記一致） */
+    .status-pill.status-warn {
+      background: rgba(251, 191, 36, 0.12);
+      color: #fbbf24;
+      border-color: rgba(251, 191, 36, 0.4);
+    }
+
+    .status-pill.status-warn .dot {
+      background: #fbbf24;
+      box-shadow: 0 0 10px #fbbf24;
+    }
+
+    .status-pill.status-bad {
+      background: rgba(248, 113, 113, 0.12);
+      color: var(--danger);
+      border-color: rgba(248, 113, 113, 0.4);
+    }
+
+    .status-pill.status-bad .dot {
+      background: var(--danger);
+      box-shadow: 0 0 10px var(--danger);
     }
 
     .monitor-section-label {
@@ -667,12 +701,12 @@
         <article class="card">
           <div class="tag">Reaction Roles</div>
           <h2>表符身份組</h2>
-          <p class="card-desc">發送「按表符領身份組」訊息並自動按下所有表符；成員按表符即獲得身份組、取消則自動收回。支援多則訊息與反應冷卻。</p>
+          <p class="card-desc">成員按表符即自動獲得或收回身份組，亂按的無效表符會自動移除。</p>
         </article>
         <article class="card">
           <div class="tag">Auto Reply</div>
           <h2>關鍵字自動回覆</h2>
-          <p class="card-desc">管理員設定規則名稱、偵測關鍵字、機器人回覆內容與生效範圍，成員訊息包含關鍵字時自動回覆；同一條規則可有多個關鍵字與多則回覆（隨機挑選），每伺服器上限 10 條規則，可用 <code>/auto_reply_list</code> 翻頁檢視每條規則，也能用 <code>/auto_reply_edit</code> 暫停而不刪除設定。</p>
+          <p class="card-desc">成員訊息包含關鍵字時自動引用回覆，支援多組關鍵字與隨機回覆。</p>
         </article>
         <article class="card">
           <div class="tag">Music</div>
@@ -708,6 +742,19 @@
     // hero 頂部狀態戳記：與下方監控卡片共用同一份 /api/uptime 資料，
     // 依 UptimeRobot 的 status_code 切換文字與配色，不再是寫死的「在線中」。
     const HERO_STATUS_TEXT_URL_ONLINE = 2;
+
+    // 監控卡片右上角的狀態藥丸：與 hero 戳記共用同一份 status_code。
+    // 先前這裡是用 inline style 只換藥丸底色，藥丸裡的呼吸球永遠是綠的，
+    // 而且「資料載入失敗」時連底色都不會換，會出現紅字配綠點的矛盾畫面。
+    function updateMonitorPill(statusCode) {
+      const pill = document.querySelector('.status-pill');
+      if (!pill) return;
+      const code = Number(statusCode);
+      pill.classList.remove('status-warn', 'status-bad');
+      if (code === HERO_STATUS_TEXT_URL_ONLINE) return; // 在線：維持 CSS 預設綠色
+      const isWarn = code === 0 || code === 1 || code === 8; // 暫停／待命／維護
+      pill.classList.add(isWarn ? 'status-warn' : 'status-bad');
+    }
 
     function updateHeroStatus(statusCode, fallbackText) {
       const textEl = document.getElementById('hero-status-text');
@@ -758,6 +805,7 @@
           if (statusText) {
             statusText.textContent = data.message || '資料不可用';
           }
+          updateMonitorPill(9);
           updateHeroStatusUnavailable('狀態未知');
           return;
         }
@@ -806,13 +854,8 @@
         // hero 戳記用同一份資料更新（status_code 來自 UptimeRobot monitor.status）
         updateHeroStatus(data.status_code, status);
 
-        const statusPill = document.querySelector('.status-pill');
-        if (statusPill) {
-          const isOnline = status === '在線';
-          statusPill.style.background = isOnline ? 'rgba(52, 211, 153, 0.12)' : 'rgba(248, 113, 113, 0.12)';
-          statusPill.style.borderColor = isOnline ? 'rgba(52, 211, 153, 0.4)' : 'rgba(248, 113, 113, 0.38)';
-          statusPill.style.color = isOnline ? '#34d399' : '#f87171';
-        }
+        // 監控卡片藥丸：依 status_code 換色，異常時連呼吸球一起變色
+        updateMonitorPill(data.status_code);
 
         setMetric('uptime-24h', data.uptime['24h']);
         setMetric('uptime-7d', data.uptime['7d']);
@@ -828,6 +871,7 @@
         if (statusText) {
           statusText.textContent = '資料載入失敗';
         }
+        updateMonitorPill(9);
         updateHeroStatusUnavailable('狀態載入失敗');
       }
     }
@@ -891,8 +935,15 @@
         document.getElementById('user-count').textContent = formatNumber(data.users);
         document.getElementById('latency-value').textContent = formatLatency(data.latency_ms);
         // 用 API 回傳的 uptime_seconds 當基準，之後每秒在前端本地累加，畫面會即時跳動；
-        // 每次重新打 API 時會用最新的秒數校正，避免長時間累積誤差
-        startUptimeTicker(data.uptime_seconds);
+        // 每次重新打 API 時會用最新的秒數校正，避免長時間累積誤差。
+        // 上線時間是「這次 Discord 連線持續了多久」：離線時停止計時並顯示「離線中」，
+        // 不顯示一個不斷累加、讓人以為從沒斷線過的假數字。
+        if (data.connected) {
+          startUptimeTicker(data.uptime_seconds);
+        } else {
+          document.getElementById('uptime-value').textContent = '離線中';
+          stopUptimeTicker();
+        }
       } catch (error) {
         document.getElementById('server-count').textContent = '--';
         document.getElementById('user-count').textContent = '--';
