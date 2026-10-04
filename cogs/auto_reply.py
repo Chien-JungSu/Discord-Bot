@@ -48,6 +48,11 @@ REPLY_COOLDOWN_SECONDS = 3.0
 # on_message 是高頻事件，冷卻記錄不能無限成長；超過上限先清過期項目，仍滿了就放行。
 REPLY_COOLDOWN_LIMIT = 500
 
+# 設定類按鈕（下拉選單、編輯、暫停、翻頁、刪除確認）的閒置逾時秒數：
+# 120 秒內都沒人操作就自動失效（按鈕會變灰）。discord.py 每次有互動都會重新計算倒數，
+# 所以是「未使用 120 秒」而不是「建立後 120 秒」，可以連續操作不必怕中途失效。
+BUTTON_IDLE_TIMEOUT = 120.0
+
 
 def _load_auto_reply_settings() -> dict:
     if not os.path.exists(AUTO_REPLY_FILE):
@@ -180,15 +185,16 @@ def _clean_field_value(value, is_keyword: bool) -> str:
     return _normalize_whitespace(text) if is_keyword else text.strip()
 
 
-def _merge_page_items(page_items: list, tail_items: list, is_keyword: bool) -> tuple:
-    """把「這一頁輸入框填的項目」和「沒編到的那一頁原項目」合併成完整清單。
+def _dedupe_items(items: list, is_keyword: bool) -> tuple:
+    """整理整份清單（編輯視窗送出時：前一頁原項目 + 這一頁輸入框 + 後一頁原項目）：
 
-    回傳 (合併後的清單, 被略過的重複關鍵字清單)。關鍵字不分大小寫去重；回覆內容允許重複。
+    丟掉空白項；關鍵字不分大小寫去重（並回報被略過的重複項），回覆內容允許重複。
+    回傳 (整理後的清單, 被略過的重複關鍵字清單)，順序維持原樣（項目在第幾格就是第幾項）。
     """
-    combined = list(page_items) + list(tail_items)
+    cleaned = [x for x in items if isinstance(x, str) and x.strip()]
     if is_keyword:
-        return _dedupe_keywords(combined)
-    return [x for x in combined if isinstance(x, str) and x.strip()], []
+        return _dedupe_keywords(cleaned)
+    return cleaned, []
 
 
 def _validate_item_list(items: list, item_max_length: int, max_items: int, label: str) -> list:
@@ -358,7 +364,7 @@ class AutoReplyRuleSelect(discord.ui.Select):
 
 class AutoReplyRemoveView(discord.ui.View):
     def __init__(self, cog: 'AutoReply', guild: discord.Guild, rules: list):
-        super().__init__(timeout=180)
+        super().__init__(timeout=BUTTON_IDLE_TIMEOUT)
         self.add_item(AutoReplyRuleSelect(cog, guild, rules))
 
 
@@ -366,7 +372,7 @@ class ConfirmDeleteView(discord.ui.View):
     """刪除前的「確認／取消」按鈕，只有當初操作的成員能按，避免其他人誤刪。"""
 
     def __init__(self, cog: 'AutoReply', guild: discord.Guild, rule: dict):
-        super().__init__(timeout=60)
+        super().__init__(timeout=BUTTON_IDLE_TIMEOUT)
         self.cog = cog
         self.guild = guild
         self.rule = rule
@@ -427,10 +433,10 @@ class ConfirmDeleteView(discord.ui.View):
 
 
 class AutoReplyListView(discord.ui.View):
-    """/auto_reply_list 的分頁按鈕：一頁一條規則，只有執行指令的人能翻頁。"""
+    """/auto_reply_list 的分頁按鈕：一頁一條規則，只有執行指令的人能翻頁（翻頁會重新計算 120 秒逾時）。"""
 
     def __init__(self, cog: 'AutoReply', guild: discord.Guild, rules: list, page: int = 0):
-        super().__init__(timeout=180)
+        super().__init__(timeout=BUTTON_IDLE_TIMEOUT)
         self.cog = cog
         self.guild = guild
         self.rules = rules
@@ -518,23 +524,31 @@ class AutoReplyEditSelect(discord.ui.Select):
 
 class AutoReplyEditView(discord.ui.View):
     def __init__(self, cog: 'AutoReply', guild: discord.Guild, rules: list):
-        super().__init__(timeout=180)
+        super().__init__(timeout=BUTTON_IDLE_TIMEOUT)
         self.add_item(AutoReplyEditSelect(cog, guild, rules))
 
 
 class AutoReplyEditActionView(discord.ui.View):
     """選取規則後的編輯按鈕：編輯關鍵字／編輯回覆內容／暫停或恢復規則／取消，只有執行指令的人能按。
-    按鈕按下後不會停用，方便連續編輯；180 秒沒動作才自動失效。
+    按鈕按下後不會停用，方便連續編輯；每次操作都會重新計時，連續 120 秒沒動作才自動失效。
+
+    page_link 是「繼續編輯另一頁」的按鈕：(文字, 目標頁, 彈出視窗類別)，由編輯視窗存檔後帶進來，
+    讓整個編輯流程都留在同一則訊息上（不用另外開訊息，也不怕中途找不到入口）。
     """
 
-    def __init__(self, cog: 'AutoReply', guild: discord.Guild, rule: dict):
-        super().__init__(timeout=180)
+    def __init__(self, cog: 'AutoReply', guild: discord.Guild, rule: dict, page_link: Optional[tuple] = None):
+        super().__init__(timeout=BUTTON_IDLE_TIMEOUT)
         self.cog = cog
         self.guild = guild
         self.rule = rule
+        self.page_link = page_link
         self.initiator_id: Optional[int] = None
         self.message: Optional[discord.Message] = None
         self._sync_toggle_label()
+        if page_link is not None:
+            link_button = discord.ui.Button(label=page_link[0], style=discord.ButtonStyle.secondary, emoji='📄')
+            link_button.callback = self._open_page_link  # discord.ui.Button 的 callback 要另外指派
+            self.add_item(link_button)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if self.initiator_id is not None and interaction.user.id != self.initiator_id:
@@ -558,6 +572,11 @@ class AutoReplyEditActionView(discord.ui.View):
                 await self.message.edit(view=self)
             except discord.HTTPException:
                 pass
+
+    async def _open_page_link(self, interaction: discord.Interaction):
+        """繼續編輯另一頁：從第 1 頁前往第 6–10 項，從第 2 頁回到第 1–5 項。"""
+        _, target_page, modal_cls = self.page_link
+        await interaction.response.send_modal(modal_cls(self.cog, self.guild, self.rule, page=target_page))
 
     @discord.ui.button(label='編輯關鍵字', style=discord.ButtonStyle.primary, emoji='✏️')
     async def edit_keywords_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -588,19 +607,15 @@ class AutoReplyEditActionView(discord.ui.View):
             title='⏸️ 已暫停自動回覆規則' if not target else '▶️ 已恢復自動回覆規則',
             description=(
                 f'**規則名稱**：{_rule_name(self.rule)}\n'
-                f'**關鍵字**：{_keywords_text(self.rule)}\n\n'
+                f'**關鍵字**：{_keywords_text(self.rule)}\n'
+                f'**生效範圍**：{_scope_text(self.rule.get("scope"), self.guild)}\n\n'
                 + ('設定（關鍵字、回覆內容、生效範圍）都完整保留，只是不再觸發回覆；隨時再按一次「恢復規則」就回來了。'
                    if not target else '此規則重新開始偵測關鍵字。')
             ),
             color=discord.Color.green(),
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-        # 順便把主訊息的規則詳情更新成新的狀態
-        if self.message is not None:
-            try:
-                await self.message.edit(embed=build_rule_summary_embed(self.rule, self.guild), view=self)
-            except discord.HTTPException:
-                pass
+        # 就地把這則訊息換成暫停／恢復的結果（不另外開一則，避免連續操作時洗版）
+        await interaction.response.edit_message(embed=embed, view=self)
 
     @discord.ui.button(label='取消', style=discord.ButtonStyle.secondary)
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -618,7 +633,9 @@ class AutoReplyListEditModal(discord.ui.Modal):
 
     互動方式：
     - 每頁 FIELDS_PER_PAGE（5）個輸入框，預先帶入目前清單的內容，可直接改、可留空、也可往空格補
-    - **留空＝刪除該項**；沒編到的那一頁（第 6–10 項）保持原樣，不會被動到
+    - **留空＝刪除該項**；沒編到的其他頁保持原樣，不會被動到（編第 6–10 項時第 1–5 項也不會被清掉）
+    - 送出後**就地編輯 /auto_reply_edit 的那則訊息**（不另外開新訊息洗版），並附「前往另一頁」的按鈕
+      可以繼續編輯第 6–10 項或回到第 1–5 項
     - 送出後若整份清單都空了，會再問是否要刪除整條規則（不會安靜地存成空清單）
     """
 
@@ -628,6 +645,7 @@ class AutoReplyListEditModal(discord.ui.Modal):
     MAX_ITEMS = MAX_KEYWORDS_PER_RULE
     SUCCESS_TITLE = '✅ 已更新'
     MORE_BUTTON_LABEL = '編輯下一頁'
+    BACK_BUTTON_LABEL = '回到上一頁'
     MODAL_KIND = 'item'
 
     def __init__(self, cog: 'AutoReply', guild: discord.Guild, rule: dict, page: int = 1):
@@ -675,26 +693,41 @@ class AutoReplyListEditModal(discord.ui.Modal):
         """整份清單都留空時：這條規則已經沒有可用的項目了，先問要不要整條刪掉。"""
         view = ConfirmDeleteView(self.cog, self.guild, self.rule)
         view.initiator_id = interaction.user.id
-        await interaction.response.send_message(
+        view.message = await self._respond_in_place(
+            interaction,
             content=(
                 f'⚠️ 你把**{self.LABEL}**的每一格都留空了（留空＝刪除該項），'
                 f'這條規則就沒有{self.LABEL}可以用了。\n是否要刪除整條規則？'
             ),
             embed=build_delete_confirm_embed(self.rule, self.guild),
             view=view,
-            ephemeral=True,
         )
+
+    async def _respond_in_place(self, interaction: discord.Interaction, *, content=None,
+                                embed=None, view=None) -> Optional[discord.Message]:
+        """回應這個彈出視窗：優先「就地編輯」/auto_reply_edit 那則訊息（連續編輯不會一直開新訊息洗版）。
+
+        原訊息已經不能編輯時（例如 ephemeral 訊息超過 15 分鐘生命週期、或已被改成沒有按鈕），
+        就退回另外開一則臨時訊息，功能不受影響。回傳存檔後的訊息物件（拿不到就是 None）。
+        """
         try:
-            view.message = await interaction.original_response()
+            await interaction.response.edit_message(content=content, embed=embed, view=view)
         except discord.HTTPException:
-            pass  # 拿不到訊息物件只是沒辦法在逾時時把按鈕變灰，功能不受影響
+            await interaction.response.send_message(content=content, embed=embed, view=view, ephemeral=True)
+        try:
+            return await interaction.original_response()
+        except discord.HTTPException:
+            return None  # 拿不到訊息物件只是沒辦法在逾時時把按鈕變灰，功能不受影響
 
     async def on_submit(self, interaction: discord.Interaction):
         # 這一頁輸入框填的項目（留空的格子自動跳過＝刪除該項）
         page_items = [clean for clean in (_clean_field_value(t.value, self.IS_KEYWORD) for t in self.inputs) if clean]
         old_items = self._current_items()
-        tail_items = old_items[self.start + FIELDS_PER_PAGE:]  # 沒編到的那一頁保持原樣
-        items, duplicates = _merge_page_items(page_items, tail_items, self.IS_KEYWORD)
+        # 沒編到的其他頁（第 1–5 項或第 11 項之後）都保持原樣，只有這一頁的輸入框會被覆寫
+        head_items = old_items[:self.start]
+        tail_items = old_items[self.start + FIELDS_PER_PAGE:]
+        # 順序照原本的位置排（前一頁 → 這一頁 → 後一頁），編第 2 頁時前面幾項才不會被搬到最後面
+        items, duplicates = _dedupe_items(head_items + page_items + tail_items, self.IS_KEYWORD)
 
         errors = _validate_item_list(items, self.ITEM_MAX_LENGTH, self.MAX_ITEMS, self.LABEL)
         if errors:
@@ -740,48 +773,43 @@ class AutoReplyListEditModal(discord.ui.Modal):
                          else 'ℹ️ 只剩一則回覆，已是固定回覆模式（不再隨機挑選）。')
         embed = discord.Embed(title=self.SUCCESS_TITLE, description='\n'.join(lines), color=discord.Color.green())
 
-        # 項目超過一頁時，第 6–10 項要再開下一頁視窗來編輯
-        view = None
-        if len(items) > FIELDS_PER_PAGE:
-            view = AutoReplyEditSecondPageView(self.cog, self.guild, self.rule, type(self), self.MORE_BUTTON_LABEL)
-            embed.set_footer(text=f'第 {FIELDS_PER_PAGE + 1}-{len(items)} 項在下一頁，可按下方按鈕繼續編輯。')
-        message = await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        # 存檔結果不另外開訊息，直接把 /auto_reply_edit 那則訊息換成結果＋新的按鈕（繼續編輯用）
+        view = self._build_result_view(interaction, items, embed)
+        message = await self._respond_in_place(interaction, embed=embed, view=view)
         if view is not None:
             view.message = message
 
+    def _current_rule(self) -> Optional[dict]:
+        """重新取得這條規則（存檔後的樣態；也可能已被其他管理員刪掉）。"""
+        return next((r for r in self.cog._get_rules(self.guild.id)
+                     if str(r.get('id')) == str(self.rule.get('id'))), None)
 
-class AutoReplyEditSecondPageView(discord.ui.View):
-    """存檔後想繼續編輯第 6–10 項時的按鈕（每個彈出視窗最多 5 個輸入框，所以要分頁）。"""
+    def _page_link(self) -> Optional[tuple]:
+        """存檔後要附的「另一頁」按鈕：(文字, 目標頁, 彈出視窗類別)。沒有其他頁就回傳 None。
 
-    def __init__(self, cog: 'AutoReply', guild: discord.Guild, rule: dict, modal_cls, label: str):
-        super().__init__(timeout=180)
-        self.cog = cog
-        self.guild = guild
-        self.rule = rule
-        self.modal_cls = modal_cls
-        self.initiator_id: Optional[int] = None
-        self.message: Optional[discord.Message] = None
-        button = discord.ui.Button(label=label, style=discord.ButtonStyle.primary, emoji='✏️')
-        button.callback = self._open_next_page  # discord.ui.Button 的 callback 要另外指派
-        self.add_item(button)
+        每個彈出視窗最多 5 個輸入框，所以第 6–10 項一定要再開一次視窗；這個按鈕不論目前有幾項都要附，
+        否則清單剛好 5 項時就永遠開不到第二頁。
+        """
+        if self.page != 1:
+            return (self.BACK_BUTTON_LABEL, 1, type(self))  # 剛編完第 2 頁 → 回到第 1–5 項
+        if self.MAX_ITEMS <= FIELDS_PER_PAGE:
+            return None  # 只有一頁的清單不用給跳頁按鈕
+        return (self.MORE_BUTTON_LABEL, 2, type(self))
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if self.initiator_id is not None and interaction.user.id != self.initiator_id:
-            await interaction.response.send_message('❌ 只有執行編輯指令的人才能操作這些按鈕。', ephemeral=True)
-            return False
-        return True
-
-    async def on_timeout(self):
-        for item in self.children:
-            item.disabled = True
-        if self.message is not None:
-            try:
-                await self.message.edit(view=self)
-            except discord.HTTPException:
-                pass
-
-    async def _open_next_page(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(self.modal_cls(self.cog, self.guild, self.rule, page=2))
+    def _build_result_view(self, interaction, items: list, embed: discord.Embed):
+        """存檔結果訊息要掛的按鈕：編輯關鍵字／編輯回覆內容／暫停或恢復／取消，加上一顆跨頁按鈕。"""
+        link = self._page_link()
+        if link is not None:
+            if self.page == 1:
+                embed.set_footer(text=f'目前 {len(items)} 項；第 {FIELDS_PER_PAGE + 1}-{self.MAX_ITEMS} 項在下一頁，可按下方按鈕繼續編輯。')
+            else:
+                embed.set_footer(text=f'第 1-{FIELDS_PER_PAGE} 項在上一頁，可按下方按鈕回去編輯。')
+        rule = self._current_rule()
+        if rule is None:
+            return None  # 規則已被其他管理員刪除 → 只留結果訊息、不再給按鈕
+        view = AutoReplyEditActionView(self.cog, self.guild, rule, page_link=link)
+        view.initiator_id = interaction.user.id  # 只有執行編輯指令的人能按
+        return view
 
 
 class AutoReplyEditKeywordsModal(AutoReplyListEditModal):
@@ -793,6 +821,7 @@ class AutoReplyEditKeywordsModal(AutoReplyListEditModal):
     MAX_ITEMS = MAX_KEYWORDS_PER_RULE
     SUCCESS_TITLE = '✅ 已更新關鍵字'
     MORE_BUTTON_LABEL = '編輯第 6-10 個關鍵字'
+    BACK_BUTTON_LABEL = '回到第 1-5 個關鍵字'
     MODAL_KIND = 'keywords'
 
 
@@ -805,6 +834,7 @@ class AutoReplyEditRepliesModal(AutoReplyListEditModal):
     MAX_ITEMS = MAX_REPLIES_PER_RULE
     SUCCESS_TITLE = '✅ 已更新回覆內容'
     MORE_BUTTON_LABEL = '編輯第 6-10 則回覆'
+    BACK_BUTTON_LABEL = '回到第 1-5 則回覆'
     MODAL_KIND = 'replies'
 
 

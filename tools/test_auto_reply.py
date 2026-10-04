@@ -4,9 +4,11 @@
 - 規則名稱（name）、多關鍵字（keywords 清單）與多回覆（replies 清單）的新 schema
 - 舊格式資料檔（只有 keyword／reply 單一值、沒有 name）的自動遷移與相容
 - add_rule / remove_rule / set_rule_keywords / append_rule_keyword
-- append_rule_reply / set_rule_replies，以及編輯視窗的輸入框處理（留空＝刪除該項、分頁合併）
+- append_rule_reply / set_rule_replies，以及編輯視窗的輸入框處理（留空＝刪除該項、分頁合併與跨頁按鈕）
 - 每伺服器規則數上限、單一規則關鍵字數與回覆數上限
-- 清單驗證（長度／數量／去重）與編輯介面的按鈕、輸入框結構
+- 清單驗證（長度／數量／去重）與編輯介面的按鈕、輸入框結構、跨頁按鈕
+- 編輯結果就地編輯原訊息（不另外開訊息洗版），按鈕接著換成可繼續編輯的那組
+- 設定類按鈕的 120 秒閒置逾時
 - on_message 的多關鍵字比對、範圍過濾、隨機回覆挑選、冷卻
 - 壞檔容錯
 
@@ -18,9 +20,12 @@ sys.stdout.reconfigure(encoding='utf-8')  # Windows 主控台 cp950 印不出 em
 
 import asyncio
 import contextlib
+import inspect
 import os
 import random
 import tempfile
+
+import discord
 
 # AutoReply Cog 不是 context manager，包一層讓 with 寫法可用
 _nullctx = contextlib.nullcontext
@@ -62,32 +67,75 @@ class FakeGuild:
         return None  # 測試不需要真的頻道物件（顯示為「頻道已不存在」即可）
 
 
+class FakeMessageObject:
+    """假的 discord.Message：on_timeout 會呼叫 .edit() 把按鈕變灰。"""
+
+    def __init__(self):
+        self.edited: list = []
+
+    async def edit(self, **kwargs):
+        self.edited.append(kwargs)
+
+
+class FakeFailedResponse:
+    """假的 HTTP 回應物件，只給 discord.HTTPException 取 status／reason 用。"""
+
+    status = 400
+    reason = 'Bad Request'
+
+
+class FakeEditFailed(discord.HTTPException):
+    """模擬「原訊息已經不能再編輯」的 HTTP 錯誤（ephemeral 超過 15 分鐘、被改成沒有按鈕…）。"""
+
+    def __init__(self):
+        super().__init__(FakeFailedResponse(), '原訊息已不可編輯')
+
+
 class FakeResponse:
-    """假的 interaction.response：記錄送出的訊息，讓測試能檢查回覆的標題、內文與按鈕。"""
+    """假的 interaction.response：分別記錄「就地編輯原訊息」（edited）與「另外開一則訊息」（sent）。"""
 
-    def __init__(self, sent: list):
+    def __init__(self, edited: list, sent: list, edit_fails: bool = False):
+        self.edited = edited
         self.sent = sent
+        self.edit_fails = edit_fails  # 模擬原訊息已過期／不能再編輯
 
-    async def send_message(self, content=None, embed=None, view=None, ephemeral=False):
-        self.sent.append({
+    @staticmethod
+    def _snapshot(content, embed, view):
+        return {
             'content': content,
             'title': embed.title if embed is not None else None,
             'description': embed.description if embed is not None else None,
+            'footer': embed.footer.text if (embed is not None and embed.footer is not None) else None,
             'buttons': [b.label for b in view.children] if view is not None else [],
-        })
-        return 'MESSAGE'
+            'view': view,
+        }
+
+    async def edit_message(self, content=None, embed=None, view=None):
+        if self.edit_fails:
+            raise FakeEditFailed()
+        self.edited.append(self._snapshot(content, embed, view))
+        return None
+
+    async def send_message(self, content=None, embed=None, view=None, ephemeral=False):
+        self.sent.append(self._snapshot(content, embed, view))
+        return None  # 真正的 interaction.response.send_message 不會回傳訊息物件
+
+    async def send_modal(self, modal):
+        self.sent.append({'modal': modal})
 
 
 class FakeInteraction:
-    """假的 discord.Interaction，只提供 modal.on_submit 會用到的方法。"""
+    """假的 discord.Interaction，只提供 modal.on_submit 與按鈕會用到的方法。"""
 
-    def __init__(self, user_id: int = 1):
+    def __init__(self, user_id: int = 1, edit_fails: bool = False):
         self.user = FakeAuthor(user_id)
+        self.edited: list = []
         self.sent: list = []
-        self.response = FakeResponse(self.sent)
+        self.response = FakeResponse(self.edited, self.sent, edit_fails)
+        self.message = FakeMessageObject()
 
     async def original_response(self):
-        return 'MESSAGE'
+        return self.message
 
 
 def fill(modal, values: list):
@@ -178,15 +226,15 @@ def main():
         check(ar._clean_field_value('  回覆  ', False) == '回覆', '回覆內容格只去頭尾空白（保留內部換行）')
         check(ar._clean_field_value(None, True) == '', 'None 也視為留空')
 
-        merged, dup = ar._merge_page_items(['A', '', 'B'], ['C'], True)
-        check(merged == ['A', 'B', 'C'], '合併這一頁與沒編到的那一頁')
+        merged, dup = ar._dedupe_items(['A', 'B'] + ['C'], True)  # 前一頁 + 這一頁 + 後一頁接在一起整理
+        check(merged == ['A', 'B', 'C'], '合併這一頁與沒編到的其他頁')
         check(dup == [], '沒有重複時不報重複項')
-        check(ar._merge_page_items(['A'], ['A'], True)[1] == ['A'], '合併時關鍵字去重並回報重複項')
-        check(ar._merge_page_items([], ['  '], False) == ([], []), '回覆內容全空＝空清單（呼叫端會追問是否刪規則）')
+        check(ar._dedupe_items(['A', 'A'], True)[1] == ['A'], '合併時關鍵字去重並回報重複項')
+        check(ar._dedupe_items(['  '], False) == ([], []), '回覆內容全空＝空清單（呼叫端會追問是否刪規則）')
 
         # 只編第一頁時，第 6–10 項要原封不動
         cog.set_rule_replies(gid, rule_id, ['A', 'B', 'C', 'D', 'E', 'F', 'G'])
-        kept = ar._merge_page_items(['AA'], ['F', 'G'], False)[0]
+        kept = ar._dedupe_items(['AA'] + ['F', 'G'], False)[0]
         cog.set_rule_replies(gid, rule_id, kept)
         check(cog._get_rules(gid)[0]['replies'] == ['AA', 'F', 'G'], '編輯第一頁不會動到第 6–10 項')
         check(cog._get_rules(gid)[0]['reply'] == 'AA', '編輯後 reply 欄位同步為第一則')
@@ -263,7 +311,7 @@ def main():
         check(migrated_rule['reply'] == '嗨', '舊格式遷移：reply 欄位保留')
         check(ar._rule_name(migrated_rule) == '你好', '舊格式規則顯示名稱退回關鍵字')
         legacy_items = ar._rule_replies(migrated_rule)
-        check(ar._merge_page_items([], legacy_items[ar.FIELDS_PER_PAGE:], False)[0] == [],
+        check(ar._dedupe_items(legacy_items[ar.FIELDS_PER_PAGE:], False)[0] == [],
               '舊格式單一回覆規則：輸入框全留空＝整份清單變空（呼叫端會追問是否刪規則）')
 
         # ---------- 9. 壞檔容錯 ----------
@@ -375,8 +423,12 @@ def main():
         check([t.label for t in page2.inputs] == [f'關鍵字 {i}' for i in range(6, 11)], '第二頁是第 6–10 格')
         check([t.default for t in page2.inputs[:3]] == ['k5', 'k6', 'k7'], '第二頁預先帶入第 6–8 個關鍵字')
         check(page2.inputs[3].default == '', '沒有的項目該格留空（使用者可自行補上）')
-        more = ar.AutoReplyEditSecondPageView(cog3, None, many, ar.AutoReplyEditKeywordsModal, '編輯第 6-10 個關鍵字')
-        check([b.label for b in more.children] == ['編輯第 6-10 個關鍵字'], '超過 5 項時附「繼續編輯下一頁」按鈕')
+        more = ar.AutoReplyEditActionView(cog3, None, many, page_link=('編輯第 6-10 個關鍵字', 2, ar.AutoReplyEditKeywordsModal))
+        check([b.label for b in more.children] == ['編輯關鍵字', '編輯回覆內容', '⏸️ 暫停規則', '取消', '編輯第 6-10 個關鍵字'],
+              '編輯介面可帶著「繼續編輯下一頁」按鈕')
+        rows = more.to_components()
+        check(len(rows) == 1 and len(rows[0]['components']) == 5, '五顆按鈕剛好排成一列（Discord 每列最多 5 顆）')
+        check(len({b['custom_id'] for b in rows[0]['components']}) == 5, '每顆按鈕的 custom_id 都不同（不會互相搶事件）')
 
         # ---------- 14. 實際送出編輯視窗：留空＝刪除該項、全部留空＝追問是否刪規則 ----------
         rule_edit = cog3._get_rules(gid)[0]
@@ -384,27 +436,28 @@ def main():
         modal = ar.AutoReplyEditKeywordsModal(cog3, ui_guild, rule_edit, page=1)
         inter = fill(modal, ['測試', '   ', '  第二個關鍵字  '])
         asyncio.run(modal.on_submit(inter))
-        check(len(inter.sent) == 1 and inter.sent[0]['title'] == '✅ 已更新關鍵字', '編輯關鍵字：送出後回報成功')
+        check(len(inter.edited) == 1 and inter.edited[0]['title'] == '✅ 已更新關鍵字', '編輯關鍵字：送出後回報成功')
+        check(inter.sent == [], '存檔結果就地編輯原訊息，不另外開新訊息（不洗版）')
         check(ar._rule_keywords(rule_edit) == ['測試', '第二個關鍵字'], '留空格＝刪除該項、其他空格可自行補上')
-        check('**新增**：第二個關鍵字' in inter.sent[0]['description'], '回報中會列出新增的關鍵字')
+        check('**新增**：第二個關鍵字' in inter.edited[0]['description'], '回報中會列出新增的關鍵字')
 
         modal_empty = ar.AutoReplyEditKeywordsModal(cog3, ui_guild, rule_edit, page=1)
         inter_empty = fill(modal_empty, [])
         asyncio.run(modal_empty.on_submit(inter_empty))
-        check(len(inter_empty.sent) == 1 and '是否要刪除整條規則' in inter_empty.sent[0]['content'], '關鍵字全部留空＝追問是否刪除整條規則')
-        check(inter_empty.sent[0]['buttons'] == ['確認刪除', '取消'], '追問時附「確認刪除／取消」按鈕')
+        check(len(inter_empty.edited) == 1 and '是否要刪除整條規則' in inter_empty.edited[0]['content'], '關鍵字全部留空＝追問是否刪除整條規則')
+        check(inter_empty.edited[0]['buttons'] == ['確認刪除', '取消'], '追問時附「確認刪除／取消」按鈕')
         check(ar._rule_keywords(rule_edit) == ['測試', '第二個關鍵字'], '追問期間不會先把規則清空')
 
         reply_modal = ar.AutoReplyEditRepliesModal(cog3, ui_guild, rule_edit, page=1)
         inter_reply = fill(reply_modal, ['  改過的回覆  '])
         asyncio.run(reply_modal.on_submit(inter_reply))
         check(ar._rule_replies(rule_edit) == ['改過的回覆'], '編輯回覆：留空的格子＝刪除該則回覆')
-        check('固定回覆模式' in inter_reply.sent[0]['description'], '只剩一則回覆時提示已回到固定回覆模式')
+        check('固定回覆模式' in inter_reply.edited[0]['description'], '只剩一則回覆時提示已回到固定回覆模式')
 
         reply_empty = ar.AutoReplyEditRepliesModal(cog3, ui_guild, rule_edit, page=1)
         inter_reply_empty = fill(reply_empty, [])
         asyncio.run(reply_empty.on_submit(inter_reply_empty))
-        check(inter_reply_empty.sent[0]['buttons'] == ['確認刪除', '取消'], '回覆內容全部留空＝追問是否刪除整條規則')
+        check(inter_reply_empty.edited[0]['buttons'] == ['確認刪除', '取消'], '回覆內容全部留空＝追問是否刪除整條規則')
         check(ar._rule_replies(rule_edit) == ['改過的回覆'], '回覆追問期間不會先把規則清空')
 
         big_rule = cog3._get_rules(gid)[2]
@@ -416,7 +469,7 @@ def main():
         asyncio.run(big_modal.on_submit(inter_big))
         check(ar._rule_keywords(big_rule) == ['kk1', 'kk2', 'kk3', 'kk4', 'kk5'] + big_tail,
               '只填前 5 格時，第 6–10 個關鍵字保留不動')
-        check(inter_big.sent[0]['buttons'] == ['編輯第 6-10 個關鍵字'], '超過 5 項時附「繼續編輯第 6-10 個」按鈕')
+        check(inter_big.edited[0]['buttons'][-1] == '編輯第 6-10 個關鍵字', '超過 5 項時附「繼續編輯第 6-10 個」按鈕')
 
         for i in range(6, 8):
             cog3.append_rule_keyword(gid, big_rule['id'], f'k{i}')
@@ -426,6 +479,62 @@ def main():
         asyncio.run(over_modal.on_submit(inter_over))
         check('最多' in (inter_over.sent[0]['content'] or ''), '填滿兩頁超過上限時擋下並說明上限')
         check(ar._rule_keywords(big_rule) == before_over, '超過上限時不會存檔（原本的清單不動）')
+
+        # ---------- 14b. 存檔結果就地編輯原訊息，按鈕也換成可以繼續編輯的那組 ----------
+        five_rule = cog3._get_rules(gid)[1]
+        cog3.set_rule_keywords(gid, five_rule['id'], ['a', 'b', 'c', 'd', 'e'])
+        five_modal = ar.AutoReplyEditKeywordsModal(cog3, ui_guild, five_rule, page=1)
+        inter_five = fill(five_modal, ['a', 'b', 'c', 'd', 'e'])  # 不變，只看按鈕與訊息數量
+        asyncio.run(five_modal.on_submit(inter_five))
+        check(len(inter_five.edited) == 1 and inter_five.sent == [], '存檔結果編輯原訊息，不另外開訊息')
+        done_five = inter_five.edited[0]
+        check(done_five['buttons'] == ['編輯關鍵字', '編輯回覆內容', '⏸️ 暫停規則', '取消', '編輯第 6-10 個關鍵字'],
+              '原訊息的按鈕換成「繼續編輯」那組（含跨頁鈕）')
+        check(done_five['footer'] is not None and '第 6-10 項' in done_five['footer'], '存檔訊息說明第 6-10 項在下一頁')
+
+        # 剛好 5 項時跨頁鈕也要在（否則永遠開不到第二頁、無法加第 6 項）
+        result_view = done_five['view']
+        check([b.label for b in result_view.children][-1] == '編輯第 6-10 個關鍵字', '剛好 5 項時也附跨頁按鈕（不會卡住）')
+
+        # 按下去真的會開第 2 頁的視窗（第 6–10 格）
+        more_inter = FakeInteraction()
+        asyncio.run(result_view.children[-1].callback(more_inter))
+        opened = more_inter.sent[0]['modal']
+        check(isinstance(opened, ar.AutoReplyEditKeywordsModal) and opened.page == 2, '按「編輯第 6-10 個」會開第 2 頁的視窗')
+        check([t.label for t in opened.inputs] == [f'關鍵字 {i}' for i in range(6, 11)], '第 2 頁視窗編輯第 6–10 格')
+
+        # 編第 2 頁時，第 1–5 項不會被清掉（原本只保留「後面」的項目會把前面洗掉）
+        opened_p2 = ar.AutoReplyEditKeywordsModal(cog3, ui_guild, five_rule, page=2)
+        inter_p2 = fill(opened_p2, ['f', 'g'])
+        asyncio.run(opened_p2.on_submit(inter_p2))
+        check(ar._rule_keywords(five_rule) == ['a', 'b', 'c', 'd', 'e', 'f', 'g'],
+              '編輯第 6-10 項時，第 1-5 個關鍵字保留不動')
+        check(inter_p2.edited[0]['buttons'][-1] == '回到第 1-5 個關鍵字', '第 2 頁存檔後附「回到第 1-5 個關鍵字」按鈕')
+        back_inter = FakeInteraction()
+        asyncio.run(inter_p2.edited[0]['view'].children[-1].callback(back_inter))
+        check(back_inter.sent[0]['modal'].page == 1, '按「回到第 1-5 個」會開第 1 頁的視窗')
+
+        # 跨頁按鈕要能記住訊息物件，逾時才停用得掉（response.edit_message 的回傳值不是訊息）
+        check(result_view.message is not None and result_view.message is inter_five.message,
+              '編輯按鈕會記住原訊息物件（逾時可停用按鈕）')
+        asyncio.run(result_view.on_timeout())
+        check(all(b.disabled for b in result_view.children) and inter_five.message.edited, '逾時後按鈕會停用並更新訊息')
+
+        # 原訊息不能再編輯時（ephemeral 超過 15 分鐘等）要退回另外開一則，不能整個流程卡死
+        stale_modal = ar.AutoReplyEditKeywordsModal(cog3, ui_guild, five_rule, page=1)
+        inter_stale = fill(stale_modal, ['a', 'b', 'c', 'd', 'e', 'f', 'g'])
+        inter_stale.response.edit_fails = True
+        asyncio.run(stale_modal.on_submit(inter_stale))
+        check(inter_stale.edited == [] and len(inter_stale.sent) == 1 and inter_stale.sent[0]['title'] == '✅ 已更新關鍵字',
+              '原訊息不能編輯時退回另開一則訊息')
+
+        # 只有 1 項時仍可從成功訊息補上第 6–10 項；回覆內容的按鈕文案同理
+        one_rule = cog3._get_rules(gid)[0]
+        cog3.set_rule_replies(gid, one_rule['id'], ['只有一則'])
+        one_modal = ar.AutoReplyEditRepliesModal(cog3, ui_guild, one_rule, page=1)
+        inter_one = fill(one_modal, ['只有一則'])
+        asyncio.run(one_modal.on_submit(inter_one))
+        check(inter_one.edited[0]['buttons'][-1] == '編輯第 6-10 則回覆', '回覆內容頁也有跨頁按鈕')
 
         # ---------- 15. /auto_reply_list 的分頁 embed ----------
         big_rule['replies'] = [f'回覆{i}' * 200 for i in range(ar.MAX_REPLIES_PER_RULE)]
@@ -476,7 +585,8 @@ def main():
         asyncio.run(edit_view.toggle_rule_button.callback(toggle_inter))
         check(ar._rule_enabled(big_rule), '按編輯介面的恢復鈕可恢復規則')
         check(edit_view.toggle_rule_button.label == '⏸️ 暫停規則', '恢復後按鈕文字同步換回暫停')
-        check('已恢復自動回覆規則' in toggle_inter.sent[0]['title'], '恢復後回報結果訊息')
+        check('已恢復自動回覆規則' in toggle_inter.edited[0]['title'], '恢復後就地更新原訊息回報結果')
+        check(toggle_inter.sent == [], '暫停／恢復也不另外開訊息（不洗版）')
         asyncio.run(edit_view.toggle_rule_button.callback(FakeInteraction()))
         check(not ar._rule_enabled(big_rule), '再按一次可暫停規則')
         check(ar._rule_keywords(big_rule) and ar._rule_replies(big_rule), '在編輯介面暫停也不會動到設定')
@@ -488,6 +598,24 @@ def main():
         cog3.set_rule_enabled(gid, big_rule['id'], True)
         check(hook3.detect(FakeMessage(hit_text, 999, 91, guild=guild)) is not None, '恢復後規則重新觸發回覆')
         check('enabled' not in migrated_rule or migrated_rule['enabled'] is True, '舊格式資料載入後視為啟用')
+
+        # ---------- 17. 設定類按鈕 120 秒未使用就失效 ----------
+        check(ar.BUTTON_IDLE_TIMEOUT == 120.0, '按鈕閒置逾時設為 120 秒')
+        idle_views = {
+            '編輯下拉選單': ar.AutoReplyEditView(cog3, ui_guild, list_rules),
+            '編輯操作按鈕': ar.AutoReplyEditActionView(cog3, ui_guild, list_rules[0]),
+            '編輯跨頁按鈕': ar.AutoReplyEditActionView(cog3, ui_guild, list_rules[0],
+                                                   page_link=('編輯第 6-10 個關鍵字', 2, ar.AutoReplyEditKeywordsModal)),
+            '清單翻頁按鈕': ar.AutoReplyListView(cog3, ui_guild, list_rules, 0),
+            '刪除下拉選單': ar.AutoReplyRemoveView(cog3, ui_guild, list_rules),
+            '刪除確認按鈕': ar.ConfirmDeleteView(cog3, ui_guild, list_rules[0]),
+        }
+        for name, view in idle_views.items():
+            check(view.timeout == ar.BUTTON_IDLE_TIMEOUT, f'{name}：{ar.BUTTON_IDLE_TIMEOUT:.0f} 秒未使用就失效')
+        # discord.py 2.x 每次互動都會把逾時重新計算（所以是「未使用」計時，可以連續操作）
+        check('self.__timeout_expiry = time.monotonic() + self.timeout'
+              in inspect.getsource(discord.ui.view.BaseView._scheduled_task),
+              'discord.py 每次互動都會重新計算逾時（連續操作不會中途失效）')
 
     print()
     print(f'共 {len(PASS) + len(FAIL)} 項測試：{len(PASS)} 通過，{len(FAIL)} 失敗')

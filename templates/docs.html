@@ -21,6 +21,10 @@
 
     * { box-sizing: border-box; }
 
+    html {
+      scroll-behavior: smooth;
+    }
+
     body {
       margin: 0;
       font-family: "Segoe UI", "Microsoft JhengHei", sans-serif;
@@ -137,6 +141,182 @@
       margin-bottom: 0;
     }
 
+    /* 手機上很長的指令名列表列（例如「點歌者操作鎖（/music_pause、/music_resume…）」）
+       會把頁面撐出橫向捲軸、整頁可以被左右拖，必須允許在中間斷行。 */
+    .card li {
+      overflow-wrap: break-word;
+    }
+
+    /* ---------- 左上角固定圖示選單 ---------- */
+    /* 固定在視窗左上角：只有一顆純圖示的選單鈕（不含文字），滑鼠移上去才飛出
+       文字面板列出各個 cog。面板直接蓋在文檔內容上方，不佔版面、也不把文檔往右推；
+       滑鼠離開整個選單範圍即自動收起。手機版另外排在「返回首頁」下一行，
+       捲動後（.is-stuck）再吸回畫面頂端。 */
+    .docs-nav {
+      position: fixed;
+      top: 16px;
+      left: 16px;
+      z-index: 60;
+      display: flex;
+      align-items: flex-start;
+      transition: top 0.22s ease;
+    }
+
+    .nav-menu-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 52px;
+      height: 52px;
+      padding: 0;
+      border: 1px solid var(--panel-border);
+      border-radius: 16px;
+      background: var(--panel);
+      box-shadow: 0 16px 44px rgba(0, 0, 0, 0.35);
+      backdrop-filter: blur(10px);
+      color: var(--accent);
+      cursor: pointer;
+      /* 選單直接蓋在文檔上，閒置時壓低一點透明度，讓被蓋到的行文字仍讀得到。 */
+      opacity: 0.75;
+      transition: opacity 0.18s ease, background 0.18s ease;
+    }
+
+    .docs-nav:hover .nav-menu-btn,
+    .docs-nav.is-open .nav-menu-btn {
+      opacity: 1;
+      background: rgba(125, 211, 252, 0.16);
+      border-color: rgba(125, 211, 252, 0.4);
+    }
+
+    .nav-menu-icon {
+      font-size: 1.5rem;
+      line-height: 1;
+      pointer-events: none;
+    }
+
+    /* 飛出面板：純 CSS hover 展開（滑鼠離開 .docs-nav 就收起）；觸控沒有 hover，
+       由 JS 加 .is-open 釘住，點選單鈕切換。 */
+    .nav-flyout {
+      position: absolute;
+      top: 0;
+      left: calc(100% + 10px);
+      /* .docs-nav 是 position: fixed，會成為這個絕對定位面板的包含塊，面板往右
+         偏移後「剩餘可用寬度」是負的，沒有明確寬度時瀏覽器會收縮到最小內容寬度
+         （手機上每一項都折成三行）。直接指定 max-content 讓面板依內容展開，
+         再用 max-width 守住視窗邊界。 */
+      width: max-content;
+      max-width: calc(100vw - 86px);
+      padding: 8px;
+      border-radius: 18px;
+      background: var(--panel);
+      border: 1px solid var(--panel-border);
+      box-shadow: 0 16px 44px rgba(0, 0, 0, 0.35);
+      backdrop-filter: blur(10px);
+      opacity: 0;
+      visibility: hidden;
+      transform: translateX(-6px);
+      pointer-events: none;
+      transition: opacity 0.16s ease, transform 0.16s ease, visibility 0.16s;
+    }
+
+    .docs-nav:hover .nav-flyout,
+    .docs-nav.is-open .nav-flyout {
+      opacity: 1;
+      visibility: visible;
+      transform: none;
+      pointer-events: auto;
+    }
+
+    /* 從icon rail 滑向面板中間有一段空隙，這段透明橋接區跟著面板一起出現，
+       讓游標移動過程不會離開 .docs-nav 而把面板閃一下收掉。 */
+    .nav-flyout::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      right: 100%;
+      width: 10px;
+    }
+
+    /* 觸控裝置沒有真正的 hover（點一下會把 :hover 黏住不消失），該區完全改由
+       JS 的 .is-open 控開關，避免面板卡住收不回來。 */
+    @media (hover: none) {
+      .docs-nav:hover .nav-flyout {
+        opacity: 0;
+        visibility: hidden;
+        transform: translateX(-6px);
+        pointer-events: none;
+      }
+
+      .docs-nav.is-open .nav-flyout {
+        opacity: 1;
+        visibility: visible;
+        transform: none;
+        pointer-events: auto;
+      }
+    }
+
+    .flyout-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+
+    .flyout-list a {
+      display: flex;
+      align-items: center;
+      min-width: 190px;
+      padding: 8px 12px;
+      border-radius: 12px;
+      color: var(--muted);
+      text-decoration: none;
+      transition: background 0.18s ease, color 0.18s ease;
+    }
+
+    .flyout-list a:hover {
+      background: rgba(125, 211, 252, 0.1);
+      color: var(--text);
+    }
+
+    .flyout-list a.is-active {
+      background: rgba(125, 211, 252, 0.18);
+      color: var(--primary);
+    }
+
+    .flyout-text {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      min-width: 0;
+    }
+
+    .nav-label {
+      font-size: 0.92rem;
+      font-weight: 700;
+      line-height: 1.3;
+    }
+
+    .nav-tag {
+      color: var(--accent);
+      font-size: 0.64rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      line-height: 1.2;
+      white-space: nowrap;
+    }
+
+    .nav-empty {
+      padding: 10px 12px;
+      color: var(--muted);
+      font-size: 0.85rem;
+      white-space: nowrap;
+    }
+
+    /* 段落捲動定位時留白，避免貼到視窗頂端。 */
+    .card {
+      scroll-margin-top: 24px;
+    }
+
     code {
       font-family: Consolas, "Courier New", monospace;
       background: rgba(148, 163, 184, 0.08);
@@ -151,6 +331,18 @@
       .card { padding: 18px 16px; }
       .page-header { align-items: flex-start; }
       .page-title { width: 100%; }
+      /* 位置交換：「返回首頁」回左上角第一行，選單鈕排到它下一行；
+         頁面往下捲動後（JS 加 .is-stuck）選單再吸回畫面頂端。
+         不要改 .page-header 的 padding：那會連帶把置中的標題推歪、分隔線也跟著內縮。 */
+      .docs-nav { top: 76px; left: 12px; }
+      .docs-nav.is-stuck { top: 12px; }
+      .nav-menu-btn { width: 46px; height: 46px; border-radius: 14px; }
+    }
+
+    /* 中等寬度的桌機：內文置中後左緣會靠到選單鈕，讓「返回首頁」往右讓一點避開。
+       視窗再寬一點內文本身就離選單鈕很遠，就不用位移了。 */
+    @media (min-width: 641px) and (max-width: 1300px) {
+      .back-link { margin-left: 76px; }
     }
 
     .footer {
@@ -168,6 +360,15 @@
 </head>
 
 <body>
+  <nav class="docs-nav" id="docs-nav" aria-label="指令分類選單">
+    <button class="nav-menu-btn" id="nav-toggle" type="button" aria-expanded="false" aria-controls="nav-flyout" aria-label="指令選單" title="指令選單">
+      <span class="nav-menu-icon" aria-hidden="true">☰</span>
+    </button>
+    <div class="nav-flyout" id="nav-flyout">
+      <ul class="flyout-list" id="flyout-list"></ul>
+    </div>
+  </nav>
+
   <main>
     <div class="page-header">
       <a class="back-link" href="/">← 返回首頁</a>
@@ -175,7 +376,7 @@
     </div>
 
     <div class="docs-stack">
-      <article class="card">
+      <article class="card" id="cog-general">
         <div class="tag">General</div>
         <h2>一般功能</h2>
         <ul>
@@ -186,7 +387,7 @@
         </ul>
       </article>
 
-      <article class="card">
+      <article class="card" id="cog-weather">
         <div class="tag">Weather</div>
         <h2>天氣查詢</h2>
         <ul>
@@ -194,7 +395,7 @@
         </ul>
       </article>
 
-      <article class="card">
+      <article class="card" id="cog-bus">
         <div class="tag">Bus</div>
         <h2>公車資訊</h2>
         <ul>
@@ -202,7 +403,7 @@
         </ul>
       </article>
 
-      <article class="card">
+      <article class="card" id="cog-server-info">
         <div class="tag">Server Info</div>
         <h2>伺服器資訊</h2>
         <ul>
@@ -210,7 +411,7 @@
         </ul>
       </article>
 
-      <article class="card">
+      <article class="card" id="cog-welcome">
         <div class="tag">Welcome</div>
         <h2>歡迎訊息</h2>
         <ul>
@@ -219,7 +420,7 @@
         </ul>
       </article>
 
-      <article class="card">
+      <article class="card" id="cog-reaction-roles">
         <div class="tag">Reaction Roles</div>
         <h2>表符身份組</h2>
         <ul>
@@ -227,19 +428,19 @@
         </ul>
       </article>
 
-      <article class="card">
+      <article class="card" id="cog-auto-reply">
         <div class="tag">Auto Reply</div>
         <h2>關鍵字自動回覆</h2>
         <ul>
           <li><strong>/auto_reply_add</strong> <em>keyword:&lt;關鍵字&gt; reply:&lt;回覆內容&gt; [name:&lt;規則名稱&gt;] [channel:&lt;頻道&gt;]</em>：新增自動回覆規則。成員訊息「包含」關鍵字（不分大小寫、忽略多餘空白）時，機器人會引用該訊息自動回覆，且一律不 @ 任何人；未指定 <em>channel</em> 時整個伺服器生效；未指定 <em>name</em> 時以關鍵字作為規則名稱。每個伺服器上限 10 條規則；一則訊息最多觸發第一條命中的規則；同一成員對同一條規則 3 秒內重複觸發不會重複回覆。之後可用 <strong>/auto_reply_edit</strong> 為同一條規則再加更多關鍵字（命中任一即觸發，上限 10 個），也可自行增修回覆內容（超過一則時隨機挑選）。需「管理伺服器」權限。</li>
-          <li><strong>/auto_reply_edit</strong>：編輯自動回覆規則。送出後自動抓取目前所有規則的<strong>規則名稱</strong>製成下拉選單供選取（舊規則退回顯示偵測關鍵字）；選取後只有三顆按鈕：<strong>編輯關鍵字</strong>（輸入框自行填寫，上限 10 個）或<strong>編輯回覆內容</strong>，同一排還有「<strong>⏸️ 暫停規則</strong>」按鈕（按下即暫停、設定完整保留，按鈕會變成「▶️ 恢復規則」，再按一次就恢復）。兩個編輯視窗都是每頁 5 個輸入框（Discord 上限），預先帶入現有內容，<strong>留空＝刪除該項</strong>、往空格補字＝新增一項；第 6–10 項在下一頁（存檔訊息上附「繼續編輯」按鈕），沒編到的那一頁不動；關鍵字或回覆內容<strong>全部留空</strong>時會跳出「是否要刪除整條規則？」的確認訊息。超過一則回覆時自動切換成<strong>隨機回覆模式</strong>，每次觸發從所有回覆中隨機挑選一則。需「管理伺服器」權限。</li>
+          <li><strong>/auto_reply_edit</strong>：編輯自動回覆規則。送出後自動抓取目前所有規則的<strong>規則名稱</strong>製成下拉選單供選取（舊規則退回顯示偵測關鍵字）；選取後有四顆按鈕：<strong>編輯關鍵字</strong>（輸入框自行填寫，上限 10 個）、<strong>編輯回覆內容</strong>、「<strong>⏸️ 暫停規則</strong>」（按下即暫停、設定完整保留，按鈕會變成「▶️ 恢復規則」，再按一次就恢復）與「取消」；只有執行指令的人能按，每次操作都會重新計時、連續 120 秒未操作按鈕就會變灰失效。兩個編輯視窗都是每頁 5 個輸入框（Discord 上限），預先帶入現有內容，<strong>留空＝刪除該項</strong>、往空格補字＝新增一項；第 6–10 項在下一頁（同一則訊息上一律附「編輯第 6-10 個」按鈕，第二頁則是「回到第 1-5 個」），沒編到的其他頁不動（編第 6–10 項時第 1–5 項原樣保留）；<strong>存檔結果直接就地改寫這一則訊息</strong>並把按鈕換成可繼續編輯的那組（連續編輯不會洗版），只有原訊息已不能編輯時才會另外補一則；關鍵字或回覆內容<strong>全部留空</strong>時會跳出「是否要刪除整條規則？」的確認訊息。超過一則回覆時自動切換成<strong>隨機回覆模式</strong>，每次觸發從所有回覆中隨機挑選一則。需「管理伺服器」權限。</li>
           <li><strong>/auto_reply_list</strong>：列出自動回覆規則，<strong>一頁一條規則</strong>（用「◀️ 上一頁／下一頁 ▶️」兩顆按鈕翻頁），每頁完整顯示規則名稱、狀態、全部關鍵字、回覆內容與生效範圍；單則回覆超過 300 字會截斷，內容塞不下時會標示省略並提示用 <strong>/auto_reply_edit</strong> 看完整內容。沒有規則時會提示先用 <strong>/auto_reply_add</strong> 新增。需「管理伺服器」權限。</li>
           
-          <li><strong>/auto_reply_remove</strong>：刪除自動回覆規則。送出後自動抓取目前<strong>已生效</strong>的偵測關鍵字製成下拉選單供選取；選取後會先顯示確認訊息（附「確認刪除／取消」按鈕，只有執行指令的人能按，60 秒未操作自動失效）。需「管理伺服器」權限。</li>
+          <li><strong>/auto_reply_remove</strong>：刪除自動回覆規則。送出後自動抓取目前<strong>已生效</strong>的偵測關鍵字製成下拉選單供選取；選取後會先顯示確認訊息（附「確認刪除／取消」按鈕，只有執行指令的人能按，每次操作都會重新計時、連續 120 秒未操作自動失效）。需「管理伺服器」權限。</li>
         </ul>
       </article>
 
-      <article class="card">
+      <article class="card" id="cog-music">
         <div class="tag">Music</div>
         <h2>語音功能</h2>
         <ul>
@@ -272,6 +473,146 @@
       <span class="footer-line">© 2026 炙彗JI器人</span>
     </div>
   </main>
+
+  <script>
+    // 左上角圖示選單：飛出面板的項目由下方各個 cog 段落（.card + .tag + h2）
+    // 自動生出來，之後新增 cog 只要照原本寫法加一張卡片，這裡不用跟著改。
+    (function () {
+      const nav = document.getElementById('docs-nav');
+      const toggle = document.getElementById('nav-toggle');
+      const flyoutList = document.getElementById('flyout-list');
+      if (!nav || !toggle || !flyoutList) return;
+
+      const cards = Array.from(document.querySelectorAll('.docs-stack > .card[id]'));
+      const links = {}; // cog id -> { link }
+      const names = {}; // cog id -> 中文標題
+
+      function buildMenu() {
+        if (!cards.length) {
+          const empty = document.createElement('li');
+          empty.className = 'nav-empty';
+          empty.textContent = '目前沒有可顯示的分類';
+          flyoutList.appendChild(empty);
+          return;
+        }
+        cards.forEach((card) => {
+          const tagEl = card.querySelector('.tag');
+          const titleEl = card.querySelector('h2');
+          const tag = tagEl ? tagEl.textContent.trim() : '';
+          const name = titleEl ? titleEl.textContent.trim() : card.id;
+
+          // 選單本體只有一顆圖示鈕，各個 cog 都在這個飛出面板裡（純文字，不放圖示）。
+          const flyItem = document.createElement('li');
+          const flyLink = document.createElement('a');
+          flyLink.href = '#' + card.id;
+          flyLink.dataset.target = card.id;
+
+          const text = document.createElement('span');
+          text.className = 'flyout-text';
+          const label = document.createElement('span');
+          label.className = 'nav-label';
+          label.textContent = name;
+          text.appendChild(label);
+          if (tag) {
+            const tagSpan = document.createElement('span');
+            tagSpan.className = 'nav-tag';
+            tagSpan.textContent = tag;
+            text.appendChild(tagSpan);
+          }
+          flyLink.appendChild(text);
+          flyItem.appendChild(flyLink);
+          flyoutList.appendChild(flyItem);
+
+          links[card.id] = { link: flyLink };
+          names[card.id] = name;
+        });
+      }
+
+      function setOpen(open) {
+        nav.classList.toggle('is-open', open);
+        toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+      }
+
+      // 點飛出面板：平滑捲動到該段落，並同步網址錨點（可直接分享到同一段）。
+      // 面板本來就是 hover 才顯示，點完順便解除釘住狀態。
+      flyoutList.addEventListener('click', (event) => {
+        const link = event.target.closest('a');
+        if (!link || !link.dataset.target) return;
+        event.preventDefault();
+        const target = document.getElementById(link.dataset.target);
+        if (!target) return;
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        history.replaceState(null, '', '#' + link.dataset.target);
+        setOpen(false);
+      });
+
+      // 桌機靠 hover 就够了；觸控沒有 hover，點選單鈕切換釘住展開。
+      const coarsePointer = window.matchMedia('(hover: none)').matches;
+      toggle.addEventListener('click', () => {
+        if (!coarsePointer) return;
+        setOpen(!nav.classList.contains('is-open'));
+      });
+
+      // hover 展開是 CSS 做的，這裡只把 aria-expanded 同步成真實狀態。
+      nav.addEventListener('mouseenter', () => toggle.setAttribute('aria-expanded', 'true'));
+      nav.addEventListener('mouseleave', () => {
+        if (!nav.classList.contains('is-open')) toggle.setAttribute('aria-expanded', 'false');
+      });
+
+      document.addEventListener('click', (event) => {
+        if (!nav.classList.contains('is-open')) return;
+        if (nav.contains(event.target)) return;
+        setOpen(false);
+      });
+
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') setOpen(false);
+      });
+
+      // 捲動時把目前所在段落高亮：以「卡片頂端越過視窗上方門檻」的最後一張為準。
+      let pending = false;
+
+      function updateActive() {
+        pending = false;
+        // 捲動超過一點距離後，選單鈕吸回畫面頂端（手機版原本排在返回首頁下一行）。
+        nav.classList.toggle('is-stuck', window.scrollY > 40);
+        const marker = 120;
+        let currentId = cards.length ? cards[0].id : null;
+        cards.forEach((card) => {
+          if (card.getBoundingClientRect().top <= marker) currentId = card.id;
+        });
+        // 捲到底頁尾時強制選中最後一段，避免最後一張太短時選不到。
+        if (window.innerHeight + window.scrollY >= document.body.scrollHeight - 4) {
+          currentId = cards.length ? cards[cards.length - 1].id : currentId;
+        }
+        Object.keys(links).forEach((id) => {
+          links[id].link.classList.toggle('is-active', id === currentId);
+        });
+        // 選單本體只有圖示，沒有文字可顯示目前段落，就寫進原生小提示。
+        if (currentId && names[currentId]) {
+          toggle.title = '指令選單 ・ 目前：' + names[currentId];
+        }
+      }
+
+      function onScroll() {
+        if (pending) return;
+        pending = true;
+        requestAnimationFrame(updateActive);
+      }
+
+      buildMenu();
+      updateActive();
+      window.addEventListener('scroll', onScroll, { passive: true });
+      window.addEventListener('resize', updateActive);
+
+      // 直接開 /docs#cog-music 這種帶錨點的網址時，對齊到該段落。
+      const initial = (window.location.hash || '').replace('#', '');
+      if (initial && document.getElementById(initial)) {
+        document.getElementById(initial).scrollIntoView({ block: 'start' });
+        updateActive();
+      }
+    })();
+  </script>
 </body>
 
 </html>
