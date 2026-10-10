@@ -5,3 +5,4 @@ waitress
 certifi
 aiohttp
 wavelink
+gTTS

@@ -5,9 +5,11 @@ import json
 import os
 import re
 import tempfile
+import time
 from collections import deque
 from typing import TYPE_CHECKING, Any
 
+import aiohttp
 import discord
 from discord import app_commands, ui
 from discord.ext import commands, tasks
@@ -30,6 +32,13 @@ EMPTY_VOICE_CHANNEL_TIMEOUT = float(os.getenv('EMPTY_VOICE_CHANNEL_TIMEOUT', '60
 
 # 多久檢查一次 Lavalink 節點的連線狀態（秒），可用環境變數覆寫。
 NODE_HEALTH_CHECK_INTERVAL = float(os.getenv('NODE_HEALTH_CHECK_INTERVAL', '30'))
+
+# 連線失敗後對節點 /version 做一次快速探測的逾時秒數（診斷用；刻意比連線逾時短，避免失敗回報又拖很久）。
+LAVALINK_PROBE_TIMEOUT = 5.0
+
+# Pool 為空時自動重連的冷卻秒數，可用環境變數覆寫。
+# 沒有冷卻的話，health check 每 NODE_HEALTH_CHECK_INTERVAL 秒就會重連一次，節點長時間故障時會變成洗版式重試。
+LAVALINK_RECONNECT_COOLDOWN = float(os.getenv('LAVALINK_RECONNECT_COOLDOWN', '60'))
 
 
 def format_duration(length_ms: int | None) -> str:
@@ -101,6 +110,101 @@ def format_position(ms: int) -> str:
     h, rem = divmod(total, 3600)
     m, sec = divmod(rem, 60)
     return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
+
+
+# ---------- Lavalink 節點連線診斷 ----------
+# 背景：wavelink 遇到連線錯誤（TLS 握手失敗、拒絕連線…）只會寫進它自己的 logger，
+# 然後在背景無限退避重試；外層 asyncio.wait_for 逾時取消後，丟給我們的只有一個
+# 沒有任何訊息的 TimeoutError（開發者收到的 DM「錯誤訊息」欄位是空白的）。
+# 實測踩過的坑：LAVALINK_URI 寫成 https:// 但節點連接埠只提供明文 HTTP，
+# TLS 握手必失敗，音樂功能就這樣壞掉。這裡在失敗時主動對 {uri}/version 探測一次，
+# 把真實原因翻譯成可行動的中文訊息（該改哪個環境變數、密碼對不對、節點有沒有開）。
+
+
+async def _probe_lavalink_version(
+    url: str, headers: dict, timeout: float
+) -> tuple[int | None, str, Exception | None]:
+    """GET 一次 Lavalink 端點，回傳 (status, body, exception)，絕不拋例外。
+
+    診斷函式本身不能再丟例外，否則錯誤回報流程會被原始連線錯誤整個炸掉。
+    """
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout)) as session:
+            async with session.get(url, headers=headers) as resp:
+                return resp.status, (await resp.text()).strip(), None
+    except Exception as exc:
+        return None, '', exc
+
+
+def _describe_lavalink_version(url: str, status: int, body: str) -> str:
+    """把 /version 的 HTTP 回應翻譯成人話（供後台 log 與開發者 DM）。"""
+    if status == 200:
+        return (
+            f"{url} 回應 200（Lavalink {body or '未知版本'}），節點本身在線；"
+            "問題可能出在 WebSocket（/v4/websocket）連線，請確認反向代理有轉發 WebSocket 升級，或節點是否過載。"
+        )
+    if status == 401:
+        return f"{url} 回應 401：LAVALINK_PASSWORD 密碼錯誤。"
+    if status == 404:
+        return f"{url} 回應 404：LAVALINK_URI 指向的不是 Lavalink v4 服務，請確認連接埠與路徑。"
+    return f"{url} 回應非預期的 HTTP {status}。"
+
+
+def _describe_lavalink_probe_error(url: str, exc: Exception, timeout: float) -> str:
+    """把探測時丟出的例外翻譯成人話（訊息裡刻意不帶密碼）。"""
+    if isinstance(exc, (TimeoutError, aiohttp.ServerTimeoutError)):
+        return f"節點探測逾時（{timeout:g} 秒內無回應）：{url}"
+    if isinstance(exc, aiohttp.ClientConnectorError):
+        reason = getattr(exc, 'os_error', None) or exc
+        return (
+            f"無法連線到 Lavalink 節點：{url}（{reason}）。"
+            "請確認節點是否在線，以及 LAVALINK_URI 的協定與連接埠是否正確。"
+        )
+    if isinstance(exc, aiohttp.ClientError):
+        return f"探測 Lavalink 節點時發生連線錯誤：{type(exc).__name__}: {exc}"
+    return f"探測 Lavalink 節點時發生未預期錯誤：{type(exc).__name__}: {exc}"
+
+
+async def _safe_probe_lavalink_version(
+    url: str, headers: dict, timeout: float
+) -> tuple[int | None, str, Exception | None]:
+    """_probe_lavalink_version 的保險絲：即使 probe 本身改壞丟了例外，診斷也不會炸。"""
+    try:
+        return await _probe_lavalink_version(url, headers, timeout)
+    except Exception as exc:
+        return None, '', exc
+
+
+async def diagnose_lavalink_node(
+    lavalink_uri: str, lavalink_password: str, timeout: float = LAVALINK_PROBE_TIMEOUT
+) -> str:
+    """連線失敗後探測節點，回傳「給人看的」診斷字串；只讀、絕不拋例外、不包含密碼。
+
+    呼叫端（_report_lavalink_failure）會把它印進後台 log，並附在 notify_owner_error
+    的 extra_info 裡；回報前 main.py 還會再過一層 redact_secrets。
+    """
+    base = lavalink_uri.rstrip('/')
+    url = f'{base}/version'
+    headers = {'Authorization': lavalink_password}
+    status, body, exc = await _safe_probe_lavalink_version(url, headers, timeout)
+    if exc is None:
+        return _describe_lavalink_version(url, status, body)
+
+    if base.startswith('https://'):
+        # 本次故障的根因：https:// 指到只講明文 HTTP 的節點（TLS 握手必失敗）。
+        # 改探 http:// 並比對結果，直接在訊息裡告訴開發者要把 LAVALINK_URI 改成什麼。
+        http_base = 'http://' + base[len('https://'):]
+        h_status, _, h_exc = await _safe_probe_lavalink_version(f'{http_base}/version', headers, timeout)
+        if h_exc is None:
+            hint = '；另外 LAVALINK_PASSWORD 也不正確（401），請一併修正' if h_status == 401 else ''
+            return (
+                f'LAVALINK_URI 使用了 https://，但節點不支援 TLS（{exc}）。'
+                f'改用 http:// 可正常連線（{http_base}/version 回應 HTTP {h_status}）{hint}，'
+                f'請把 LAVALINK_URI 從「{base}」改成「{http_base}」。'
+            )
+        return f'無法連線到 Lavalink 節點：{url}（{exc}），改用 {http_base} 探測同樣失敗（{h_exc}）。'
+
+    return _describe_lavalink_probe_error(url, exc, timeout)
 
 
 # ---------- 點歌者限定操作：按鈕確認與全員投票 ----------
@@ -286,6 +390,15 @@ class Music(commands.Cog):
         # 用來避免健康檢查每隔 NODE_HEALTH_CHECK_INTERVAL 秒就重複 DM 開發者，
         # 只在「狀態從連線變離線」的那一刻通知一次，恢復連線後才會重置旗標。
         self._node_alert_sent: dict[str, bool] = {}
+        # Lavalink 連線狀態旗標（修正：開發者 DM 洗版 + 空 Pool 無法自動復原）：
+        #   _lavalink_connecting          連線程序進行中，避免 cog_load 的背景連線與
+        #                                  health check 的自動重連同時各開一條 WebSocket。
+        #   _lavalink_failure_notified    這次「故障期間」是否已 DM 開發者過；連線成功即重置，
+        #                                  讓每次故障只通知一次，而不是每輪重連都洗一次版。
+        #   _lavalink_last_reconnect_attempt 上次自動重連的時間戳（monotonic），用來冷卻。
+        self._lavalink_connecting = False
+        self._lavalink_failure_notified = False
+        self._lavalink_last_reconnect_attempt = 0.0
         # key: guild_id 字串，value: 點歌頻道 ID。
         # 只載入一次，之後修改時同步更新記憶體 + 檔案。
         self.music_channel_settings: dict = _load_music_settings()
@@ -347,27 +460,125 @@ class Music(commands.Cog):
         print(f"⏳ 已在背景開始連線 Lavalink 節點：{lavalink_uri}（不會阻擋機器人其他功能啟動）")
 
     async def _connect_lavalink(self, lavalink_uri: str, lavalink_password: str):
+        """連接單一 Lavalink 節點；失敗時診斷、清理並回報（同一故障期間只 DM 一次）。
+
+        實測發現的三個坑，都在這個函式裡處理：
+        1. wavelink 的 Pool.connect 在節點連不上時多半「不丟例外」，只寫它自己的
+           logger 然後回傳空 dict，所以不能把「沒拋例外」當成連線成功。
+        2. 外層 wait_for 逾時拿到的 TimeoutError 通常沒有任何訊息（str(e) 為空），
+           開發者收到的 DM「錯誤訊息」欄位就是空白的 → 刻意改丟帶訊息的 TimeoutError，
+           並在回報前先探測節點，把真實原因（如 https:// 指到只講明文 HTTP 的節點）寫進去。
+        3. 失敗的節點不會被 wavelink 清掉，可能殘留 DISCONNECTED 節點與沒關的
+           aiohttp session → 主動 node.close() 清理。
+        """
+        if self._lavalink_connecting:
+            print(f"ℹ️ 已有 Lavalink 連線程序在進行中，略過重複連線：{lavalink_uri}")
+            return
+
+        self._lavalink_connecting = True
         node = wavelink.Node(uri=lavalink_uri, password=lavalink_password)
+        error: Exception | None = None
         try:
             await asyncio.wait_for(
                 wavelink.Pool.connect(nodes=[node], client=self.bot),
                 timeout=LAVALINK_CONNECT_TIMEOUT,
             )
-            print(f"🎧 已成功連線至 Lavalink 節點：{lavalink_uri}")
-        except asyncio.TimeoutError as e:
+            # 關鍵檢查：Pool.connect 不拋例外 ≠ 連線成功，節點真的被註冊進 Pool 才算數。
+            if node.identifier in wavelink.Pool.nodes:
+                print(f"🎧 已成功連線至 Lavalink 節點：{lavalink_uri}")
+                self._lavalink_failure_notified = False  # 恢復正常，下次故障才會重新通知
+                return
+            error = ConnectionError(
+                f"Lavalink 節點連線被 wavelink 拒絕（Pool.connect 未註冊節點）：{lavalink_uri}。"
+                "常見原因：密碼錯誤、節點不是 Lavalink v4、或反向代理未轉發 WebSocket 升級；"
+                "wavelink 只把細節寫進它自己的 logger，請一併查看後台日誌。"
+            )
+            print(f"❌ {error}")
+        except asyncio.TimeoutError:
+            # 修正：先前直接丟原始 TimeoutError（無 args），DM 的「錯誤訊息」欄位是空白的。
+            error = TimeoutError(
+                f"Lavalink 節點連線逾時（超過 {LAVALINK_CONNECT_TIMEOUT:.0f} 秒）：{lavalink_uri}"
+            )
             print(
                 f"❌ 連線 Lavalink 節點逾時（超過 {LAVALINK_CONNECT_TIMEOUT:.0f} 秒）：{lavalink_uri}，"
                 "語音功能（/join /leave /play）可能暫時無法使用，但不影響機器人其他功能。"
             )
-            # 修正：先前只有 print，開發者不在電腦前看 log 就完全不會發現音樂功能掛了。
-            await self.bot.notify_owner_error(
-                e, extra_info=f"Lavalink 節點連線逾時：{lavalink_uri}（超過 {LAVALINK_CONNECT_TIMEOUT:.0f} 秒）"
-            )
         except Exception as e:
             # Lavalink 節點若尚未啟動，這裡會失敗；先印出訊息，不讓整個 Bot 崩潰。
+            error = e
             print(f"❌ 連線 Lavalink 節點失敗：{e}")
             print("   請確認 Lavalink 是否已啟動，以及 LAVALINK_URI / LAVALINK_PASSWORD 是否正確。")
-            await self.bot.notify_owner_error(e, extra_info=f"Lavalink 節點連線失敗：{lavalink_uri}")
+        finally:
+            self._lavalink_connecting = False
+
+        # 失敗路徑：清掉沒註冊成功的節點（WebSocket 退避重試、aiohttp session、Pool 殘留）。
+        await self._discard_failed_node(node)
+        await self._report_lavalink_failure(error, lavalink_uri, lavalink_password)
+
+    async def _discard_failed_node(self, node: "wavelink_module.Node") -> None:
+        """清理連線失敗的節點，避免殘留 DISCONNECTED 節點與沒關閉的 aiohttp session。
+
+        wavelink 的 Pool.connect 失敗時不會幫忙善後（節點可能根本沒進 Pool，
+        但 _connect 已經開了 ClientSession 與 WebSocket 重試），必須自己收掉，
+        否則每次重連都會多一條漏掉的 session。
+        """
+        if wavelink is None:
+            return
+        try:
+            await node.close(eject=True)  # eject=True：同時從 Pool 移除（若有的話）
+        except Exception as exc:
+            print(f"⚠️ 關閉失敗的 Lavalink 節點時發生錯誤（不影響主流程）：{type(exc).__name__}: {exc}")
+        session = getattr(node, '_session', None)
+        if session is not None and not session.closed:
+            try:
+                await session.close()
+            except Exception as exc:
+                print(f"⚠️ 關閉 Lavalink aiohttp session 失敗：{type(exc).__name__}: {exc}")
+
+    async def _report_lavalink_failure(
+        self, error: Exception, lavalink_uri: str, lavalink_password: str
+    ) -> None:
+        """連線失敗的統一回報：後台 log + 節點探測診斷 + DM 開發者（每輪故障只 DM 一次）。
+
+        診斷會主動打一次 {uri}/version（https:// 失敗時自動改探 http:// 並比對），
+        把 wavelink 刻意吞掉的真實原因（TLS 握手失敗、密碼錯誤、節點離線…）
+        翻譯成一句能直接照做的處置建議。訊息不帶密碼，回報前 main.py 還會再過一層
+        redact_secrets；診斷本身絕不拋例外，失敗時只降級成 log。
+        """
+        try:
+            diagnosis = await diagnose_lavalink_node(lavalink_uri, lavalink_password)
+        except Exception as exc:  # 防禦性：診斷函式設計上不拋例外，但回報流程不能被它炸掉
+            diagnosis = f"（診斷過程發生錯誤：{type(exc).__name__}: {exc}）"
+        print(f"🔍 Lavalink 連線診斷：{diagnosis}")
+
+        if self._lavalink_failure_notified:
+            # 重連冷卻期間每輪都會走到這裡，只記 log，不重複 DM 開發者。
+            print("ℹ️ 此次故障已通知過開發者，本次僅記錄後台日誌，不重複發送 DM。")
+            return
+        self._lavalink_failure_notified = True
+        await self.bot.notify_owner_error(
+            error,
+            extra_info=f"Lavalink 節點連線失敗：{lavalink_uri}\n🔍 診斷：{diagnosis}",
+        )
+
+    async def _reconnect_lavalink_if_needed(self) -> None:
+        """Pool 為空時自動重連（health check 呼叫；受 LAVALINK_RECONNECT_COOLDOWN 冷卻保護）。
+
+        舊版 health check 只遍歷「已註冊」的節點，Pool 是空的（初次連線失敗、
+        節點被剔除）時等於完全沒監控，音樂功能會一路壞到重新啟動。
+        """
+        if wavelink is None or self._lavalink_connecting:
+            return  # 連線中（例如 cog_load 的背景連線還沒結果），不要開第二條 WebSocket
+        lavalink_uri = os.getenv('LAVALINK_URI')
+        lavalink_password = os.getenv('LAVALINK_PASSWORD')
+        if not lavalink_uri or not lavalink_password:
+            return  # 沒設定節點 → 維持原本「略過連線」的行為，不重複印警告
+        now = time.monotonic()
+        if now - self._lavalink_last_reconnect_attempt < LAVALINK_RECONNECT_COOLDOWN:
+            return
+        self._lavalink_last_reconnect_attempt = now
+        print(f"🔁 Lavalink 節點不在 Pool 中，嘗試自動重連（冷卻 {LAVALINK_RECONNECT_COOLDOWN:g} 秒）：{lavalink_uri}")
+        await self._connect_lavalink(lavalink_uri, lavalink_password)
 
     # ---------- Lavalink 節點健康檢查 ----------
     @staticmethod
@@ -414,6 +625,12 @@ class Music(commands.Cog):
             nodes = wavelink.Pool.nodes
         except Exception as e:
             print(f">>> node_health_check 讀取節點清單失敗：{e}")
+            return
+
+        if not nodes:
+            # Pool 是空的（初次連線失敗／節點被剔除）時，下面的遍歷什麼都不會做，
+            # 等於故障期間完全沒有監控 → 改成在這裡受冷卻保護地自動重連。
+            await self._reconnect_lavalink_if_needed()
             return
 
         for identifier, node in nodes.items():

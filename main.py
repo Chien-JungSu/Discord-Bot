@@ -94,9 +94,10 @@ INITIAL_EXTENSIONS = [
     'cogs.bus',           # /bus
     'cogs.server_info',   # /server_info
     'cogs.welcome',       # /welcome_active /welcome_inactive + on_member_join
-    'cogs.reaction_roles',  # /reaction_roles 表符身份組（重用 cogs.welcome 的設定檔工具）
+    'cogs.reaction_roles',  # /reaction_roles_create /reaction_roles_edit 表符身份組（重用 cogs.welcome 的設定檔工具）
     'cogs.auto_reply',    # /auto_reply_add /auto_reply_edit /auto_reply_list /auto_reply_remove 關鍵字自動回覆（重用 cogs.welcome 的頻道驗證工具）
     'cogs.music',         # /music_join /music_leave /music_play ...（第1週新增，之後每週持續擴充）
+    'cogs.tts',           # /tts 文字轉語音 (gTTS)
 ]
 
 
