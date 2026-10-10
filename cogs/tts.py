@@ -124,11 +124,26 @@ class TTS(commands.Cog):
         else:
             full_filename = target_name
 
+        unsupported_msg = (
+            f"❌ 語言代碼 `{raw_lang or lang}` 不受支援或無效！"
+            "常見代碼例如：`zh-tw`（繁體中文）、`en`（英文）、`ja`（日文）等。"
+        )
+
+        # gTTS 2.5.x 的 _fallback_deprecated_lang() 會先把代碼轉小寫再比對棄用清單，
+        # 導致「正確」的 zh-TW / zh-CN 也被當成棄用的 zh-tw / zh-cn 而印出警告，
+        # fr-CA / pt-PT 甚至會被降級成 fr / pt。所以改成自己用 tts_langs() 驗證，
+        # 再以 lang_check=False 呼叫 gTTS 跳過它的 fallback。
+        # 若取不到語言清單（_CANONICAL_LANGS 為空），則退回讓 gTTS 自己檢查。
+        use_own_check = bool(_CANONICAL_LANGS)
+        if use_own_check and lang not in _CANONICAL_LANGS.values():
+            await interaction.response.send_message(unsupported_msg, ephemeral=True)
+            return
+
         await interaction.response.defer(thinking=True)
 
         def generate_audio() -> io.BytesIO:
             fp = io.BytesIO()
-            tts_obj = gTTS(text=clean_text, lang=lang, slow=False)
+            tts_obj = gTTS(text=clean_text, lang=lang, slow=False, lang_check=not use_own_check)
             tts_obj.write_to_fp(fp)
             fp.seek(0)
             return fp
@@ -136,8 +151,7 @@ class TTS(commands.Cog):
         try:
             audio_fp = await asyncio.to_thread(generate_audio)
         except ValueError as e:
-            msg = f"❌ 語言代碼 `{raw_lang or lang}` 不受支援或無效！常見代碼例如：`zh-tw`（繁體中文）、`en`（英文）、`ja`（日文）等。"
-            await interaction.followup.send(msg, ephemeral=True)
+            await interaction.followup.send(unsupported_msg, ephemeral=True)
             return
         except Exception as e:
             print(f"❌ gTTS 轉換時發生錯誤: {e}")
