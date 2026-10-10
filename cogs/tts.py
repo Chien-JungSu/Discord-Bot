@@ -22,6 +22,59 @@ def format_size(num_bytes: int) -> str:
     return f"{num_bytes / 1024:.1f} KB"
 
 
+# 常見的語言代碼 typo / 別名 → gTTS 實際支援的代碼。
+# key 一律小寫、用 "-" 分隔（查詢前會先把使用者輸入正規化成這個格式）。
+LANGUAGE_ALIASES: dict[str, str] = {
+    # 日文
+    "jp": "ja", "jpn": "ja", "japanese": "ja", "日文": "ja", "日語": "ja",
+    # 韓文
+    "kr": "ko", "kor": "ko", "korean": "ko", "韓文": "ko", "韓語": "ko",
+    # 中文（未指定繁簡時預設繁體）
+    "tw": "zh-TW", "zh-hant": "zh-TW", "cht": "zh-TW", "ch": "zh-TW", "chinese": "zh-TW",
+    "中文": "zh-TW", "繁中": "zh-TW", "繁體中文": "zh-TW",
+    "cn": "zh-CN", "zh-hans": "zh-CN", "chs": "zh-CN", "簡中": "zh-CN", "簡體中文": "zh-CN",
+    "hk": "yue", "zh-hk": "yue", "cantonese": "yue", "粵語": "yue", "廣東話": "yue",
+    # 英文
+    "eng": "en", "english": "en", "en-us": "en", "en-gb": "en", "gb": "en", "英文": "en", "英語": "en",
+    # 歐洲語系
+    "ger": "de", "deu": "de", "german": "de", "德文": "de",
+    "fra": "fr", "fre": "fr", "french": "fr", "法文": "fr",
+    "sp": "es", "spa": "es", "spanish": "es", "西班牙文": "es",
+    "ita": "it", "italian": "it",
+    "rus": "ru", "russian": "ru", "俄文": "ru",
+    "pt-br": "pt", "por": "pt", "portuguese": "pt",
+    "gr": "el", "greek": "el",
+    "dk": "da",
+    "se": "sv",
+    "ua": "uk",
+    "cz": "cs",
+    "nb": "no", "nn": "no",
+    # 其他
+    "he": "iw", "heb": "iw",
+    "jv": "jw",
+    "in": "id", "ind": "id",
+    "vn": "vi", "vie": "vi", "越南文": "vi",
+    "tha": "th", "泰文": "th",
+    "fil": "tl",
+}
+
+try:
+    from gtts.lang import tts_langs
+    # 小寫 → gTTS 正確大小寫的代碼（例如 "fr-ca" → "fr-CA"）。gTTS 收到小寫的
+    # "fr-ca"、"pt-pt" 時會默默退回 "fr"、"pt"，所以要先還原成正確大小寫。
+    _CANONICAL_LANGS: dict[str, str] = {code.lower(): code for code in tts_langs()}
+except Exception:
+    _CANONICAL_LANGS = {}
+
+
+def normalize_language(raw: str) -> str:
+    """把使用者輸入的語言代碼正規化：統一小寫、"_" 換成 "-"，
+    套用常見 typo / 別名對照，再還原成 gTTS 認得的大小寫。"""
+    key = raw.strip().lower().replace("_", "-")
+    key = LANGUAGE_ALIASES.get(key, key)
+    return _CANONICAL_LANGS.get(key.lower(), key)
+
+
 class TTS(commands.Cog):
     """文字轉語音 (Text-to-Speech) 模組，使用 gTTS 將文字轉換為語音並輸出 MP3 檔案。"""
 
@@ -50,10 +103,13 @@ class TTS(commands.Cog):
             return
 
         default_lang_used = False
-        lang = language.strip().lower() if language and language.strip() else ""
+        raw_lang = language.strip() if language and language.strip() else ""
+        lang = normalize_language(raw_lang) if raw_lang else ""
         if not lang:
             lang = "en"
             default_lang_used = True
+        # 只有「實際換成不同代碼」才提示，單純大小寫差異（ZH-TW → zh-TW）不算。
+        lang_converted = bool(raw_lang) and raw_lang.lower().replace("_", "-") != lang.lower()
 
         target_name = file_name.strip() if file_name and file_name.strip() else ""
         if not target_name:
@@ -80,7 +136,7 @@ class TTS(commands.Cog):
         try:
             audio_fp = await asyncio.to_thread(generate_audio)
         except ValueError as e:
-            msg = f"❌ 語言代碼 `{lang}` 不受支援或無效！常見代碼例如：`zh-tw`（繁體中文）、`en`（英文）、`ja`（日文）等。"
+            msg = f"❌ 語言代碼 `{raw_lang or lang}` 不受支援或無效！常見代碼例如：`zh-tw`（繁體中文）、`en`（英文）、`ja`（日文）等。"
             await interaction.followup.send(msg, ephemeral=True)
             return
         except Exception as e:
@@ -106,6 +162,8 @@ class TTS(commands.Cog):
         lines = []
         if default_lang_used:
             lines.append("未輸入語言代碼，已使用預設語言 (英文) 進行轉換。")
+        elif lang_converted:
+            lines.append(f"已將語言代碼 `{raw_lang}` 自動轉換為 `{lang}`。")
         lines.append(f"已成功將文字轉換成語音，並儲存為 {full_filename}")
 
         reply_content = "\n".join(lines)
