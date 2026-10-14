@@ -18,7 +18,7 @@ Supported features:
 - `/welcome_active`: set up a server welcome message (welcome channel required; rules and role channels optional)
 - `/welcome_inactive`: disable the server welcome message feature
 - `/reaction_roles_create`: post a reaction-role message with emoji + role pairs (multiple messages per server); members gain the role by reacting and lose it when un-reacting, and reactions that grant nothing are removed automatically. Requires **Manage Server** permission
-- `/reaction_roles_edit`: edit a posted reaction-role message interactively — pick it from a dropdown menu, then edit the message text or emoji/role pairs in pop-up inputs, or toggle strict mode with one click. Requires **Manage Server** permission
+- `/reaction_roles_edit`: select a message from a dropdown menu to edit it interactively with the new visual pair editor (native Discord role selector + click reactions directly on the message to capture, no copying IDs required), modify message text, or toggle strict mode. Requires **Manage Server** permission
 - `/music_join`: join the voice channel where the user is currently connected
 - `/music_leave`: leave the current voice channel
 - `/music_play <query>`: search and play music; automatically queues the track if something is already playing (accepts keywords, or a YouTube/SoundCloud URL)
@@ -120,7 +120,12 @@ When launched, the bot starts the Flask background server from `cogs/web_server.
 - `/welcome_active welcome_channel:<channel> [rules_channel:<channel>] [role_channel:<channel>]`: enable welcome messages with a required welcome channel and optional rules/role channels. Requires **Manage Server** permission.
 - `/welcome_inactive`: disable welcome messages for this server. Requires **Manage Server** permission.
 - `/reaction_roles_create message:<text> pairs:<emoji role emoji role ...> [channel:<channel>] [strict:<true/false>]`: post a reaction-role message to the role channel configured via `/welcome_active` (or the given channel). Emoji + role pairs are space-separated, one-to-one, up to 20 pairs; the bot reacts with every emoji first, and members gain or lose the matching role as they add or remove reactions. Each server keeps up to 10 reaction-role messages at once. `strict` is on by default and auto-removes reactions that grant no role (the bot needs **Manage Messages** in that channel). Requires **Manage Server** permission.
-- `/reaction_roles_edit`: edit a posted reaction-role message. Pick the message from a dropdown menu (options show a summary of its emoji/role pairs), then press "Edit message text" or "Edit emoji pairs" to open pop-up inputs pre-filled with the current content — modify and submit. Emoji pairs must be the complete new set (`emoji role ...`, space-separated; a role can be its name, numeric ID or a <@&ID> mention); changing pairs also syncs the reactions on the message (emojis no longer used are cleared along with members' reactions, new ones are reacted by the bot, pairs still in use are kept). The "Strict mode" button toggles it on/off in one click. Everything happens in the same message (no spam when editing repeatedly); buttons expire after 120 seconds of inactivity. Requires **Manage Server** permission.
+- `/reaction_roles_edit`: edit a posted reaction-role message. Pick the message from a dropdown menu (options show a summary of its emoji/role pairs):
+  - **Edit emoji pairs**: open the visual pair editor with native Discord role search (no copying role IDs needed) and "**👆 React on message to capture**" (react directly on the message to automatically capture the emoji without copying emoji IDs), modify individual pairs, or open "📝 Plain text batch editor" for advanced batch input.
+  - **Edit message text**: open a modal to edit the message body (automatically converts `<@&ID>` and `<:emoji:ID>` into human-readable `@RoleName` and `:emoji_name:`; automatically converts them back to valid tags upon submission).
+  - **✨ Sync text with pairs**: automatically format and update the message body based on current emoji-role pairs with a single click.
+  - **🛡️ Strict mode**: toggle valid-emoji-only enforcement on/off in one click.
+  Changing pairs automatically syncs reactions on the message (unused emojis are cleared along with members' reactions; newly added emojis are added by the bot; pairs still in use remain untouched). All interactions happen in place on the same message without spam; buttons expire after 120 seconds of inactivity. Requires **Manage Server** permission.
 - `/music_join`: join the user's current voice channel. Requires `wavelink` and a configured Lavalink node.
 - `/music_leave`: leave the current voice channel, and clear that server's playback queue.
 - `/music_play query:<keywords or URL>`: search and play music; auto-joins your voice channel if the bot isn't connected yet. If something is already playing (or paused), the new track is appended to the FIFO queue instead of replacing it.
@@ -142,13 +147,21 @@ When launched, the bot starts the Flask background server from `cogs/web_server.
 
 ## Reaction Roles Feature
 
-`/reaction_roles_create` posts a reaction-role message: after sending it, the bot reacts with every configured emoji first, so members can gain the matching role by reacting and lose it when the reaction is removed. Each server can keep multiple reaction-role messages at once (up to 10; the command asks you to remove old ones when full). Settings are stored in `reaction_roles.json` and persist across restarts (the old single-message format is migrated automatically).
+`/reaction_roles_create` posts a reaction-role message: after sending it, the bot reacts with every configured emoji first, so members can gain the matching role by reacting and lose it when the reaction is removed. Each server can keep multiple reaction-role messages at once (up to 10; the command asks you to remove old ones when full). Settings are stored in the SQLite database (`bot_database.db`) and persist across restarts (if upgrading from an older version, existing `reaction_roles.json` files are migrated automatically).
 
-`/reaction_roles_edit` edits a posted reaction-role message the same way `/auto_reply_edit` works: pick the message from a dropdown menu, press "Edit message text" or "Edit emoji pairs" to open pop-up inputs pre-filled with the current content, or press the strict button to toggle it in one click; results are updated in place on the same message (no spam when editing repeatedly), and buttons expire after 120 seconds of inactivity (just run the command again). Changing pairs also syncs the reactions on the message: emojis no longer used are cleared together with the members' reactions on them (requires **Manage Messages**), emojis still in use are kept as-is so members do not have to react again; settings and reactions are rolled back if saving fails.
+`/reaction_roles_edit` modifies a posted reaction-role message: pick the message from a dropdown menu, then press "Edit message text" to modify the content, press "🛡️ Strict mode" to toggle it in one click, or press "**Edit emoji pairs**" to enter the all-new visual pair editor. The visual pair editor significantly streamlines management:
+
+- **No copying role IDs**: search and pick roles directly from Discord's native role selector.
+- **No copying emoji IDs**: click "**👆 React on message to capture**", head over to the original message and react with the emoji you want — the bot automatically captures and removes the temporary reaction; or use "➕ Input emoji" to type or paste emojis.
+- **Flexible individual management**: select any pair from the menu to swap its role, change its emoji, or delete it individually.
+- **Staged preview & save**: preview all changes in a staged list and click "**💾 Save & apply**" to sync everything in one batch, preventing frequent Discord API calls and rate limits.
+- **Plain text compatibility**: the "📝 Plain text batch editor" modal is still available for pasting multiple pairs at once.
+
+Results are updated in place on the same message (no spam when editing repeatedly), and buttons expire after 120 seconds of inactivity (just run the command again). Changing pairs also syncs the reactions on the message: emojis no longer used are cleared together with the members' reactions on them (requires **Manage Messages**), emojis still in use are kept as-is so members do not have to react again; settings and reactions are rolled back if saving fails.
 
 **Only valid emojis (strict mode)**: `strict` is on by default. When a member reacts with an emoji that maps to no role, the bot removes that reaction so only role-granting emojis stay. Removing someone else's reaction requires **Manage Messages** in that channel; the command refuses to send and lists the missing permission if the bot lacks it. Missing permissions, a deleted message, or other failures are only logged in the console and never break the other features. Pass `strict: false` to keep free-form reactions (e.g. to use the message as a comment board). Reaction-role messages stored before this feature (no `strict` key in the settings file) are treated as strict.
 
-**Reaction rate limit**: per (member, emoji) pair, a grant/revoke takes effect at most once every 5 seconds; repeated clicks/un-reacts on the same emoji during the cooldown are silently ignored (other emojis and other members are unaffected), preventing role spam through rapid toggling. Invalid-emoji cleanup shares the same cooldown, so spamming one invalid emoji only triggers a single removal. Cooldown state is stored in `reaction_roles_cooldowns.json` and survives restarts.
+**Reaction rate limit**: per (member, emoji) pair, a grant/revoke takes effect at most once every 5 seconds; repeated clicks/un-reacts on the same emoji during the cooldown are silently ignored (other emojis and other members are unaffected), preventing role spam through rapid toggling. Invalid-emoji cleanup shares the same cooldown, so spamming one invalid emoji only triggers a single removal. Cooldown state is stored in the SQLite database (`bot_database.db`) and survives restarts.
 
 How the `pairs` parameter is parsed:
 
@@ -167,7 +180,7 @@ How the `pairs` parameter is parsed:
 - **Bot reply text**: when triggered, the bot quotes the triggering message and replies with this text (it never @-mentions anyone), up to 1500 characters.
 - **Active scope**: a single text channel, or the whole server (when `channel` is omitted).
 
-Each server keeps at most **10 rules** at a time (the command asks you to remove old ones when full); a single message only ever triggers the first matching rule; the same member cannot retrigger the same rule within 3 seconds (anti-spam). Settings are stored in `auto_reply.json` and persist across restarts (the old single-keyword / single-reply format is migrated automatically into keyword and reply lists).
+Each server keeps at most **10 rules** at a time (the command asks you to remove old ones when full); a single message only ever triggers the first matching rule; the same member cannot retrigger the same rule within 3 seconds (anti-spam). Settings are stored in the SQLite database (`bot_database.db`) and persist across restarts (if upgrading from an older version, existing `auto_reply.json` files are migrated automatically into keyword and reply lists).
 
 **Random reply mode**: a rule can hold several replies (up to 10); once a rule has more than one reply, every trigger picks one of them **at random**.
 
@@ -197,7 +210,7 @@ When enabled, the bot sends an embed to the configured welcome channel whenever 
 - A link to the rules channel (if configured)
 - A link to the role pickup channel (if configured)
 
-Welcome settings are saved to `welcome_settings.json` and persist across restarts.
+Welcome settings are saved to the SQLite database (`bot_database.db`) and persist across restarts (if upgrading from an older version, existing `welcome_settings.json` files are migrated automatically).
 
 > **Important**: Before using the welcome feature, go to the [Discord Developer Portal](https://discord.com/developers/applications) → **Bot** → **Privileged Gateway Intents** and enable **Server Members Intent**, otherwise the `on_member_join` event will not fire.
 
@@ -217,7 +230,7 @@ The bot also enables the `Message Content Intent` and voice-state intents for th
 - `/steal` parses Discord emoji references such as `<:pepe_smile:123456789>` and `<a:cat:456789>`, builds the correct CDN path from the extracted `emoji_id`, and creates custom emoji in the current guild via `guild.create_custom_emoji()`. When a source exceeds Discord's 256 KB limit or cannot be fetched, it returns clear user-facing text instead of leaking the raw API error payload.
 - `/tts` module converts text into MP3 audio via `gTTS` (Google Text-to-Speech), ported directly from `tts.py` (defaults to English `en` if language is omitted, and uses the first 10 characters of the text if filename is omitted); generation runs in an asynchronous thread to avoid blocking the event loop.
 - The bot syncs global slash commands in `setup_hook`. If that fails, it retries in `on_ready` as a fallback.
-- `cogs/web_server.py` runs a background Flask web service serving a status dashboard (`templates/index.html`) and the `/api/bot-stats` and `/api/uptime` endpoints.
+- `cogs/web_server.py` runs a background Flask web service serving a modern Apple Liquid Glass dashboard (`templates/index.html`), a command documentation page (`templates/docs.html`) with modular CSS in `static/css/`, and the `/api/bot-stats` and `/api/uptime` endpoints.
 
 ## Tips
 
