@@ -54,39 +54,10 @@ REPLY_COOLDOWN_LIMIT = 500
 BUTTON_IDLE_TIMEOUT = 120.0
 
 
-def _load_auto_reply_settings() -> dict:
-    if not os.path.exists(AUTO_REPLY_FILE):
-        return {}
-    try:
-        with open(AUTO_REPLY_FILE, 'r', encoding='utf-8') as f:
-            raw = json.load(f)
-    except (json.JSONDecodeError, IOError) as e:
-        print(f"⚠️ 讀取自動回覆設定失敗，將以空設定啟動: {e}")
-        return {}
-    if not isinstance(raw, dict):
-        return {}
-    # 容錯：規則清單必須是 list、每筆規則必須是 dict，不合的就丟掉
-    data: dict = {}
-    for guild_id, entry in raw.items():
-        if not isinstance(entry, dict):
-            continue
-        rules = entry.get('rules')
-        if not isinstance(rules, list):
-            continue
-        data[str(guild_id)] = {'rules': [_normalize_rule(r) for r in rules if isinstance(r, dict)]}
-    return data
-
-
-def _save_auto_reply_settings(data: dict):
-    dir_path = os.path.dirname(AUTO_REPLY_FILE)
-    try:
-        with tempfile.NamedTemporaryFile('w', encoding='utf-8', dir=dir_path, delete=False, suffix='.tmp') as tmp:
-            json.dump(data, tmp, ensure_ascii=False, indent=2)
-            tmp_path = tmp.name
-        os.replace(tmp_path, AUTO_REPLY_FILE)
-    except Exception as e:
-        print(f"❌ 儲存自動回覆設定失敗: {e}")
-        raise
+from cogs.database import (
+    load_auto_reply_settings as _load_auto_reply_settings,
+    save_auto_reply_settings as _save_auto_reply_settings,
+)
 
 
 def _normalize_rule(rule: dict) -> dict:
@@ -120,6 +91,18 @@ def _normalize_rule(rule: dict) -> dict:
         rule['reply'] = replies[0]  # reply 欄位永遠等於第一則回覆
     elif not isinstance(rule.get('reply'), str):
         rule['reply'] = ''
+    if not rule.get('scope'):
+        chan_id = rule.get('channel_id')
+        rule['scope'] = str(chan_id) if chan_id else SCOPE_ALL
+    if 'channel_id' not in rule:
+        scope = rule.get('scope')
+        if scope and scope != SCOPE_ALL:
+            try:
+                rule['channel_id'] = int(scope)
+            except (ValueError, TypeError):
+                rule['channel_id'] = None
+        else:
+            rule['channel_id'] = None
     return rule
 
 
@@ -331,10 +314,11 @@ class AutoReplyRuleSelect(discord.ui.Select):
         for index, rule in enumerate(rules, start=1):
             name = _truncate(_rule_name(rule), 80)
             desc = f'{_scope_text(rule.get("scope"), guild)}｜{_keywords_text(rule, 40)}'
+            val = str(rule.get('id')) if rule.get('id') is not None else str(index)
             options.append(discord.SelectOption(
                 label=f'{index}. {name}'[:100],
                 description=_truncate(desc, 100),
-                value=str(rule.get('id')),
+                value=val,
             ))
         super().__init__(
             placeholder='選擇要刪除的自動回覆規則…',
@@ -492,10 +476,11 @@ class AutoReplyEditSelect(discord.ui.Select):
             name = _truncate(_rule_name(rule), 80)
             state = '' if _rule_enabled(rule) else '｜⏸️ 已暫停'
             desc = f'{_scope_text(rule.get("scope"), guild)}{state}｜{_keywords_text(rule, 40)}'
+            val = str(rule.get('id')) if rule.get('id') is not None else str(index)
             options.append(discord.SelectOption(
                 label=f'{index}. {name}'[:100],
                 description=_truncate(desc, 100),
-                value=str(rule.get('id')),
+                value=val,
             ))
         super().__init__(
             placeholder='選擇要編輯的自動回覆規則…',
@@ -854,7 +839,44 @@ class AutoReply(commands.Cog):
     # ---------- 資料操作 ----------
 
     def _get_rules(self, guild_id: int) -> list:
-        return (self.settings.get(str(guild_id)) or {}).get('rules') or []
+        entry = self.settings.get(str(guild_id))
+        if not entry:
+            return []
+        rules = entry.get('rules') or []
+        seen_ids = set()
+        dirty = False
+        max_id = 0
+        for r in rules:
+            if isinstance(r, dict) and r.get('id') is not None:
+                try:
+                    rid = int(r['id'])
+                    max_id = max(max_id, rid)
+                except (ValueError, TypeError):
+                    pass
+        for r in rules:
+            if not isinstance(r, dict):
+                continue
+            _normalize_rule(r)
+            rid = r.get('id')
+            if rid is None or rid in seen_ids:
+                max_id += 1
+                r['id'] = max_id
+                dirty = True
+            else:
+                try:
+                    r['id'] = int(rid)
+                except (ValueError, TypeError):
+                    max_id += 1
+                    r['id'] = max_id
+                    dirty = True
+            seen_ids.add(r['id'])
+
+        if dirty:
+            try:
+                _save_auto_reply_settings(self.settings)
+            except Exception as e:
+                print(f"⚠️ 防禦性修復 auto_reply 規則 ID 後儲存失敗: {e}")
+        return rules
 
     def add_rule(self, guild_id: int, name: str, keyword: str, reply: str, scope: str) -> int:
         entry = self.settings.setdefault(str(guild_id), {'rules': []})
@@ -986,6 +1008,8 @@ class AutoReply(commands.Cog):
             return
         guild = interaction.guild
 
+        await interaction.response.defer(ephemeral=True)
+
         errors: list = []
 
         # ---------- 1. 驗證關鍵字與回覆內容 ----------
@@ -1018,7 +1042,7 @@ class AutoReply(commands.Cog):
                 description='請修正以下問題後再試一次：\n\n' + '\n'.join(errors),
                 color=discord.Color.red(),
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, ephemeral=True)
             return
 
         # ---------- 3. 檢查規則數量上限 ----------
@@ -1032,7 +1056,7 @@ class AutoReply(commands.Cog):
                 ),
                 color=discord.Color.red(),
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, ephemeral=True)
             return
 
         # ---------- 4. 權限預檢查（僅提醒，不阻擋：管理員之後仍可調整頻道權限） ----------
@@ -1053,7 +1077,7 @@ class AutoReply(commands.Cog):
             self.remove_rule(guild.id, new_id)
             traceback.print_exc()
             await self.bot.notify_owner_error(e, interaction, extra_info='auto_reply_add: 儲存設定失敗')
-            await interaction.response.send_message('❌ 儲存設定時發生錯誤，規則未生效，已回報開發者。', ephemeral=True)
+            await interaction.followup.send('❌ 儲存設定時發生錯誤，規則未生效，已回報開發者。', ephemeral=True)
             return
 
         scope_display = '🌐 整個伺服器' if scope == SCOPE_ALL else guild.get_channel(int(scope)).mention
@@ -1072,7 +1096,7 @@ class AutoReply(commands.Cog):
         if warning:
             embed.add_field(name='⚠️ 權限提醒', value=warning, inline=False)
         embed.set_footer(text='訊息內容「包含」關鍵字即觸發（不分大小寫、忽略多餘空白）；同一人對同一條規則 3 秒內不重複回覆。之後可用 /auto_reply_edit 增修關鍵字與回覆內容，或暫停／恢復這條規則。')
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name='auto_reply_edit', description='編輯自動回覆規則：輸入框編輯關鍵字／回覆內容（留空＝刪除該項），也能暫停或恢復整條規則（設定保留）')
     @app_commands.guild_only()
@@ -1083,6 +1107,8 @@ class AutoReply(commands.Cog):
             return
         guild = interaction.guild
 
+        await interaction.response.defer(ephemeral=True)
+
         rules = self._get_rules(guild.id)
         if not rules:
             embed = discord.Embed(
@@ -1090,7 +1116,7 @@ class AutoReply(commands.Cog):
                 description='此伺服器尚未新增任何自動回覆規則，先用 `/auto_reply_add` 新增吧！',
                 color=discord.Color.light_grey(),
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, ephemeral=True)
             return
 
         view = AutoReplyEditView(self, guild, rules)
@@ -1108,7 +1134,7 @@ class AutoReply(commands.Cog):
             ),
             color=discord.Color.blurple(),
         )
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
     @app_commands.command(name='auto_reply_list', description='列出所有自動回覆規則（一頁一條，可翻頁：規則名稱、狀態、關鍵字、回覆內容、生效範圍）')
     @app_commands.guild_only()
@@ -1119,6 +1145,8 @@ class AutoReply(commands.Cog):
             return
         guild = interaction.guild
 
+        await interaction.response.defer(ephemeral=True)
+
         rules = self._get_rules(guild.id)
         if not rules:
             embed = discord.Embed(
@@ -1126,20 +1154,17 @@ class AutoReply(commands.Cog):
                 description='此伺服器尚未新增任何自動回覆規則，先用 `/auto_reply_add` 新增吧！',
                 color=discord.Color.light_grey(),
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, ephemeral=True)
             return
 
         view = AutoReplyListView(self, guild, rules)
         view.initiator_id = interaction.user.id
-        await interaction.response.send_message(
+        msg = await interaction.followup.send(
             embed=build_rule_page_embed(rules[0], guild, 1, len(rules)),
             view=view,
             ephemeral=True,
         )
-        try:
-            view.message = await interaction.original_response()
-        except discord.HTTPException:
-            pass  # 拿不到訊息物件只是沒辦法在逾時時把按鈕變灰，功能不受影響
+        view.message = msg
 
     @app_commands.command(name='auto_reply_remove', description='刪除自動回覆規則（從目前「已生效」的規則中選取，刪除前需確認）')
     @app_commands.guild_only()
@@ -1150,6 +1175,8 @@ class AutoReply(commands.Cog):
             return
         guild = interaction.guild
 
+        await interaction.response.defer(ephemeral=True)
+
         rules = self._get_rules(guild.id)
         if not rules:
             embed = discord.Embed(
@@ -1157,7 +1184,7 @@ class AutoReply(commands.Cog):
                 description='此伺服器尚未新增任何自動回覆規則，先用 `/auto_reply_add` 新增吧！',
                 color=discord.Color.light_grey(),
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, ephemeral=True)
             return
 
         view = AutoReplyRemoveView(self, guild, rules)
@@ -1170,7 +1197,7 @@ class AutoReply(commands.Cog):
             ),
             color=discord.Color.orange(),
         )
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
     # ---------- 訊息偵測 ----------
 

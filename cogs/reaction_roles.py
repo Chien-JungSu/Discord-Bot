@@ -35,81 +35,12 @@ COOLDOWN_TRACK_LIMIT = 100
 COOLDOWN_FLUSH_INTERVAL = 60.0
 
 
-def _load_reaction_roles() -> dict:
-    """載入表符身份組設定，並把舊的「單則訊息」格式自動遷移成多則訊息格式。
-
-    舊格式：{guild_id: {channel_id, message_id, pairs}}
-    新格式：{guild_id: {messages: [{channel_id, message_id, pairs}]}}
-    """
-    if not os.path.exists(REACTION_ROLES_FILE):
-        return {}
-    try:
-        with open(REACTION_ROLES_FILE, 'r', encoding='utf-8') as f:
-            raw = json.load(f)
-    except (json.JSONDecodeError, IOError) as e:
-        print(f"⚠️ 讀取表符身份組設定失敗，將以空設定啟動: {e}")
-        return {}
-
-    migrated = False
-    data: dict = {}
-    for guild_id, entry in raw.items():
-        if not isinstance(entry, dict):
-            continue
-        if 'messages' in entry and isinstance(entry['messages'], list):
-            data[guild_id] = entry  # 已是新格式
-            continue
-        if 'message_id' in entry:  # 舊格式 → 包成單元素清單
-            data[guild_id] = {
-                'messages': [{
-                    'channel_id': entry.get('channel_id'),
-                    'message_id': entry.get('message_id'),
-                    'pairs': entry.get('pairs') or [],
-                }],
-            }
-            migrated = True
-    if migrated:
-        # 遷移結果立刻寫回，之後就固定走新格式
-        try:
-            _save_reaction_roles(data)
-            print("✅ reaction_roles.json 已自動遷移為多則訊息格式。")
-        except Exception as e:
-            print(f"⚠️ 遷移後的表符身份組設定寫回失敗（下次儲存時會再嘗試）: {e}")
-    return data
-
-
-def _save_reaction_roles(data: dict):
-    dir_path = os.path.dirname(REACTION_ROLES_FILE)
-    try:
-        with tempfile.NamedTemporaryFile('w', encoding='utf-8', dir=dir_path, delete=False, suffix='.tmp') as tmp:
-            json.dump(data, tmp, ensure_ascii=False, indent=2)
-            tmp_path = tmp.name
-        os.replace(tmp_path, REACTION_ROLES_FILE)
-    except Exception as e:
-        print(f"❌ 儲存表符身份組設定失敗: {e}")
-        raise
-
-
-def _load_cooldowns() -> dict:
-    if os.path.exists(COOLDOWN_FILE):
-        try:
-            with open(COOLDOWN_FILE, 'r', encoding='utf-8') as f:
-                raw = json.load(f)
-            if isinstance(raw, dict):
-                return {str(k): float(v) for k, v in raw.items()}
-        except (json.JSONDecodeError, IOError, ValueError, TypeError) as e:
-            print(f"⚠️ 讀取表符身份組冷卻狀態失敗（以空狀態啟動）: {e}")
-    return {}
-
-
-def _save_cooldowns(data: dict):
-    dir_path = os.path.dirname(COOLDOWN_FILE)
-    try:
-        with tempfile.NamedTemporaryFile('w', encoding='utf-8', dir=dir_path, delete=False, suffix='.tmp') as tmp:
-            json.dump(data, tmp, ensure_ascii=False)
-            tmp_path = tmp.name
-        os.replace(tmp_path, COOLDOWN_FILE)
-    except Exception as e:
-        print(f"❌ 儲存表符身份組冷卻狀態失敗: {e}")
+from cogs.database import (
+    load_reaction_roles as _load_reaction_roles,
+    save_reaction_roles as _save_reaction_roles,
+    load_reaction_cooldowns as _load_cooldowns,
+    save_reaction_cooldowns as _save_cooldowns,
+)
 
 
 def _parse_emoji_token(token: str) -> Optional[discord.PartialEmoji]:
@@ -196,6 +127,11 @@ def _validate_message_text(message: str, errors: list[str]):
 
 # 編輯視窗的按鈕閒置逾時（秒）：與 cogs.auto_reply 相同慣例，每次操作都會重新計時
 BUTTON_IDLE_TIMEOUT = 120.0
+# 「到訊息上按表符」：等待管理員在領取訊息上按下表符的時間（秒）
+EMOJI_CAPTURE_TIMEOUT = 60.0
+# 抓取結束後，仍忽略該管理員在領取訊息上的反應事件幾秒：避免抓取用的反應
+# （以及機器人隨後收回它所觸發的 remove 事件）被當成一般領取／收回身份組
+EMOJI_CAPTURE_GRACE = 5.0
 
 
 class ReactionRoles(commands.Cog):
@@ -214,6 +150,8 @@ class ReactionRoles(commands.Cog):
         self._cooldowns: dict[str, float] = _load_cooldowns()
         self._cooldown_dirty = False
         self._cooldown_flush_task: asyncio.Task | None = None
+        # 表符抓取中：(message_id, user_id) → 忽略反應事件直到這個 monotonic 時間
+        self._emoji_capture_ignore: dict[tuple[int, int], float] = {}
         self._start_cooldown_flusher()
 
     def _start_cooldown_flusher(self):
@@ -447,14 +385,19 @@ class ReactionRoles(commands.Cog):
         self,
         message: discord.Message,
         assignable: list[tuple[discord.PartialEmoji, discord.Role]],
+        skip: frozenset[str] | set[str] = frozenset(),
     ) -> tuple[list[dict], list[str]]:
         """機器人把所有指定的表符按一輪（已在訊息上的表符再按一次不會出錯，順便修補被手動刪掉的反應）。
 
+        skip：機器人已經按在訊息上的表符字串，這些直接視為成功、不再重按（減少 API 請求）。
         回傳 (saved_pairs, failed_emojis)。
         """
         saved_pairs: list[dict] = []
         failed_emojis: list[str] = []
         for emoji, role in assignable:
+            if str(emoji) in skip:
+                saved_pairs.append({'emoji': str(emoji), 'role_id': role.id})
+                continue
             try:
                 await message.add_reaction(str(emoji))
                 saved_pairs.append({'emoji': str(emoji), 'role_id': role.id})
@@ -489,6 +432,8 @@ class ReactionRoles(commands.Cog):
         # 清掉「新配對不再使用」的舊表符（連同成員對它的反應）；仍在使用的表符保留原樣
         failed_removes: list[str] = []
         new_emoji_keys = {str(emoji) for emoji, _role in assignable}
+        # 機器人已經按著、且新配對仍會使用的表符：不必重按
+        already_pressed = {str(r.emoji) for r in existing.reactions if r.me and str(r.emoji) in new_emoji_keys}
         for reaction in list(existing.reactions):
             if reaction.me and str(reaction.emoji) not in new_emoji_keys:
                 try:
@@ -497,7 +442,7 @@ class ReactionRoles(commands.Cog):
                     print(f'❌ reaction_roles：清除不再使用的舊表符 {reaction.emoji} 失敗: {e}')
                     failed_removes.append(str(reaction.emoji))
 
-        saved_pairs, failed_adds = await self._press_emojis(existing, assignable)
+        saved_pairs, failed_adds = await self._press_emojis(existing, assignable, skip=already_pressed)
         if not saved_pairs:
             # 一個表符都沒按上去：把舊配對的表符盡量按回去，讓訊息反應和未變更的舊設定一致
             for pair in old_pairs:
@@ -608,6 +553,9 @@ class ReactionRoles(commands.Cog):
             return
         guild = interaction.guild
 
+        # 先延遲回應（僅指令者可見），避免伺服器或網路延遲導致超過 Discord 3 秒限制 (10062 Unknown interaction)
+        await interaction.response.defer(ephemeral=True)
+
         guild_entry = self.settings.get(str(guild.id)) or {}
         messages = guild_entry.get('messages') or []
         if not messages:
@@ -616,7 +564,7 @@ class ReactionRoles(commands.Cog):
                 description='此伺服器尚未發送任何表符身份組訊息，先用 `/reaction_roles_create` 發送一則吧！',
                 color=discord.Color.light_grey(),
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, ephemeral=True)
             return
 
         view = ReactionRolesEditView(self, guild, messages)
@@ -626,13 +574,16 @@ class ReactionRoles(commands.Cog):
             description=(
                 f'此伺服器目前有 **{len(messages)}/{MAX_MESSAGES_PER_GUILD}** 則表符身份組訊息。\n'
                 '請從下方選單選擇要編輯的訊息（選項顯示該訊息的表符配對摘要），選取後：\n'
-                '• 按「**編輯訊息文字**」或「**編輯表符配對**」開啟輸入框，欄位已預先帶入現有內容，直接修改後送出\n'
+                '• 按「**編輯訊息文字**」開啟輸入框，欄位已預先帶入現有內容，直接修改後送出\n'
+                '• 按「**編輯表符配對**」進入配對編輯器：用**身份組選單**直接搜尋身份組、'
+                '到**領取訊息上按表符**即可選表符，不必再複製身份組 ID 或表符代碼\n'
                 '• 按「**🛡️ 僅限有效表符**」一下即可切換開／關\n'
                 '• 所有操作都在同一則訊息上進行（連續編輯不會洗版）；連續 120 秒沒有操作按鈕會自動失效，再執行一次指令即可'
             ),
             color=discord.Color.blurple(),
         )
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        msg = await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+        view.message = msg
 
     def _check_assignable(
         self,
@@ -641,22 +592,28 @@ class ReactionRoles(commands.Cog):
         errors: list[str],
     ) -> list[tuple[discord.PartialEmoji, discord.Role]]:
         """檢查機器人能否發放這些身份組：@everyone、受整合管理、階層不足都會剔除並記錄錯誤。"""
-        me = guild.me
         assignable: list[tuple[discord.PartialEmoji, discord.Role]] = []
         for emoji, role in parsed:
             emoji_key = str(emoji)
-            problems: list[str] = []
-            if role.is_default():
-                problems.append("@everyone 不能用表符發放")
-            elif role.managed:
-                problems.append("此身份組由整合服務管理，無法手動發放")
-            elif me is not None and me.top_role <= role:
-                problems.append(f"機器人的最高身份組（{me.top_role.name}）沒有高於它")
+            problems = self._role_problems(guild, role)
             if problems:
                 errors.append(f"• {emoji_key} → {role.mention}：{'；'.join(problems)}")
             else:
                 assignable.append((emoji, role))
         return assignable
+
+    @staticmethod
+    def _role_problems(guild: discord.Guild, role: discord.Role) -> list[str]:
+        """單一身份組能否由機器人發放；回傳問題描述（空清單＝可以發放）。"""
+        me = guild.me
+        problems: list[str] = []
+        if role.is_default():
+            problems.append("@everyone 不能用表符發放")
+        elif role.managed:
+            problems.append("此身份組由整合服務管理，無法手動發放")
+        elif me is not None and me.top_role <= role:
+            problems.append(f"機器人的最高身份組（{me.top_role.name}）沒有高於它")
+        return problems
 
     async def _apply_reaction_roles(
         self,
@@ -796,6 +753,13 @@ class ReactionRoles(commands.Cog):
         if self.bot.user and payload.user_id == self.bot.user.id:
             return  # 機器人自己按下／收回的表符不處理
 
+        # 管理員正在用「到訊息上按表符」挑選表符：這段期間的反應只用來抓表符
+        ignore_until = self._emoji_capture_ignore.get((payload.message_id, payload.user_id))
+        if ignore_until is not None:
+            if time.monotonic() < ignore_until:
+                return
+            self._emoji_capture_ignore.pop((payload.message_id, payload.user_id), None)
+
         mapping = self._lookup_mapping(payload)
         if mapping is None:
             return
@@ -927,6 +891,82 @@ async def _respond_in_place(
         return None  # 拿不到訊息物件只是沒辦法在逾時時把按鈕變灰，功能不受影響
 
 
+def _raw_to_display_text(guild: discord.Guild, text: str) -> str:
+    """將 Discord 原始訊息內容中的 ID 標籤轉換為人類可讀的文字（@身分組名、#頻道名、:表符名:）。"""
+    if not text:
+        return ""
+
+    # 1. 轉換身份組提及 <@&role_id> -> @RoleName
+    def _replace_role(m):
+        try:
+            rid = int(m.group(1))
+            role = guild.get_role(rid)
+            return f"@{role.name}" if role else m.group(0)
+        except Exception:
+            return m.group(0)
+
+    text = re.sub(r'<@&(\d+)>', _replace_role, text)
+
+    # 2. 轉換頻道提及 <#channel_id> -> #ChannelName
+    def _replace_channel(m):
+        try:
+            cid = int(m.group(1))
+            ch = guild.get_channel(cid)
+            return f"#{ch.name}" if ch else m.group(0)
+        except Exception:
+            return m.group(0)
+
+    text = re.sub(r'<#(\d+)>', _replace_channel, text)
+
+    # 3. 轉換自訂表情符號 <:name:id> 或 <a:name:id> -> :name:
+    text = re.sub(r'<a?:([a-zA-Z0-9_]+):\d+>', r':\1:', text)
+
+    return text
+
+
+def _display_to_raw_text(guild: discord.Guild, text: str, mapping_pairs: Optional[list] = None) -> str:
+    """將管理員在輸入框輸入的可讀文字（@身分組名、:表符名:）轉回 Discord 原始格式（<@&id>、<:name:id>）。"""
+    if not text:
+        return ""
+
+    # 1. 將 @RoleName 轉為 <@&role_id>（按名稱長度遞減排序，優先匹配最長名稱）
+    for role in sorted([r for r in guild.roles if not r.is_default()], key=lambda x: len(x.name), reverse=True):
+        pattern = rf'(?<!<@&)(?<!\w)@{re.escape(role.name)}(?!\w)'
+        text = re.sub(pattern, role.mention, text)
+
+    # 2. 將 :emoji_name: 轉為自訂表符 <:name:id> 或 <a:name:id>
+    emoji_map = {}
+    if mapping_pairs:
+        for p in mapping_pairs:
+            raw = str(p.get('emoji') or '')
+            m = re.match(r'<(a?):([a-zA-Z0-9_]+):(\d+)>', raw)
+            if m:
+                emoji_map[m.group(2)] = raw
+    for em in guild.emojis:
+        emoji_map[em.name] = str(em)
+
+    def _sub_emoji(m):
+        name = m.group(1)
+        return emoji_map.get(name, m.group(0))
+
+    text = re.sub(r'(?<!<)(?<!<a):([a-zA-Z0-9_]+):(?!\d+>)', _sub_emoji, text)
+    return text
+
+
+def _generate_pairs_message_content(guild: discord.Guild, mapping: dict, header: Optional[str] = None) -> str:
+    """根據現有配對自動產生排版美觀的領取訊息內文。"""
+    pairs = mapping.get('pairs') or []
+    if not header:
+        header = '點擊表符領取身分組！'
+    lines = [header, '']
+    for p in pairs:
+        emoji = p.get('emoji')
+        role = guild.get_role(int(p.get('role_id') or 0))
+        role_mention = role.mention if role else '(已刪除身分組)'
+        lines.append(f"{emoji} {role_mention}")
+    return '\n'.join(lines)
+
+
 class ReactionRolesMessageSelect(discord.ui.Select):
     """列出這個伺服器所有表符身份組訊息的下拉選單（選項顯示該訊息的表符配對摘要）。"""
 
@@ -935,9 +975,10 @@ class ReactionRolesMessageSelect(discord.ui.Select):
         for index, mapping in enumerate(messages, start=1):
             channel = guild.get_channel(int(mapping.get('channel_id') or 0))
             channel_name = channel.name if channel is not None else f"ID {mapping.get('channel_id')}"
+            pair_count = len(mapping.get('pairs') or [])
             options.append(discord.SelectOption(
                 label=f'{index}. {cog._pairs_option_text(guild, mapping)}'[:100],
-                description=f'#{channel_name}｜訊息 ID {mapping.get("message_id")}'[:100],
+                description=f'#{channel_name}｜共 {pair_count} 組表符配對'[:100],
                 value=str(mapping.get('message_id')),
             ))
         super().__init__(
@@ -970,7 +1011,24 @@ class ReactionRolesEditView(discord.ui.View):
     def __init__(self, cog: 'ReactionRoles', guild: discord.Guild, messages: list):
         super().__init__(timeout=BUTTON_IDLE_TIMEOUT)
         self.initiator_id: Optional[int] = None
+        self.message: Optional[discord.Message] = None
         self.add_item(ReactionRolesMessageSelect(cog, guild, messages))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if self.initiator_id is not None and interaction.user.id != self.initiator_id:
+            await interaction.response.send_message('❌ 只有執行編輯指令的人才能操作這個選單。', ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self):
+        for item in self.children:
+            if hasattr(item, 'disabled'):
+                item.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
 
 
 class ReactionRolesEditActionView(discord.ui.View):
@@ -1025,21 +1083,59 @@ class ReactionRolesEditActionView(discord.ui.View):
             return None, None
         return channel, message
 
-    @discord.ui.button(label='編輯訊息文字', style=discord.ButtonStyle.primary, emoji='✏️')
+    @discord.ui.button(label='編輯訊息文字', style=discord.ButtonStyle.primary, emoji='✏️', row=0)
     async def edit_text_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         channel, message = await self._fetch_for_modal(interaction)
         if message is None:
             return
         await interaction.response.send_modal(ReactionRolesEditTextModal(self.cog, self.guild, self.mapping, message))
 
-    @discord.ui.button(label='編輯表符配對', style=discord.ButtonStyle.success, emoji='🧩')
-    async def edit_pairs_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label='依配對同步文字', style=discord.ButtonStyle.secondary, emoji='✨', row=0)
+    async def auto_format_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """根據目前設定的表符配對，自動重新排版並更新訊息內文，完全免手動編輯或複製 ID。"""
         channel, message = await self._fetch_for_modal(interaction)
         if message is None:
             return
-        await interaction.response.send_modal(ReactionRolesPairsModal(self.cog, self.guild, self.mapping, channel, message))
 
-    @discord.ui.button(label='🛡️ 關閉僅限有效表符', style=discord.ButtonStyle.secondary)
+        pairs = self.mapping.get('pairs') or []
+        if not pairs:
+            await interaction.response.send_message('❌ 目前尚未設定任何表符配對，無法自動排版。', ephemeral=True)
+            return
+
+        # 嘗試保留原訊息第 1 行的自訂標題（如果不是以表符或提及開頭）
+        first_line = (message.content or '').split('\n', 1)[0].strip()
+        if (
+            first_line
+            and not first_line.startswith('<')
+            and not first_line.startswith('•')
+            and not any(first_line.startswith(p.get('emoji', '')) for p in pairs)
+        ):
+            custom_header = first_line
+        else:
+            custom_header = '點擊表符領取身分組！'
+
+        new_text = _generate_pairs_message_content(self.guild, self.mapping, header=custom_header)
+        errors = await self.cog._edit_message_text(message, new_text)
+        if errors:
+            await interaction.response.send_message('❌ 自動排版更新失敗：\n\n' + '\n'.join(errors), ephemeral=True)
+            return
+
+        embed = self.cog._build_edit_embed(self.guild, self.mapping, status='✨ 訊息內文已依目前設定的表符配對自動排版更新完成！')
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(label='編輯表符配對', style=discord.ButtonStyle.success, emoji='🧩', row=0)
+    async def edit_pairs_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # 就地切換成互動式配對編輯器（身份組選單＋到訊息上按表符），不必再手動複製 ID
+        self.stop()
+        editor = ReactionRolesPairsEditorView(self.cog, self.guild, self.mapping)
+        editor.initiator_id = interaction.user.id
+        await interaction.response.edit_message(embed=editor.build_embed(), view=editor)
+        try:
+            editor.message = await interaction.original_response()
+        except discord.HTTPException:
+            pass
+
+    @discord.ui.button(label='🛡️ 關閉僅限有效表符', style=discord.ButtonStyle.secondary, row=1)
     async def toggle_strict_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """切換「僅限有效表符」：按一下即切換並儲存，設定即時生效。"""
         if not await self.cog._toggle_message_strict(interaction, self.mapping):
@@ -1054,7 +1150,7 @@ class ReactionRolesEditActionView(discord.ui.View):
         # 就地把這則訊息換成結果＋同排按鈕（不另外開一則，避免連續操作時洗版）
         await interaction.response.edit_message(embed=embed, view=self)
 
-    @discord.ui.button(label='取消', style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label='取消', style=discord.ButtonStyle.secondary, row=1)
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self._disable_all()
         embed = discord.Embed(
@@ -1066,18 +1162,23 @@ class ReactionRolesEditActionView(discord.ui.View):
 
 
 class ReactionRolesEditTextModal(discord.ui.Modal):
-    """編輯訊息文字的彈出視窗：欄位已預先帶入現有文字，送出後就地更新編輯訊息。"""
+    """編輯訊息文字的彈出視窗：欄位已預先帶入現有文字（轉為人讀名稱），送出後自動轉換回標籤並就地更新。"""
 
     def __init__(self, cog: 'ReactionRoles', guild: discord.Guild, mapping: dict, message: discord.Message):
-        super().__init__(title=f'編輯訊息文字（訊息 ID {mapping.get("message_id")}）'[:45])
+        channel = guild.get_channel(int(mapping.get('channel_id') or 0))
+        ch_label = f"#{channel.name}" if channel else ""
+        modal_title = f"編輯訊息文字（{ch_label}）" if ch_label else "編輯領取訊息文字"
+        super().__init__(title=modal_title[:45])
         self.cog = cog
         self.guild = guild
         self.mapping = mapping
         self.message = message
+
+        display_text = _raw_to_display_text(guild, message.content or '')
         self.text_input = discord.ui.TextInput(
-            label='訊息文字',
-            placeholder='建議說明每個表符對應的身份組（最多 2000 字）',
-            default=(message.content or '')[:2000],
+            label='訊息文字（支援 @身分組 與 :表符:）',
+            placeholder='可直接輸入 @身分組名稱 或 :表符:，送出後自動轉換為標籤',
+            default=display_text[:2000],
             required=True,
             max_length=2000,
             style=discord.TextStyle.paragraph,
@@ -1085,16 +1186,18 @@ class ReactionRolesEditTextModal(discord.ui.Modal):
         self.add_item(self.text_input)
 
     async def on_submit(self, interaction: discord.Interaction):
+        # 將使用者輸入的人讀文字轉回 Discord 原始標籤（<@&id>、<:name:id>）
+        raw_text = _display_to_raw_text(self.guild, self.text_input.value, self.mapping.get('pairs'))
         errors: list[str] = []
-        _validate_message_text(self.text_input.value, errors)
+        _validate_message_text(raw_text, errors)
         if not errors:
-            errors = await self.cog._edit_message_text(self.message, self.text_input.value)
+            errors = await self.cog._edit_message_text(self.message, raw_text)
         if errors:
             await interaction.response.send_message('❌ 無法儲存：\n\n' + '\n'.join(errors), ephemeral=True)
             return
         view = ReactionRolesEditActionView(self.cog, self.guild, self.mapping)
         view.initiator_id = interaction.user.id
-        embed = self.cog._build_edit_embed(self.guild, self.mapping, status='✅ 訊息文字已更新')
+        embed = self.cog._build_edit_embed(self.guild, self.mapping, status='✅ 訊息文字已更新完成（已自動轉換身分組與表符標籤）')
         view.message = await _respond_in_place(interaction, embed=embed, view=view)
 
 
@@ -1152,6 +1255,601 @@ class ReactionRolesPairsModal(discord.ui.Modal):
         view.initiator_id = interaction.user.id
         embed = self.cog._build_edit_embed(self.guild, self.mapping, status=status)
         view.message = await _respond_in_place(interaction, embed=embed, view=view)
+
+
+class ReactionRolesSingleEmojiModal(discord.ui.Modal):
+    """輸入或修改單一表情符號的小視窗。"""
+
+    def __init__(self, editor: 'ReactionRolesPairsEditorView', *, is_edit: bool = False):
+        title = '更換表情符號' if is_edit else '為身份組輸入表情符號'
+        super().__init__(title=title[:45])
+        self.editor = editor
+        self.is_edit = is_edit
+
+        default_val = ''
+        if is_edit and editor.selected_index is not None and 0 <= editor.selected_index < len(editor.draft_pairs):
+            default_val = editor.draft_pairs[editor.selected_index].get('emoji', '')
+
+        self.emoji_input = discord.ui.TextInput(
+            label='表情符號',
+            placeholder='直接貼上或輸入表情符號，例如：🎉、🎮 或自訂表情',
+            default=default_val,
+            required=True,
+            max_length=100,
+        )
+        self.add_item(self.emoji_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        token = self.emoji_input.value.strip()
+        emoji = _parse_emoji_token(token)
+        if emoji is None:
+            await interaction.response.send_message(
+                f'❌ `{token}` 無法辨識為有效的表情符號，請確認後再試。',
+                ephemeral=True,
+            )
+            return
+
+        emoji_str = str(emoji)
+        exists = any(
+            p.get('emoji') == emoji_str and (not self.is_edit or idx != self.editor.selected_index)
+            for idx, p in enumerate(self.editor.draft_pairs)
+        )
+        if exists:
+            await interaction.response.send_message(
+                f'❌ 表符 {emoji_str} 已在其他配對中使用，每個表符只能對應一個身份組！',
+                ephemeral=True,
+            )
+            return
+
+        if self.is_edit:
+            if self.editor.selected_index is not None and 0 <= self.editor.selected_index < len(self.editor.draft_pairs):
+                old_emoji = self.editor.draft_pairs[self.editor.selected_index].get('emoji')
+                self.editor.draft_pairs[self.editor.selected_index]['emoji'] = emoji_str
+                self.editor.has_unsaved_changes = True
+                self.editor.status = f'✅ 已將第 {self.editor.selected_index + 1} 組的表符由 {old_emoji} 更換為 {emoji_str}（尚未儲存，完成後請點擊儲存）'
+        else:
+            if self.editor.pending_role is not None:
+                self.editor.draft_pairs.append({'emoji': emoji_str, 'role_id': self.editor.pending_role.id})
+                self.editor.has_unsaved_changes = True
+                self.editor.status = f'✅ 已新增配對：{emoji_str} → {self.editor.pending_role.mention}（尚未儲存，完成後請點擊儲存）'
+                self.editor.pending_role = None
+            else:
+                self.editor.pending_emoji = emoji_str
+                self.editor.status = f'已設定表情符號 {emoji_str}！請從下方「身份組選單」挑選要搭配的身份組。'
+
+        self.editor._refresh_components()
+        self.editor.message = await _respond_in_place(interaction, embed=self.editor.build_embed(), view=self.editor)
+
+
+class ReactionRolesAddPairModal(discord.ui.Modal):
+    """新增配對視窗（表符必填，身份組可選填）。"""
+
+    def __init__(self, editor: 'ReactionRolesPairsEditorView'):
+        super().__init__(title='新增表符配對'[:45])
+        self.editor = editor
+        self.emoji_input = discord.ui.TextInput(
+            label='表情符號',
+            placeholder='直接貼上或輸入表情符號，例如：🎉、🎮 或自訂表情',
+            required=True,
+            max_length=100,
+        )
+        self.role_input = discord.ui.TextInput(
+            label='身份組名稱或 @提及（選填）',
+            placeholder='可輸入身份組名稱、@提及，或留空稍後由身份組選單挑選',
+            required=False,
+            max_length=100,
+        )
+        self.add_item(self.emoji_input)
+        self.add_item(self.role_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        emoji_token = self.emoji_input.value.strip()
+        emoji = _parse_emoji_token(emoji_token)
+        if emoji is None:
+            await interaction.response.send_message(
+                f'❌ `{emoji_token}` 無法辨識為有效的表情符號。',
+                ephemeral=True,
+            )
+            return
+
+        emoji_str = str(emoji)
+        if any(p.get('emoji') == emoji_str for p in self.editor.draft_pairs):
+            await interaction.response.send_message(
+                f'❌ 表符 {emoji_str} 已在配對清單中，不能重複使用！',
+                ephemeral=True,
+            )
+            return
+
+        role_token = self.role_input.value.strip()
+        if role_token:
+            role = _find_role(self.editor.guild, role_token)
+            if role is None:
+                await interaction.response.send_message(
+                    f'❌ 找不到身份組 `{role_token}`。若身份組名稱特殊，建議留空此欄位直接從身份組選單挑選。',
+                    ephemeral=True,
+                )
+                return
+            problems = self.editor.cog._role_problems(self.editor.guild, role)
+            if problems:
+                await interaction.response.send_message(
+                    f"❌ 身份組 {role.mention} 無法發放：{'；'.join(problems)}",
+                    ephemeral=True,
+                )
+                return
+            self.editor.draft_pairs.append({'emoji': emoji_str, 'role_id': role.id})
+            self.editor.has_unsaved_changes = True
+            self.editor.pending_role = None
+            self.editor.status = f'✅ 已新增配對：{emoji_str} → {role.mention}（尚未儲存，完成後請點擊儲存）'
+        else:
+            self.editor.pending_emoji = emoji_str
+            self.editor.status = f'已設定表情符號 {emoji_str}！請從下方「身份組選單」挑選要搭配的身份組以完成新增。'
+
+        self.editor._refresh_components()
+        self.editor.message = await _respond_in_place(interaction, embed=self.editor.build_embed(), view=self.editor)
+
+
+class ReactionRolesPairSelect(discord.ui.Select):
+    """讓管理員點選要查看/修改/刪除的現有配對項目。"""
+
+    def __init__(self, editor: 'ReactionRolesPairsEditorView'):
+        options: list[discord.SelectOption] = [
+            discord.SelectOption(
+                label='➕ 新增模式（取消選取現有配對）',
+                value='-1',
+                description='選取後可搭配下方身份組選單與按鈕新增新配對',
+                default=(editor.selected_index is None),
+            )
+        ]
+        for idx, pair in enumerate(editor.draft_pairs):
+            role = editor.guild.get_role(int(pair.get('role_id') or 0))
+            role_name = role.name if role is not None else f"ID {pair.get('role_id')}"
+            options.append(discord.SelectOption(
+                label=f"{idx + 1}. {pair.get('emoji')} → {role_name}"[:100],
+                value=str(idx),
+                description=f"表符：{pair.get('emoji')} ｜ 身份組：{role_name}"[:100],
+                default=(editor.selected_index == idx),
+            ))
+        super().__init__(
+            placeholder='選擇要修改/更換表符/刪除的配對項目…',
+            min_values=1,
+            max_values=1,
+            options=options[:25],
+            row=0,
+        )
+        self.editor = editor
+
+    async def callback(self, interaction: discord.Interaction):
+        idx = int(self.values[0])
+        if idx == -1:
+            self.editor.selected_index = None
+            self.editor.status = '已切換至「新增模式」。請從「身份組選單」挑選身份組，再輸入或到訊息上按表符。'
+        else:
+            self.editor.selected_index = idx
+            selected_pair = self.editor.draft_pairs[idx]
+            role = self.editor.guild.get_role(int(selected_pair.get('role_id') or 0))
+            role_text = role.mention if role else f"ID {selected_pair.get('role_id')}"
+            self.editor.status = (
+                f"已選取第 {idx + 1} 組配對（{selected_pair.get('emoji')} → {role_text}）：\n"
+                "• **換身份組**：直接從下方「身份組選單」挑選新身份組\n"
+                "• **換表符**：點擊「✏️ 更換表符」或「👆 到訊息按表符」\n"
+                "• **刪除**：點擊「🗑️ 刪除選取配對」"
+            )
+        self.editor._refresh_components()
+        await interaction.response.edit_message(embed=self.editor.build_embed(), view=self.editor)
+
+
+class ReactionRolesEditorRoleSelect(discord.ui.RoleSelect):
+    """原生身份組選單，支援搜尋名稱與直接點選，免複製任何身份組 ID。"""
+
+    def __init__(self, editor: 'ReactionRolesPairsEditorView'):
+        super().__init__(
+            placeholder='選擇身份組（支援搜尋名稱／免複製 ID）...',
+            min_values=1,
+            max_values=1,
+            row=1,
+        )
+        self.editor = editor
+
+    async def callback(self, interaction: discord.Interaction):
+        val = self.values[0]
+        role = val if isinstance(val, discord.Role) else self.editor.guild.get_role(int(val))
+        if role is None:
+            self.editor.status = '❌ 找不到所選取的身份組。'
+            self.editor._refresh_components()
+            await interaction.response.edit_message(embed=self.editor.build_embed(), view=self.editor)
+            return
+
+        problems = self.editor.cog._role_problems(self.editor.guild, role)
+        if problems:
+            self.editor.status = f"❌ 身份組 {role.mention} 無法發放：{'；'.join(problems)}"
+            self.editor._refresh_components()
+            await interaction.response.edit_message(embed=self.editor.build_embed(), view=self.editor)
+            return
+
+        # 情境 1：已在待定表符狀態，直接完成新增
+        if self.editor.pending_emoji:
+            emoji_str = self.editor.pending_emoji
+            self.editor.pending_emoji = None
+            self.editor.draft_pairs.append({'emoji': emoji_str, 'role_id': role.id})
+            self.editor.has_unsaved_changes = True
+            self.editor.status = f'✅ 已新增配對：{emoji_str} → {role.mention}（尚未儲存，完成後請點擊儲存）'
+        # 情境 2：已選取某組配對，直接更換該組的身份組
+        elif self.editor.selected_index is not None and 0 <= self.editor.selected_index < len(self.editor.draft_pairs):
+            old_role_id = self.editor.draft_pairs[self.editor.selected_index].get('role_id')
+            old_role = self.editor.guild.get_role(int(old_role_id or 0))
+            old_name = old_role.name if old_role else f"ID {old_role_id}"
+            self.editor.draft_pairs[self.editor.selected_index]['role_id'] = role.id
+            self.editor.has_unsaved_changes = True
+            self.editor.status = f'✅ 已將第 {self.editor.selected_index + 1} 組的身份組由 @{old_name} 更換為 {role.mention}（尚未儲存）'
+        # 情境 3：未選取配對，暫存為待配對身份組
+        else:
+            self.editor.pending_role = role
+            self.editor.status = (
+                f"已選擇身份組：{role.mention}！\n"
+                "• 按「➕ 輸入表符」輸入表情符號\n"
+                "• 或按「👆 到訊息按表符」直接在領取訊息上按一下表情"
+            )
+
+        self.editor._refresh_components()
+        await interaction.response.edit_message(embed=self.editor.build_embed(), view=self.editor)
+
+
+class ReactionRolesPairsEditorView(discord.ui.View):
+    """互動式表符配對編輯器：免手動複製身份組 ID 與表符 ID。"""
+
+    def __init__(self, cog: 'ReactionRoles', guild: discord.Guild, mapping: dict):
+        super().__init__(timeout=BUTTON_IDLE_TIMEOUT)
+        self.cog = cog
+        self.guild = guild
+        self.mapping = mapping
+        self.draft_pairs: list[dict] = [dict(p) for p in (mapping.get('pairs') or [])]
+        self.selected_index: Optional[int] = None
+        self.pending_role: Optional[discord.Role] = None
+        self.pending_emoji: Optional[str] = None
+        self.status: Optional[str] = None
+        self.has_unsaved_changes: bool = False
+        self.initiator_id: Optional[int] = None
+        self.message: Optional[discord.Message] = None
+        self.is_capturing: bool = False
+        self._refresh_components()
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if self.initiator_id is not None and interaction.user.id != self.initiator_id:
+            await interaction.response.send_message('❌ 只有執行編輯指令的人才能操作這些選單與按鈕。', ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self):
+        for item in self.children:
+            if hasattr(item, 'disabled'):
+                item.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+    def build_embed(self) -> discord.Embed:
+        channel_id = int(self.mapping.get('channel_id') or 0)
+        message_id = int(self.mapping.get('message_id') or 0)
+        channel = self.guild.get_channel(channel_id)
+        channel_text = channel.mention if channel is not None else f'（ID {channel_id}）'
+        jump_url = f'https://discord.com/channels/{self.guild.id}/{channel_id}/{message_id}'
+
+        lines = [
+            f'📢 頻道：{channel_text} ｜ 🔗 [前往原訊息]({jump_url})',
+            '',
+            f'**📋 目前暫存配對清單（{len(self.draft_pairs)}/{MAX_PAIRS} 組）**：',
+        ]
+
+        if self.draft_pairs:
+            for idx, pair in enumerate(self.draft_pairs):
+                role = self.guild.get_role(int(pair.get('role_id') or 0))
+                role_text = role.mention if role is not None else f"<@&{pair.get('role_id')}> (已刪除)"
+                prefix = f"👉 **第 {idx + 1} 組**：" if (self.selected_index == idx) else f"{idx + 1}. "
+                lines.append(f"{prefix}{pair.get('emoji')} → {role_text}")
+        else:
+            lines.append('（目前無任何配對）')
+
+        lines.extend([
+            '',
+            '💡 **便利操作指引**：',
+            '• **新增配對**：從「身份組選單」挑選身份組，再按「➕ 輸入表符」或「👆 到訊息按表符」',
+            '• **修改身份組**：從上方「配對選單」選取項目，再直接於「身份組選單」挑選新身份組',
+            '• **更換表情**：從上方「配對選單」選取項目，再按「✏️ 更換表符」或「👆 到訊息按表符」',
+            '• **刪除配對**：從上方「配對選單」選取項目後，按「🗑️ 刪除選取配對」',
+            '• **套用生效**：所有變更在按下「💾 儲存並套用」後才會寫入原訊息',
+        ])
+
+        embed = discord.Embed(
+            title='🧩 視覺化編輯表符配對',
+            description='\n'.join(lines),
+            color=discord.Color.gold() if self.has_unsaved_changes else discord.Color.blurple(),
+        )
+
+        if self.pending_role is not None:
+            embed.add_field(
+                name='🎯 待配對身份組',
+                value=f"{self.pending_role.mention}\n請點擊「➕ 輸入表符」輸入表情，或點擊「👆 到訊息按表符」直接在原訊息點擊反應！",
+                inline=False,
+            )
+        elif self.pending_emoji is not None:
+            embed.add_field(
+                name='🎯 待配對表情符號',
+                value=f"{self.pending_emoji}\n請直接從下方「身份組選單」挑選要搭配的身份組！",
+                inline=False,
+            )
+
+        if self.status:
+            embed.add_field(name='ℹ️ 提示與狀態', value=self.status[:1024], inline=False)
+
+        if self.has_unsaved_changes:
+            embed.set_footer(text='⚠️ 目前有尚未儲存的變更，請務必點擊「💾 儲存並套用」寫入設定！')
+        else:
+            embed.set_footer(text='所有操作皆在同一畫面就地更新；連續 120 秒無動作自動逾時。')
+
+        return embed
+
+    def _refresh_components(self):
+        self.clear_items()
+        # Row 0: 現有配對下拉選單
+        self.add_item(ReactionRolesPairSelect(self))
+        # Row 1: 原生身份組選單
+        self.add_item(ReactionRolesEditorRoleSelect(self))
+
+        # Row 2: 針對配對的按鈕群
+        has_selection = (self.selected_index is not None and 0 <= self.selected_index < len(self.draft_pairs))
+        at_limit = (len(self.draft_pairs) >= MAX_PAIRS)
+
+        btn_add = discord.ui.Button(
+            label='➕ 輸入表符',
+            style=discord.ButtonStyle.success,
+            row=2,
+            disabled=at_limit and not self.pending_role,
+        )
+        btn_add.callback = self._on_add_button
+        self.add_item(btn_add)
+
+        btn_capture = discord.ui.Button(
+            label='👆 到訊息按表符',
+            style=discord.ButtonStyle.primary,
+            row=2,
+            disabled=self.is_capturing or (at_limit and not has_selection and not self.pending_role),
+        )
+        btn_capture.callback = self._on_capture_button
+        self.add_item(btn_capture)
+
+        btn_change_emoji = discord.ui.Button(
+            label='✏️ 更換表符',
+            style=discord.ButtonStyle.secondary,
+            row=2,
+            disabled=not has_selection,
+        )
+        btn_change_emoji.callback = self._on_change_emoji_button
+        self.add_item(btn_change_emoji)
+
+        btn_delete = discord.ui.Button(
+            label='🗑️ 刪除選取配對',
+            style=discord.ButtonStyle.danger,
+            row=2,
+            disabled=not has_selection,
+        )
+        btn_delete.callback = self._on_delete_button
+        self.add_item(btn_delete)
+
+        # Row 3: 儲存 / 返回 / 批次文字按鈕群
+        btn_save = discord.ui.Button(
+            label='💾 儲存並套用',
+            style=discord.ButtonStyle.success if self.has_unsaved_changes else discord.ButtonStyle.secondary,
+            row=3,
+        )
+        btn_save.callback = self._on_save_button
+        self.add_item(btn_save)
+
+        btn_back = discord.ui.Button(
+            label='↩️ 返回',
+            style=discord.ButtonStyle.secondary,
+            row=3,
+        )
+        btn_back.callback = self._on_back_button
+        self.add_item(btn_back)
+
+        btn_text = discord.ui.Button(
+            label='📝 純文字批次編輯',
+            style=discord.ButtonStyle.secondary,
+            row=3,
+        )
+        btn_text.callback = self._on_text_modal_button
+        self.add_item(btn_text)
+
+    async def _on_add_button(self, interaction: discord.Interaction):
+        if len(self.draft_pairs) >= MAX_PAIRS:
+            await interaction.response.send_message(
+                f'❌ 表符配對已達上限（{MAX_PAIRS} 組），請先刪除部分配對再新增。',
+                ephemeral=True,
+            )
+            return
+        if self.pending_role is not None:
+            await interaction.response.send_modal(ReactionRolesSingleEmojiModal(self, is_edit=False))
+        else:
+            await interaction.response.send_modal(ReactionRolesAddPairModal(self))
+
+    async def _on_change_emoji_button(self, interaction: discord.Interaction):
+        if self.selected_index is None or not (0 <= self.selected_index < len(self.draft_pairs)):
+            await interaction.response.send_message('❌ 請先從「配對選單」選取要更換表符的項目。', ephemeral=True)
+            return
+        await interaction.response.send_modal(ReactionRolesSingleEmojiModal(self, is_edit=True))
+
+    async def _on_delete_button(self, interaction: discord.Interaction):
+        if self.selected_index is None or not (0 <= self.selected_index < len(self.draft_pairs)):
+            await interaction.response.send_message('❌ 請先從「配對選單」選取要刪除的項目。', ephemeral=True)
+            return
+        del_pair = self.draft_pairs.pop(self.selected_index)
+        role = self.guild.get_role(int(del_pair.get('role_id') or 0))
+        role_text = role.mention if role else f"ID {del_pair.get('role_id')}"
+        self.status = f"🗑️ 已刪除第 {self.selected_index + 1} 組配對：{del_pair.get('emoji')} → {role_text}（尚未儲存，完成後請點擊儲存）"
+        self.selected_index = None
+        self.has_unsaved_changes = True
+        self._refresh_components()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def _on_capture_button(self, interaction: discord.Interaction):
+        has_selection = (self.selected_index is not None and 0 <= self.selected_index < len(self.draft_pairs))
+        if not has_selection and self.pending_role is None:
+            self.status = (
+                "⚠️ 請先從下方「身份組選單」挑選要新增的身份組，\n"
+                "或從上方「配對選單」選取要更換表符的配對項目，再按此按鈕！"
+            )
+            self._refresh_components()
+            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            return
+
+        channel, message, errors = await self.cog._fetch_editable_message(self.guild, self.mapping)
+        if errors:
+            self.status = '❌ ' + '\n'.join(errors)
+            self._refresh_components()
+            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            return
+
+        if has_selection:
+            pair = self.draft_pairs[self.selected_index]
+            role = self.guild.get_role(int(pair.get('role_id') or 0))
+            role_text = role.mention if role else f"ID {pair.get('role_id')}"
+            target_desc = f"第 {self.selected_index + 1} 組（{role_text}）"
+        else:
+            target_desc = f"身份組 {self.pending_role.mention}"
+
+        self.status = (
+            f"⏳ **等待捕捉表符中**（限時 {int(EMOJI_CAPTURE_TIMEOUT)} 秒）：\n"
+            f"請前往原訊息 🔗 [點此前往訊息]({message.jump_url}) 並**按一下**要綁定給 {target_desc} 的表情符號！\n"
+            "（機器人捕捉後會自動移除該反應並填入設定，不會干擾訊息）"
+        )
+        self.is_capturing = True
+        self.cog._emoji_capture_ignore[(message.id, interaction.user.id)] = (
+            time.monotonic() + EMOJI_CAPTURE_TIMEOUT + EMOJI_CAPTURE_GRACE
+        )
+        self._refresh_components()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+        def check(p: discord.RawReactionActionEvent):
+            return (
+                p.message_id == message.id
+                and p.user_id == interaction.user.id
+                and p.guild_id == self.guild.id
+            )
+
+        try:
+            payload = await self.cog.bot.wait_for('raw_reaction_add', timeout=EMOJI_CAPTURE_TIMEOUT, check=check)
+        except asyncio.TimeoutError:
+            self.status = '⏳ 等待表符超時（超過 60 秒未按反應），已取消捕捉。'
+        else:
+            emoji_str = str(payload.emoji)
+            # 移除管理員點擊的暫時性反應
+            try:
+                await message.remove_reaction(payload.emoji, discord.Object(interaction.user.id))
+            except Exception:
+                pass
+
+            exists = any(
+                p.get('emoji') == emoji_str and (not has_selection or idx != self.selected_index)
+                for idx, p in enumerate(self.draft_pairs)
+            )
+            if exists:
+                self.status = f'❌ 捕捉到的表符 {emoji_str} 已在其他配對中使用，不能重複配對！'
+            else:
+                if has_selection:
+                    old_emoji = self.draft_pairs[self.selected_index].get('emoji')
+                    self.draft_pairs[self.selected_index]['emoji'] = emoji_str
+                    self.status = f'✅ 已成功捕捉表符！第 {self.selected_index + 1} 組表符由 {old_emoji} 更換為 {emoji_str}（尚未儲存，完成後請點擊儲存）'
+                    self.has_unsaved_changes = True
+                elif self.pending_role is not None:
+                    self.draft_pairs.append({'emoji': emoji_str, 'role_id': self.pending_role.id})
+                    self.status = f'✅ 已成功捕捉表符！已新增配對：{emoji_str} → {self.pending_role.mention}（尚未儲存，完成後請點擊儲存）'
+                    self.pending_role = None
+                    self.has_unsaved_changes = True
+        finally:
+            self.is_capturing = False
+            self._refresh_components()
+            try:
+                await interaction.edit_original_response(embed=self.build_embed(), view=self)
+            except Exception:
+                if self.message:
+                    try:
+                        await self.message.edit(embed=self.build_embed(), view=self)
+                    except Exception:
+                        pass
+
+    async def _on_save_button(self, interaction: discord.Interaction):
+        if not self.draft_pairs:
+            self.status = '❌ 表符配對不可為空，請至少保留或新增 1 組配對。'
+            self._refresh_components()
+            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            return
+
+        channel, message, errors = await self.cog._fetch_editable_message(self.guild, self.mapping)
+        if errors:
+            self.status = '❌ 無法讀取訊息：' + '、'.join(errors)
+            self._refresh_components()
+            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            return
+
+        assignable: list[tuple[discord.PartialEmoji, discord.Role]] = []
+        pair_errors: list[str] = []
+        for idx, p in enumerate(self.draft_pairs, start=1):
+            emoji = _parse_emoji_token(p.get('emoji', ''))
+            if emoji is None:
+                pair_errors.append(f"第 {idx} 組表符 `{p.get('emoji')}` 無法辨識")
+                continue
+            role = self.guild.get_role(int(p.get('role_id') or 0))
+            if role is None:
+                pair_errors.append(f"第 {idx} 組身份組已不存在")
+                continue
+            problems = self.cog._role_problems(self.guild, role)
+            if problems:
+                pair_errors.append(f"第 {idx} 組 {role.mention}：{'；'.join(problems)}")
+                continue
+            assignable.append((emoji, role))
+
+        if pair_errors:
+            self.status = '❌ 無法儲存，請修正以下問題：\n' + '\n'.join(f'• {e}' for e in pair_errors)
+            self._refresh_components()
+            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            return
+
+        result, apply_errors = await self.cog._sync_message_pairs(
+            interaction, self.guild, channel, self.mapping, assignable, existing=message
+        )
+        if result is None:
+            self.status = '❌ 儲存失敗：\n' + '\n'.join(f'• {e}' for e in apply_errors)
+            self._refresh_components()
+            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            return
+
+        self.stop()
+        status = f"✅ 表符配對已成功儲存並同步至訊息反應（共 {len(result['saved_pairs'])} 組）\n💡 **提示**：若想讓訊息內文也列出這些配對，可點擊下方「✨ 依配對同步文字」一鍵自動排版！"
+        if result.get('failed_adds'):
+            status += f"\n⚠️ 有 {len(result['failed_adds'])} 個表符按下失敗：{'、'.join(result['failed_adds'])}"
+        if result.get('failed_removes'):
+            status += f"\n⚠️ 有 {len(result['failed_removes'])} 個舊表符移除失敗：{'、'.join(result['failed_removes'])}"
+
+        view = ReactionRolesEditActionView(self.cog, self.guild, self.mapping)
+        view.initiator_id = interaction.user.id
+        embed = self.cog._build_edit_embed(self.guild, self.mapping, status=status)
+        view.message = await _respond_in_place(interaction, embed=embed, view=view)
+
+    async def _on_back_button(self, interaction: discord.Interaction):
+        self.stop()
+        view = ReactionRolesEditActionView(self.cog, self.guild, self.mapping)
+        view.initiator_id = interaction.user.id
+        embed = self.cog._build_edit_embed(self.guild, self.mapping, status='已返回主選單，未儲存的變更已捨棄。')
+        view.message = await _respond_in_place(interaction, embed=embed, view=view)
+
+    async def _on_text_modal_button(self, interaction: discord.Interaction):
+        channel, message, errors = await self.cog._fetch_editable_message(self.guild, self.mapping)
+        if errors:
+            await interaction.response.send_message('❌ ' + '\n'.join(errors), ephemeral=True)
+            return
+        await interaction.response.send_modal(ReactionRolesPairsModal(self.cog, self.guild, self.mapping, channel, message))
 
 
 async def setup(bot: commands.Bot):

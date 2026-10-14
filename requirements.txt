@@ -6,3 +6,4 @@ certifi
 aiohttp
 wavelink
 gTTS
+aiosqlite

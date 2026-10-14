@@ -8,29 +8,10 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-WELCOME_SETTINGS_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'welcome_settings.json')
-
-
-def _load_welcome_settings() -> dict:
-    if os.path.exists(WELCOME_SETTINGS_FILE):
-        try:
-            with open(WELCOME_SETTINGS_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except (json.JSONDecodeError, IOError):
-            return {}
-    return {}
-
-
-def _save_welcome_settings(data: dict):
-    dir_path = os.path.dirname(WELCOME_SETTINGS_FILE)
-    try:
-        with tempfile.NamedTemporaryFile('w', encoding='utf-8', dir=dir_path, delete=False, suffix='.tmp') as tmp:
-            json.dump(data, tmp, ensure_ascii=False, indent=2)
-            tmp_path = tmp.name
-        os.replace(tmp_path, WELCOME_SETTINGS_FILE)
-    except Exception as e:
-        print(f"❌ 儲存歡迎訊息設定失敗: {e}")
-        raise
+from cogs.database import (
+    load_welcome_settings as _load_welcome_settings,
+    save_welcome_settings as _save_welcome_settings,
+)
 
 
 # 頻道型別的中文顯示名稱，用於錯誤提示。
@@ -78,6 +59,8 @@ class Welcome(commands.Cog):
         rules_channel: Optional[discord.abc.GuildChannel] = None,
         role_channel: Optional[discord.abc.GuildChannel] = None
     ):
+        await interaction.response.defer(ephemeral=True)
+
         # 改為接受任何伺服器頻道型別（文字、語音、論壇、公告、舞台…），再自行驗證。
         # 若只標註 discord.TextChannel，使用者在 Discord 選單選到語音或論壇頻道時，
         # discord.py 會在參數轉換階段丟 TransformerError，使用者只會看到冷冰冰的
@@ -104,7 +87,7 @@ class Welcome(commands.Cog):
                 description="歡迎訊息只能發送到**文字頻道**（含公告頻道）。以下參數請改選文字頻道：\n\n" + "\n".join(invalid),
                 color=discord.Color.red()
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, ephemeral=True)
             return
 
         guild_id = str(interaction.guild.id)
@@ -117,7 +100,7 @@ class Welcome(commands.Cog):
             _save_welcome_settings(self.settings)
         except Exception as e:
             await self.bot.notify_owner_error(e, interaction, extra_info="welcome_active: 儲存設定失敗")
-            await interaction.response.send_message("❌ 儲存設定時發生錯誤，設定可能在重新啟動後遺失，已回報開發者。", ephemeral=True)
+            await interaction.followup.send("❌ 儲存設定時發生錯誤，設定可能在重新啟動後遺失，已回報開發者。", ephemeral=True)
             return
 
         desc_lines = [f"✅ 歡迎訊息已啟用！", f"📢 歡迎頻道：{welcome_tc.mention}"]
@@ -127,13 +110,14 @@ class Welcome(commands.Cog):
             desc_lines.append(f"🎭 身份組領取頻道：{role_tc.mention}")
 
         embed = discord.Embed(title="🎉 歡迎訊息設定完成", description="\n".join(desc_lines), color=discord.Color.green())
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name="welcome_inactive", description="取消伺服器的歡迎訊息功能")
     @app_commands.guild_only()
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.checks.has_permissions(manage_guild=True)  # H3: 執行期檢查，伺服器端覆寫權限也擋得住
     async def welcome_inactive(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         guild_id = str(interaction.guild.id)
         if guild_id in self.settings:
             del self.settings[guild_id]
@@ -141,12 +125,12 @@ class Welcome(commands.Cog):
                 _save_welcome_settings(self.settings)
             except Exception as e:
                 await self.bot.notify_owner_error(e, interaction, extra_info="welcome_inactive: 儲存設定失敗")
-                await interaction.response.send_message("❌ 儲存設定時發生錯誤，可能需要再執行一次，已回報開發者。", ephemeral=True)
+                await interaction.followup.send("❌ 儲存設定時發生錯誤，可能需要再執行一次，已回報開發者。", ephemeral=True)
                 return
             embed = discord.Embed(title="🔕 歡迎訊息已關閉", description="此伺服器的歡迎訊息功能已停用。", color=discord.Color.red())
         else:
             embed = discord.Embed(title="ℹ️ 歡迎訊息未啟用", description="此伺服器目前沒有啟用歡迎訊息功能。", color=discord.Color.light_grey())
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):

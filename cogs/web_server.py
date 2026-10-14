@@ -1,25 +1,61 @@
 import json
 import math
 import os
+import sys
 import threading
 import time
 import urllib.parse
 import urllib.request
 from typing import Optional
 
+# 確保直接執行此檔案 (如 python cogs/web_server.py 或 IDE 單獨除錯) 時，
+# 正確將專案根目錄加入模組搜尋路徑，避免 ModuleNotFoundError: No module named 'cogs'
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
 import discord
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify, render_template, url_for as flask_url_for
 from waitress import serve
 
-from cogs.sanitize import redact_secrets
+try:
+    from cogs.sanitize import redact_secrets
+except ModuleNotFoundError:
+    from sanitize import redact_secrets
 
-BASE_DIR = os.path.dirname(os.path.dirname(__file__))
-app = Flask(__name__, template_folder=os.path.join(BASE_DIR, 'templates'))
+app = Flask(
+    __name__,
+    template_folder=os.path.join(BASE_DIR, 'templates'),
+    static_folder=os.path.join(BASE_DIR, 'static'),
+)
 # 模板自動重載：production 模式下 Jinja2 預設會快取第一次渲染的模板、之後不再
 # 讀檔，導致改 templates/*.html 後要重啟機器人才會生效。開啟後每次渲染都會
 # 檢查檔案修改時間，改完 HTML 重新整理網頁即可看到新版，不用重啟機器人。
 # 成本只是每次渲染多一次 os.stat，對這種小流量儀表板可忽略。
 app.config['TEMPLATES_AUTO_RELOAD'] = True
+
+# 靜態檔案自動快取更新（Cache-Busting）：
+# 1. SEND_FILE_MAX_AGE_DEFAULT = 0：告知瀏覽器與反向代理不要對靜態檔案進行長久強快取。
+# 2. override_url_for context processor：自動在 static url_for 附加檔案最後修改時間戳記 (?v=mtime)。
+#    當 CSS、JS 等靜態檔案重新上傳覆蓋後，mtime 自動改變，HTML 產生的網址也隨之改變。
+#    瀏覽器會立即判定為新資源並下載最新內容，無需手動清除快取（免 Ctrl+F5），更無需重啟機器人服務。
+app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
+
+
+@app.context_processor
+def override_url_for():
+    """覆寫 Jinja 模板內的 url_for，自動為 static 檔案附加 ?v=<mtime> 快取標記"""
+    return dict(url_for=_versioned_url_for)
+
+
+def _versioned_url_for(endpoint: str, **values) -> str:
+    if endpoint == 'static':
+        filename = values.get('filename')
+        if filename and app.static_folder:
+            file_path = os.path.join(app.static_folder, filename)
+            if os.path.exists(file_path):
+                values['v'] = int(os.stat(file_path).st_mtime)
+    return flask_url_for(endpoint, **values)
 
 # ---------- 機器人實際上線時間（以 Discord 連線為準） ----------
 # 為什麼不用「行程啟動時間」：行程活著不等於機器人活著。discord.py 掉線後會
@@ -228,6 +264,7 @@ def run():
     綁定 0.0.0.0:20198 的部署方式不受影響）。
     """
     port = int(os.environ.get('PORT', 20198))
+    print(f"[Web] 伺服器已啟動，請開啟瀏覽器造訪: http://127.0.0.1:{port} 或 http://localhost:{port}", flush=True)
     serve(app, host='0.0.0.0', port=port, threads=8)
 
 

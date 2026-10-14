@@ -5,376 +5,92 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>炙彗JI器人 - 指令文檔</title>
-  <style>
-    :root {
-      --bg: #0b1020;
-      --bg2: #111827;
-      --panel: rgba(15, 23, 42, 0.82);
-      --panel-border: rgba(148, 163, 184, 0.2);
-      --primary: #7dd3fc;
-      --secondary: #34d399;
-      --accent: #a78bfa;
-      --text: #e5eefb;
-      --muted: #b9c6db;
-      --danger: #f87171;
-    }
+  <link rel="icon" type="image/png"
+    href="https://www.dropbox.com/scl/fi/8mx3kit88y0ojmihwt034/IMG_6426.PNG?rlkey=9iud5rml003o9bzq4mq54uhib&dl=1" />
+  <link rel="shortcut icon"
+    href="https://www.dropbox.com/scl/fi/8mx3kit88y0ojmihwt034/IMG_6426.PNG?rlkey=9iud5rml003o9bzq4mq54uhib&dl=1" />
 
-    * { box-sizing: border-box; }
+  <!-- 引入 SF Pro / Roboto 風格字體，維持乾淨優雅的 Apple Presentation 排版 -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;600;700&display=swap" rel="stylesheet">
 
-    html {
-      scroll-behavior: smooth;
-    }
-
-    body {
-      margin: 0;
-      font-family: "Segoe UI", "Microsoft JhengHei", sans-serif;
-      background: linear-gradient(135deg, #0b1020, #111827 38%, #172554);
-      color: var(--text);
-      min-height: 100vh;
-      padding: 32px 18px 48px;
-    }
-
-    main {
-      max-width: 1100px;
-      margin: 0 auto;
-    }
-
-    .page-header {
-      display: flex;
-      flex-direction: column;
-      align-items: flex-start;
-      justify-content: center;
-      gap: 16px;
-      min-height: 74px;
-      margin-bottom: 24px;
-      padding-bottom: 12px;
-      border-bottom: 2px solid rgba(125, 211, 252, 0.28);
-    }
-
-    .back-link {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-      padding: 10px 16px;
-      border-radius: 12px;
-      background: rgba(167, 139, 250, 0.12);
-      border: 1px solid rgba(167, 139, 250, 0.35);
-      color: var(--text);
-      text-decoration: none;
-      font-weight: 700;
-      font-size: 0.95rem;
-      min-width: 150px;
-      transition: transform 0.2s ease;
-    }
-
-    .back-link:hover {
-      transform: translateY(-1px);
-      text-decoration: none;
-    }
-
-    .page-title {
-      margin: 0;
-      text-align: center;
-      font-size: clamp(1.9rem, 3vw, 3rem);
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      color: var(--text);
-      min-width: 200px;
-      width: 100%;
-    }
-
-    .docs-stack {
-      display: flex;
-      flex-direction: column;
-      gap: 20px;
-      align-items: stretch;
-    }
-
-    .card {
-      background: var(--panel);
-      border: 1px solid var(--panel-border);
-      border-radius: 20px;
-      padding: 20px 20px 18px;
-      box-shadow: 0 14px 42px rgba(0, 0, 0, 0.18);
-      display: flex;
-      flex-direction: column;
-      width: 100%;
-      min-height: 100%;
-    }
-
-    .tag {
-      display: inline-block;
-      font-size: 0.72rem;
-      padding: 6px 10px;
-      border-radius: 999px;
-      background: rgba(125, 211, 252, 0.12);
-      border: 1px solid rgba(125, 211, 252, 0.28);
-      color: var(--primary);
-      font-weight: 700;
-      letter-spacing: 0.08em;
-      margin-bottom: 12px;
-      text-transform: uppercase;
-      width: fit-content;
-    }
-
-    .card h2 {
-      margin: 0 0 12px;
-      font-size: 1.3rem;
-      color: var(--text);
-    }
-
-    .card ul {
-      margin: 0;
-      padding-left: 1.2rem;
-      color: var(--muted);
-      line-height: 1.8;
-      list-style: disc;
-    }
-
-    .card li {
-      margin-bottom: 8px;
-      color: var(--muted);
-    }
-
-    .card li:last-child {
-      margin-bottom: 0;
-    }
-
-    /* 手機上很長的指令名列表列（例如「點歌者操作鎖（/music_pause、/music_resume…）」）
-       會把頁面撐出橫向捲軸、整頁可以被左右拖，必須允許在中間斷行。 */
-    .card li {
-      overflow-wrap: break-word;
-    }
-
-    /* ---------- 左上角固定圖示選單 ---------- */
-    /* 固定在視窗左上角：只有一顆純圖示的選單鈕（不含文字），滑鼠移上去才飛出
-       文字面板列出各個 cog。面板直接蓋在文檔內容上方，不佔版面、也不把文檔往右推；
-       滑鼠離開整個選單範圍即自動收起。手機版另外排在「返回首頁」下一行，
-       捲動後（.is-stuck）再吸回畫面頂端。 */
-    .docs-nav {
-      position: fixed;
-      top: 16px;
-      left: 16px;
-      z-index: 60;
-      display: flex;
-      align-items: flex-start;
-      transition: top 0.22s ease;
-    }
-
-    .nav-menu-btn {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      width: 52px;
-      height: 52px;
-      padding: 0;
-      border: 1px solid var(--panel-border);
-      border-radius: 16px;
-      background: var(--panel);
-      box-shadow: 0 16px 44px rgba(0, 0, 0, 0.35);
-      backdrop-filter: blur(10px);
-      color: var(--accent);
-      cursor: pointer;
-      /* 選單直接蓋在文檔上，閒置時壓低一點透明度，讓被蓋到的行文字仍讀得到。 */
-      opacity: 0.75;
-      transition: opacity 0.18s ease, background 0.18s ease;
-    }
-
-    .docs-nav:hover .nav-menu-btn,
-    .docs-nav.is-open .nav-menu-btn {
-      opacity: 1;
-      background: rgba(125, 211, 252, 0.16);
-      border-color: rgba(125, 211, 252, 0.4);
-    }
-
-    .nav-menu-icon {
-      font-size: 1.5rem;
-      line-height: 1;
-      pointer-events: none;
-    }
-
-    /* 飛出面板：純 CSS hover 展開（滑鼠離開 .docs-nav 就收起）；觸控沒有 hover，
-       由 JS 加 .is-open 釘住，點選單鈕切換。 */
-    .nav-flyout {
-      position: absolute;
-      top: 0;
-      left: calc(100% + 10px);
-      /* .docs-nav 是 position: fixed，會成為這個絕對定位面板的包含塊，面板往右
-         偏移後「剩餘可用寬度」是負的，沒有明確寬度時瀏覽器會收縮到最小內容寬度
-         （手機上每一項都折成三行）。直接指定 max-content 讓面板依內容展開，
-         再用 max-width 守住視窗邊界。 */
-      width: max-content;
-      max-width: calc(100vw - 86px);
-      padding: 8px;
-      border-radius: 18px;
-      background: var(--panel);
-      border: 1px solid var(--panel-border);
-      box-shadow: 0 16px 44px rgba(0, 0, 0, 0.35);
-      backdrop-filter: blur(10px);
-      opacity: 0;
-      visibility: hidden;
-      transform: translateX(-6px);
-      pointer-events: none;
-      transition: opacity 0.16s ease, transform 0.16s ease, visibility 0.16s;
-    }
-
-    .docs-nav:hover .nav-flyout,
-    .docs-nav.is-open .nav-flyout {
-      opacity: 1;
-      visibility: visible;
-      transform: none;
-      pointer-events: auto;
-    }
-
-    /* 從icon rail 滑向面板中間有一段空隙，這段透明橋接區跟著面板一起出現，
-       讓游標移動過程不會離開 .docs-nav 而把面板閃一下收掉。 */
-    .nav-flyout::before {
-      content: "";
-      position: absolute;
-      top: 0;
-      bottom: 0;
-      right: 100%;
-      width: 10px;
-    }
-
-    /* 觸控裝置沒有真正的 hover（點一下會把 :hover 黏住不消失），該區完全改由
-       JS 的 .is-open 控開關，避免面板卡住收不回來。 */
-    @media (hover: none) {
-      .docs-nav:hover .nav-flyout {
-        opacity: 0;
-        visibility: hidden;
-        transform: translateX(-6px);
-        pointer-events: none;
-      }
-
-      .docs-nav.is-open .nav-flyout {
-        opacity: 1;
-        visibility: visible;
-        transform: none;
-        pointer-events: auto;
-      }
-    }
-
-    .flyout-list {
-      list-style: none;
-      margin: 0;
-      padding: 0;
-    }
-
-    .flyout-list a {
-      display: flex;
-      align-items: center;
-      min-width: 190px;
-      padding: 8px 12px;
-      border-radius: 12px;
-      color: var(--muted);
-      text-decoration: none;
-      transition: background 0.18s ease, color 0.18s ease;
-    }
-
-    .flyout-list a:hover {
-      background: rgba(125, 211, 252, 0.1);
-      color: var(--text);
-    }
-
-    .flyout-list a.is-active {
-      background: rgba(125, 211, 252, 0.18);
-      color: var(--primary);
-    }
-
-    .flyout-text {
-      display: flex;
-      flex-direction: column;
-      gap: 1px;
-      min-width: 0;
-    }
-
-    .nav-label {
-      font-size: 0.92rem;
-      font-weight: 700;
-      line-height: 1.3;
-    }
-
-    .nav-tag {
-      color: var(--accent);
-      font-size: 0.64rem;
-      letter-spacing: 0.1em;
-      text-transform: uppercase;
-      line-height: 1.2;
-      white-space: nowrap;
-    }
-
-    .nav-empty {
-      padding: 10px 12px;
-      color: var(--muted);
-      font-size: 0.85rem;
-      white-space: nowrap;
-    }
-
-    /* 段落捲動定位時留白，避免貼到視窗頂端。 */
-    .card {
-      scroll-margin-top: 24px;
-    }
-
-    code {
-      font-family: Consolas, "Courier New", monospace;
-      background: rgba(148, 163, 184, 0.08);
-      border: 1px solid rgba(148, 163, 184, 0.18);
-      padding: 2px 6px;
-      border-radius: 6px;
-      color: var(--text);
-    }
-
-    @media (max-width: 640px) {
-      body { padding: 24px 14px 36px; }
-      .card { padding: 18px 16px; }
-      .page-header { align-items: flex-start; }
-      .page-title { width: 100%; }
-      /* 位置交換：「返回首頁」回左上角第一行，選單鈕排到它下一行；
-         頁面往下捲動後（JS 加 .is-stuck）選單再吸回畫面頂端。
-         不要改 .page-header 的 padding：那會連帶把置中的標題推歪、分隔線也跟著內縮。 */
-      .docs-nav { top: 76px; left: 12px; }
-      .docs-nav.is-stuck { top: 12px; }
-      .nav-menu-btn { width: 46px; height: 46px; border-radius: 14px; }
-    }
-
-    /* 中等寬度的桌機：內文置中後左緣會靠到選單鈕，讓「返回首頁」往右讓一點避開。
-       視窗再寬一點內文本身就離選單鈕很遠，就不用位移了。 */
-    @media (min-width: 641px) and (max-width: 1300px) {
-      .back-link { margin-left: 76px; }
-    }
-
-    .footer {
-      margin-top: 30px;
-      text-align: center;
-      color: var(--muted);
-      font-size: 0.95rem;
-      line-height: 1.9;
-    }
-
-    .footer-line {
-      display: block;
-    }
-  </style>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/common.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/docs.css') }}" />
 </head>
 
 <body>
-  <nav class="docs-nav" id="docs-nav" aria-label="指令分類選單">
-    <button class="nav-menu-btn" id="nav-toggle" type="button" aria-expanded="false" aria-controls="nav-flyout" aria-label="指令選單" title="指令選單">
-      <span class="nav-menu-icon" aria-hidden="true">☰</span>
+  <!-- Apple Liquid Glass: 背景鮮活光暈漫射背板（供玻璃層折射呈現晶瑩效果） -->
+  <div class="glass-ambient-backdrop" aria-hidden="true">
+    <div class="ambient-orb ambient-orb-1"></div>
+    <div class="ambient-orb ambient-orb-2"></div>
+    <div class="ambient-orb ambient-orb-3"></div>
+  </div>
+
+  <!-- 側邊抽屜導航遮罩（手機版） -->
+  <div class="nav-backdrop" id="nav-backdrop" aria-hidden="true"></div>
+
+  <!-- 側邊抽屜導航面板（手機版獨立 Drawer，Apple Liquid Glass 質感） -->
+  <aside class="nav-drawer" id="nav-drawer" aria-label="指令分類選單">
+    <div class="drawer-header">
+      <div class="drawer-title-group">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true">
+          <path d="M4 6h16v2H4V6zm0 5h16v2H4v-2zm0 5h16v2H4v-2z"/>
+        </svg>
+        <span class="drawer-title">指令分類目錄</span>
+      </div>
+      <button class="drawer-close-btn" id="drawer-close" type="button" aria-label="關閉選單">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true">
+          <path d="M18.3 5.71a.9959.9959 0 0 0-1.41 0L12 10.59 7.11 5.7a.9959.9959 0 0 0-1.41 1.41L10.59 12 5.7 16.89c-.39.39-.39 1.02 0 1.41.39.39 1.02.39 1.41 0L12 13.41l4.89 4.89c.39.39 1.02.39 1.41 0 .39-.39.39-1.02 0-1.41L13.41 12l4.89-4.89c.38-.38.38-1.02 0-1.4z"/>
+        </svg>
+      </button>
+    </div>
+    <div class="drawer-divider"></div>
+    <ul class="flyout-list" id="flyout-list-mobile"></ul>
+  </aside>
+
+  <!-- 跟隨畫面的選單按鈕（docs-nav，包含電腦版滑鼠移入自動展開的 Liquid Glass 飛出面板） -->
+  <nav class="docs-nav" id="docs-nav" aria-label="指令選單按鈕">
+    <button class="nav-menu-btn" id="nav-toggle" type="button" aria-expanded="false" aria-controls="nav-drawer" aria-label="展開選單">
+      <!-- Material Symbols Rounded: menu 圖標 -->
+      <svg class="nav-menu-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <path d="M4 18h16c.55 0 1-.45 1-1s-.45-1-1-1H4c-.55 0-1 .45-1 1s.45 1 1 1zm0-5h16c.55 0 1-.45 1-1s-.45-1-1-1H4c-.55 0-1 .45-1 1s.45 1 1 1zM3 7c0 .55.45 1 1 1h16c.55 0 1-.45 1-1s-.45-1-1-1H4c-.55 0-1 .45-1 1z"/>
+      </svg>
     </button>
     <div class="nav-flyout" id="nav-flyout">
-      <ul class="flyout-list" id="flyout-list"></ul>
+      <div class="flyout-header">
+        <span class="flyout-title">指令分類目錄</span>
+      </div>
+      <div class="flyout-divider"></div>
+      <ul class="flyout-list" id="flyout-list-desktop"></ul>
     </div>
   </nav>
 
   <main>
-    <div class="page-header">
-      <a class="back-link" href="/">← 返回首頁</a>
-      <h1 class="page-title">指令文檔</h1>
-    </div>
+    <header class="page-header">
+      <!-- 頂部第一行：左側 48dp 佔位 + 置中「指令文檔」+ 右側 48dp 對稱佔位 -->
+      <div class="header-top-row">
+        <div class="header-side-placeholder" id="nav-placeholder" aria-hidden="true"></div>
+        <h1 class="page-title">指令文檔</h1>
+        <div class="header-side-placeholder" aria-hidden="true"></div>
+      </div>
 
+      <!-- 上部分割線（1dp，左右留邊距） -->
+      <hr class="header-divider" />
+
+      <!-- 上部靠左放置“返回首頁”的色調按鈕（帶 arrow_back 圖標，高 44dp） -->
+      <div class="header-action-row">
+        <a class="back-link" href="/" id="back-link">
+          <!-- Material Symbols Rounded: arrow_back 圖標 -->
+          <svg class="back-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M19 11H7.83l4.88-4.88c.39-.39.39-1.03 0-1.42a.9959.9959 0 0 0-1.41 0l-6.59 6.59c-.39.39-.39 1.02 0 1.41l6.59 6.59c.39.39 1.02.39 1.41 0 .39-.39.39-1.02 0-1.41L7.83 13H19c.55 0 1-.45 1-1s-.45-1-1-1z"/>
+          </svg>
+          <span>返回首頁</span>
+        </a>
+      </div>
+    </header>
+
+    <!-- 中部容器卡片列表（Apple Bento Grid 液態玻璃面板，圓角 28dp） -->
     <div class="docs-stack">
       <article class="card" id="cog-general">
         <div class="tag">General</div>
@@ -425,7 +141,14 @@
         <h2>表符身份組</h2>
         <ul>
           <li><strong>/reaction_roles_create</strong> <em>message:&lt;文字&gt; pairs:&lt;表符 身份組 表符 身份組 …&gt; [channel:&lt;頻道&gt;] [strict:&lt;開/關&gt;]</em>：發送「按表符領身份組」訊息。表符＋身份組一對一、以空白分隔，最多 20 組（例如：<code>🎉 @帥 🎮 @打電動</code>）。發送後機器人會自動按下所有表符；成員按表符可獲得對應身份組，取消表符則自動收回。未指定 <em>channel</em> 時，自動使用 <strong>/welcome_active</strong> 設定的身份組領取頻道。每個伺服器可同時保留多則領取訊息（上限 10 則）；同一個表符的發放／收回有 5 秒冷卻，高頻點擊會被靜默忽略。<em>strict</em> 預設開啟，<strong>防止亂按</strong>：成員按了不對應身份組的其他表符時，機器人會自動移除該反應（需機器人在該頻道有「管理訊息」權限，發送時權限不足會直接提示）；想保留其他反應就把 <em>strict</em> 關掉。需「管理伺服器」權限。</li>
-          <li><strong>/reaction_roles_edit</strong>：編輯已發送的表符身份組訊息（互動式，操作方式與 <strong>/auto_reply_edit</strong> 相同）。從下拉選單選擇要編輯的訊息（選項顯示該訊息的表符配對摘要）後：按「編輯訊息文字」或「編輯表符配對」開啟輸入框，欄位已預先帶入現有內容，直接修改後送出（表符配對需填入完整的新配對，格式 <code>表符 身份組 表符 身份組 …</code>，最多 20 組；身份組可填名稱、數字 ID 或 &lt;@&amp;ID&gt; 提及代碼），機器人會同步調整訊息上的反應：移除不再使用的舊表符連同成員的反應（需「管理訊息」權限）、按上新的表符，仍在使用的表符保留原樣、成員不用重按；「🛡️ 僅限有效表符」按一下即可切換開／關。所有操作都在同一則訊息上進行（連續編輯不會洗版）；連續 120 秒沒操作按鈕會自動失效。需「管理伺服器」權限。</li>
+          <li><strong>/reaction_roles_edit</strong>：編輯已發送的表符身份組訊息。從下拉選單選擇要編輯的訊息（選項顯示該訊息的表符配對摘要）後，可操作以下功能：
+            <ul>
+              <li><strong>編輯表符配對</strong>：全新視覺化編輯器！提供<strong>原生身分組搜尋選單</strong>（免複製身分組 ID）、<strong>「👆 到訊息按表符」自動捕捉</strong>（免複製表情符號代碼/ID，在原訊息按一下表情即可自動綁定），並支援單組配對更換身分組、更換表情、獨立刪除，以及暫存預覽確認後「💾 儲存並套用」；同時保留「📝 純文字批次編輯」支援傳統文字輸入。</li>
+              <li><strong>編輯訊息文字</strong>：開啟輸入視窗修改訊息內容。<strong>全去 ID 化</strong>：自動將原始 <code>&lt;@&amp;ID&gt;</code> 與 <code>&lt;:emoji:ID&gt;</code> 轉為人類可讀的 <code>@身分組名稱</code> 與 <code>:表符名稱:</code>，支援直接輸入身分組名稱，送出後自動轉換為標籤，免看或複製任何數字 ID。</li>
+              <li><strong>✨ 依配對同步文字</strong>：一鍵將目前設定好的表符配對自動排版更新至頻道訊息內文，完全免手動排版。</li>
+              <li><strong>🛡️ 僅限有效表符</strong>：按一下即可切換開／關。</li>
+            </ul>
+            修改配對時機器人會同步調整訊息上的反應：移除不再使用的舊表符連同成員的反應（需「管理訊息」權限）、按上新的表符，仍在使用的表符保留原樣、成員不用重按。所有操作都在同一則訊息上就地進行（連續編輯不洗版）；連續 120 秒沒操作按鈕會自動失效。需「管理伺服器」權限。</li>
         </ul>
       </article>
 
@@ -436,7 +159,6 @@
           <li><strong>/auto_reply_add</strong> <em>keyword:&lt;關鍵字&gt; reply:&lt;回覆內容&gt; [name:&lt;規則名稱&gt;] [channel:&lt;頻道&gt;]</em>：新增自動回覆規則。成員訊息「包含」關鍵字（不分大小寫、忽略多餘空白）時，機器人會引用該訊息自動回覆，且一律不 @ 任何人；未指定 <em>channel</em> 時整個伺服器生效；未指定 <em>name</em> 時以關鍵字作為規則名稱。每個伺服器上限 10 條規則；一則訊息最多觸發第一條命中的規則；同一成員對同一條規則 3 秒內重複觸發不會重複回覆。之後可用 <strong>/auto_reply_edit</strong> 為同一條規則再加更多關鍵字（命中任一即觸發，上限 10 個），也可自行增修回覆內容（超過一則時隨機挑選）。需「管理伺服器」權限。</li>
           <li><strong>/auto_reply_edit</strong>：編輯自動回覆規則。送出後自動抓取目前所有規則的<strong>規則名稱</strong>製成下拉選單供選取（舊規則退回顯示偵測關鍵字）；選取後有四顆按鈕：<strong>編輯關鍵字</strong>（輸入框自行填寫，上限 10 個）、<strong>編輯回覆內容</strong>、「<strong>⏸️ 暫停規則</strong>」（按下即暫停、設定完整保留，按鈕會變成「▶️ 恢復規則」，再按一次就恢復）與「取消」；只有執行指令的人能按，每次操作都會重新計時、連續 120 秒未操作按鈕就會變灰失效。兩個編輯視窗都是每頁 5 個輸入框（Discord 上限），預先帶入現有內容，<strong>留空＝刪除該項</strong>、往空格補字＝新增一項；第 6–10 項在下一頁（同一則訊息上一律附「編輯第 6-10 個」按鈕，第二頁則是「回到第 1-5 個」），沒編到的其他頁不動（編第 6–10 項時第 1–5 項原樣保留）；<strong>存檔結果直接就地改寫這一則訊息</strong>並把按鈕換成可繼續編輯的那組（連續編輯不會洗版），只有原訊息已不能編輯時才會另外補一則；關鍵字或回覆內容<strong>全部留空</strong>時會跳出「是否要刪除整條規則？」的確認訊息。超過一則回覆時自動切換成<strong>隨機回覆模式</strong>，每次觸發從所有回覆中隨機挑選一則。需「管理伺服器」權限。</li>
           <li><strong>/auto_reply_list</strong>：列出自動回覆規則，<strong>一頁一條規則</strong>（用「◀️ 上一頁／下一頁 ▶️」兩顆按鈕翻頁），每頁完整顯示規則名稱、狀態、全部關鍵字、回覆內容與生效範圍；單則回覆超過 300 字會截斷，內容塞不下時會標示省略並提示用 <strong>/auto_reply_edit</strong> 看完整內容。沒有規則時會提示先用 <strong>/auto_reply_add</strong> 新增。需「管理伺服器」權限。</li>
-          
           <li><strong>/auto_reply_remove</strong>：刪除自動回覆規則。送出後自動抓取目前<strong>已生效</strong>的偵測關鍵字製成下拉選單供選取；選取後會先顯示確認訊息（附「確認刪除／取消」按鈕，只有執行指令的人能按，每次操作都會重新計時、連續 120 秒未操作自動失效）。需「管理伺服器」權限。</li>
         </ul>
       </article>
@@ -484,128 +206,304 @@
       </article>
     </div>
 
-    <div class="footer" id="home-footer">
+    <!-- 下部居中放置文本“© 2026 炙彗JI器人”（16sp） -->
+    <footer class="footer" id="home-footer">
       <span class="footer-line">© 2026 炙彗JI器人</span>
-    </div>
+    </footer>
   </main>
 
+  <!-- 下部靠右放置 arrow_upward 液態玻璃圖標按鈕（回到最頂端，56dp） -->
+  <button class="fab-back-to-top" id="back-to-top" type="button" aria-label="回到最頂端" title="回到最頂端">
+    <!-- Material Symbols Rounded: arrow_upward 圖標 -->
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M11.29 4.71a.9959.9959 0 0 1 1.41 0l6.59 6.59c.39.39.39 1.02 0 1.41-.39.39-1.02.39-1.41 0L13 7.83V19c0 .55-.45 1-1 1s-1-.45-1-1V7.83l-4.88 4.88c-.39.39-1.02.39-1.41 0-.39-.39-.39-1.02 0-1.41l6.58-6.59z"/>
+    </svg>
+  </button>
+
   <script>
-    // 左上角圖示選單：飛出面板的項目由下方各個 cog 段落（.card + .tag + h2）
-    // 自動生出來，之後新增 cog 只要照原本寫法加一張卡片，這裡不用跟著改。
     (function () {
       const nav = document.getElementById('docs-nav');
-      const toggle = document.getElementById('nav-toggle');
-      const flyoutList = document.getElementById('flyout-list');
-      if (!nav || !toggle || !flyoutList) return;
+      const navToggle = document.getElementById('nav-toggle');
+      const navFlyout = document.getElementById('nav-flyout');
+      const navDrawer = document.getElementById('nav-drawer');
+      const navBackdrop = document.getElementById('nav-backdrop');
+      const drawerClose = document.getElementById('drawer-close');
+      const desktopList = document.getElementById('flyout-list-desktop');
+      const mobileList = document.getElementById('flyout-list-mobile');
+      const backToTopBtn = document.getElementById('back-to-top');
+      const backLink = document.getElementById('back-link');
+      const navPlaceholder = document.getElementById('nav-placeholder');
+
+      if (!nav || !navToggle) return;
 
       const cards = Array.from(document.querySelectorAll('.docs-stack > .card[id]'));
-      const links = {}; // cog id -> { link }
-      const names = {}; // cog id -> 中文標題
+      const desktopLinks = {};
+      const mobileLinks = {};
+      const names = {};
 
-      function buildMenu() {
-        if (!cards.length) {
-          const empty = document.createElement('li');
-          empty.className = 'nav-empty';
-          empty.textContent = '目前沒有可顯示的分類';
-          flyoutList.appendChild(empty);
-          return;
+      function isMobile() {
+        return window.innerWidth <= 768;
+      }
+
+      // 同步選單按鈕水平位置，在視窗縮放或頂部時完美對齊 header 的 placeholder
+      function syncNavPosition() {
+        if (!navPlaceholder) return;
+        const rect = navPlaceholder.getBoundingClientRect();
+        if (window.innerWidth > 768) {
+          nav.style.left = rect.left + 'px';
+          nav.style.top = '24px';
+        } else {
+          nav.style.left = '16px';
+          nav.style.top = '20px';
         }
-        cards.forEach((card) => {
+      }
+
+      // 互動式游標液態光澤追蹤（Apple Liquid Glass 光斑追蹤）
+      function setupSpecularHighlight(el) {
+        if (!el) return;
+        el.addEventListener('mousemove', (e) => {
+          const rect = el.getBoundingClientRect();
+          const x = ((e.clientX - rect.left) / rect.width) * 100;
+          const y = ((e.clientY - rect.top) / rect.height) * 100;
+          el.style.setProperty('--mouse-x', `${x.toFixed(1)}%`);
+          el.style.setProperty('--mouse-y', `${y.toFixed(1)}%`);
+        });
+      }
+
+      setupSpecularHighlight(navToggle);
+      setupSpecularHighlight(backLink);
+      setupSpecularHighlight(backToTopBtn);
+      cards.forEach((card) => setupSpecularHighlight(card));
+
+      // 動態由卡片生成選單項目（純文字與標籤）
+      function buildMenu() {
+        if (!cards.length) return;
+
+        cards.forEach((card, index) => {
           const tagEl = card.querySelector('.tag');
           const titleEl = card.querySelector('h2');
           const tag = tagEl ? tagEl.textContent.trim() : '';
           const name = titleEl ? titleEl.textContent.trim() : card.id;
 
-          // 選單本體只有一顆圖示鈕，各個 cog 都在這個飛出面板裡（純文字，不放圖示）。
-          const flyItem = document.createElement('li');
-          const flyLink = document.createElement('a');
-          flyLink.href = '#' + card.id;
-          flyLink.dataset.target = card.id;
+          function createItem() {
+            const item = document.createElement('li');
+            item.style.setProperty('--item-idx', index);
+            const link = document.createElement('a');
+            link.href = '#' + card.id;
+            link.dataset.target = card.id;
 
-          const text = document.createElement('span');
-          text.className = 'flyout-text';
-          const label = document.createElement('span');
-          label.className = 'nav-label';
-          label.textContent = name;
-          text.appendChild(label);
-          if (tag) {
-            const tagSpan = document.createElement('span');
-            tagSpan.className = 'nav-tag';
-            tagSpan.textContent = tag;
-            text.appendChild(tagSpan);
+            const textWrapper = document.createElement('span');
+            textWrapper.className = 'flyout-text';
+
+            const label = document.createElement('span');
+            label.className = 'nav-label';
+            label.textContent = name;
+            textWrapper.appendChild(label);
+
+            link.appendChild(textWrapper);
+
+            if (tag) {
+              const tagSpan = document.createElement('span');
+              tagSpan.className = 'nav-tag';
+              tagSpan.textContent = tag;
+              link.appendChild(tagSpan);
+            }
+
+            item.appendChild(link);
+            return { item, link };
           }
-          flyLink.appendChild(text);
-          flyItem.appendChild(flyLink);
-          flyoutList.appendChild(flyItem);
 
-          links[card.id] = { link: flyLink };
+          if (desktopList) {
+            const d = createItem();
+            desktopList.appendChild(d.item);
+            desktopLinks[card.id] = { link: d.link };
+          }
+
+          if (mobileList) {
+            const m = createItem();
+            mobileList.appendChild(m.item);
+            mobileLinks[card.id] = { link: m.link };
+          }
+
           names[card.id] = name;
         });
       }
 
-      function setOpen(open) {
-        nav.classList.toggle('is-open', open);
-        toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+      let isPinnedDesktop = false;
+
+      // 手機版抽屜開啟 / 關閉
+      function setMobileDrawerOpen(open) {
+        if (navDrawer) navDrawer.classList.toggle('is-open', open);
+        if (navBackdrop) navBackdrop.classList.toggle('is-open', open);
+        navToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        document.body.style.overflow = open ? 'hidden' : '';
       }
 
-      // 點飛出面板：平滑捲動到該段落，並同步網址錨點（可直接分享到同一段）。
-      // 面板本來就是 hover 才顯示，點完順便解除釘住狀態。
-      flyoutList.addEventListener('click', (event) => {
+      // 電腦版飛出選單釘住 / 關閉
+      function setDesktopFlyoutOpen(open) {
+        cancelCloseDesktop();
+        isPinnedDesktop = open;
+        nav.classList.toggle('is-open', open);
+        if (!open) nav.classList.remove('is-hovered');
+        navToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+      }
+
+      // 點擊 menu 按鈕
+      navToggle.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (isMobile()) {
+          const isOpen = navDrawer ? navDrawer.classList.contains('is-open') : false;
+          setMobileDrawerOpen(!isOpen);
+        } else {
+          setDesktopFlyoutOpen(!isPinnedDesktop);
+        }
+      });
+
+      // 關閉按鈕與遮罩（手機版）
+      if (drawerClose) {
+        drawerClose.addEventListener('click', () => setMobileDrawerOpen(false));
+      }
+      if (navBackdrop) {
+        navBackdrop.addEventListener('click', () => setMobileDrawerOpen(false));
+      }
+
+      let desktopCloseTimer = null;
+
+      function scheduleCloseDesktop() {
+        if (desktopCloseTimer) clearTimeout(desktopCloseTimer);
+        desktopCloseTimer = setTimeout(() => {
+          if (!isMobile() && !isPinnedDesktop) {
+            nav.classList.remove('is-hovered');
+            setDesktopFlyoutOpen(false);
+          }
+        }, 320); // 320ms 寬容緩衝，斜角滑動至選單任何項目絕不中斷
+      }
+
+      function cancelCloseDesktop() {
+        if (desktopCloseTimer) {
+          clearTimeout(desktopCloseTimer);
+          desktopCloseTimer = null;
+        }
+      }
+
+      // 電腦版滑鼠移入時立即展開並取消關閉計時
+      nav.addEventListener('mouseenter', () => {
+        if (!isMobile()) {
+          cancelCloseDesktop();
+          nav.classList.add('is-hovered');
+        }
+      });
+
+      // 電腦版滑鼠移出時啟動 320ms 寬容緩衝計時
+      nav.addEventListener('mouseleave', () => {
+        if (!isMobile() && !isPinnedDesktop) {
+          scheduleCloseDesktop();
+        }
+      });
+
+      // 點擊選單項目：平滑捲動到該卡片並關閉選單
+      function handleLinkClick(event) {
         const link = event.target.closest('a');
         if (!link || !link.dataset.target) return;
         event.preventDefault();
         const target = document.getElementById(link.dataset.target);
         if (!target) return;
+
+        if (isMobile()) {
+          setMobileDrawerOpen(false);
+        } else {
+          setDesktopFlyoutOpen(false);
+          nav.classList.remove('is-hovered');
+        }
+
         target.scrollIntoView({ behavior: 'smooth', block: 'start' });
         history.replaceState(null, '', '#' + link.dataset.target);
-        setOpen(false);
-      });
+      }
 
-      // 桌機靠 hover 就够了；觸控沒有 hover，點選單鈕切換釘住展開。
-      const coarsePointer = window.matchMedia('(hover: none)').matches;
-      toggle.addEventListener('click', () => {
-        if (!coarsePointer) return;
-        setOpen(!nav.classList.contains('is-open'));
-      });
+      if (desktopList) desktopList.addEventListener('click', handleLinkClick);
+      if (mobileList) mobileList.addEventListener('click', handleLinkClick);
 
-      // hover 展開是 CSS 做的，這裡只把 aria-expanded 同步成真實狀態。
-      nav.addEventListener('mouseenter', () => toggle.setAttribute('aria-expanded', 'true'));
-      nav.addEventListener('mouseleave', () => {
-        if (!nav.classList.contains('is-open')) toggle.setAttribute('aria-expanded', 'false');
-      });
-
-      document.addEventListener('click', (event) => {
-        if (!nav.classList.contains('is-open')) return;
-        if (nav.contains(event.target)) return;
-        setOpen(false);
-      });
-
+      // 按 ESC 鍵關閉選單
       document.addEventListener('keydown', (event) => {
-        if (event.key === 'Escape') setOpen(false);
+        if (event.key === 'Escape') {
+          if (isMobile()) setMobileDrawerOpen(false);
+          else {
+            setDesktopFlyoutOpen(false);
+            nav.classList.remove('is-hovered');
+          }
+        }
       });
 
-      // 捲動時把目前所在段落高亮：以「卡片頂端越過視窗上方門檻」的最後一張為準。
-      let pending = false;
+      // 點擊頁面其他地方關閉電腦版釘住選單
+      document.addEventListener('click', (event) => {
+        if (!isMobile()) {
+          if (!nav.contains(event.target)) {
+            setDesktopFlyoutOpen(false);
+            nav.classList.remove('is-hovered');
+          }
+        }
+      });
 
+      // “返回首頁”按鈕：平滑退出過渡動效並導回首頁 / 上一頁
+      if (backLink) {
+        backLink.addEventListener('click', (e) => {
+          if (e.metaKey || e.ctrlKey || e.shiftKey) return;
+          e.preventDefault();
+          document.body.style.transition = 'opacity 0.2s cubic-bezier(0.2, 0, 0, 1), transform 0.2s cubic-bezier(0.2, 0, 0, 1)';
+          document.body.style.opacity = '0';
+          document.body.style.transform = 'scale(0.98)';
+          setTimeout(() => {
+            if (window.history.length > 1 && document.referrer.includes(window.location.host)) {
+              window.history.back();
+            } else {
+              window.location.href = '/';
+            }
+          }, 180);
+        });
+      }
+
+      // arrow_upward 圖標按鈕：回到最頂端
+      if (backToTopBtn) {
+        backToTopBtn.addEventListener('click', () => {
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        });
+      }
+
+      // 捲動狀態更新（高亮當前分類 + 回到頂端按鈕顯隱）
+      let pending = false;
       function updateActive() {
         pending = false;
-        // 捲動超過一點距離後，選單鈕吸回畫面頂端（手機版原本排在返回首頁下一行）。
-        nav.classList.toggle('is-stuck', window.scrollY > 40);
-        const marker = 120;
+        const scrollY = window.scrollY;
+
+        // 回到最頂端按鈕顯隱（滾動超過 120px 時顯現）
+        if (backToTopBtn) {
+          backToTopBtn.classList.toggle('is-visible', scrollY > 120);
+        }
+
+        // 高亮當前所在段落卡片
+        const marker = 140;
         let currentId = cards.length ? cards[0].id : null;
         cards.forEach((card) => {
           if (card.getBoundingClientRect().top <= marker) currentId = card.id;
         });
-        // 捲到底頁尾時強制選中最後一段，避免最後一張太短時選不到。
-        if (window.innerHeight + window.scrollY >= document.body.scrollHeight - 4) {
+
+        // 捲到底部時選中最後一項
+        if (window.innerHeight + scrollY >= document.body.scrollHeight - 6) {
           currentId = cards.length ? cards[cards.length - 1].id : currentId;
         }
-        Object.keys(links).forEach((id) => {
-          links[id].link.classList.toggle('is-active', id === currentId);
+
+        Object.keys(desktopLinks).forEach((id) => {
+          desktopLinks[id].link.classList.toggle('is-active', id === currentId);
         });
-        // 選單本體只有圖示，沒有文字可顯示目前段落，就寫進原生小提示。
+        Object.keys(mobileLinks).forEach((id) => {
+          mobileLinks[id].link.classList.toggle('is-active', id === currentId);
+        });
+        cards.forEach((card) => {
+          card.classList.toggle('is-active', card.id === currentId);
+        });
+
         if (currentId && names[currentId]) {
-          toggle.title = '指令選單 ・ 目前：' + names[currentId];
+          navToggle.setAttribute('aria-label', '指令選單 ・ 目前：' + names[currentId]);
         }
       }
 
@@ -616,18 +514,28 @@
       }
 
       buildMenu();
+      syncNavPosition();
       updateActive();
       window.addEventListener('scroll', onScroll, { passive: true });
-      window.addEventListener('resize', updateActive);
+      window.addEventListener('resize', () => {
+        syncNavPosition();
+        updateActive();
+      });
 
-      // 直接開 /docs#cog-music 這種帶錨點的網址時，對齊到該段落。
+      // 若網址直接附帶錨點（如 /docs#cog-music），對齊到該段落
       const initial = (window.location.hash || '').replace('#', '');
       if (initial && document.getElementById(initial)) {
-        document.getElementById(initial).scrollIntoView({ block: 'start' });
-        updateActive();
+        setTimeout(() => {
+          const el = document.getElementById(initial);
+          if (el) {
+            el.scrollIntoView({ block: 'start' });
+            updateActive();
+          }
+        }, 80);
       }
     })();
   </script>
 </body>
 
 </html>
+

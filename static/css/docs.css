@@ -1,0 +1,747 @@
+/* ==========================================================================
+   炙彗JI器人 - 指令文檔專屬樣式 (Documentation Stylesheet)
+   包含：置中頂部標題、48dp 導覽按鈕、44dp 返回首頁膠囊、文檔卡片容器、
+         電腦版半透明折射 Flyout 選單、手機版抽屜式選單以及響應式斷點
+   ========================================================================== */
+
+/* 選單展開瀑布級聯淡入動畫 */
+@keyframes menuItemSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-8px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+/* ---------- 固定跟隨畫面頂部的選單按鈕容器 (docs-nav) ---------- */
+.docs-nav {
+  position: fixed;
+  top: 32px;
+  left: max(20px, calc((100% - 1040px) / 2 + 20px));
+  z-index: 80;
+  display: flex;
+  align-items: flex-start;
+}
+
+/* Apple Liquid Glass: 選單圖標按鈕（48dp） */
+.nav-menu-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  min-width: 48px;
+  min-height: 48px;
+  padding: 0;
+  border-radius: 9999px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 45%, rgba(15, 23, 42, 0.22) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: var(--accent);
+  cursor: pointer;
+  box-shadow: inset 0 1px 1px 0 rgba(255, 255, 255, 0.35),
+              inset 0 -1px 2px 0 rgba(0, 0, 0, 0.3),
+              0 8px 24px rgba(0, 0, 0, 0.32),
+              0 0 14px rgba(167, 139, 250, 0.12);
+  backdrop-filter: blur(28px) saturate(200%);
+  -webkit-backdrop-filter: blur(28px) saturate(200%);
+  overflow: hidden;
+  transition: transform 0.28s var(--motion-spring),
+              background 0.25s ease,
+              border-color 0.25s ease,
+              box-shadow 0.25s ease;
+}
+
+.nav-menu-btn > * {
+  position: relative;
+  z-index: 2;
+}
+
+/* 懸停時掠過的斜向折射光澤 (Prismatic Gleam) */
+.nav-menu-btn::before {
+  content: "";
+  position: absolute;
+  top: -50%;
+  left: -60%;
+  width: 45%;
+  height: 200%;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.35) 50%, rgba(255, 255, 255, 0) 100%);
+  transform: rotate(25deg);
+  pointer-events: none;
+  opacity: 0;
+  z-index: 1;
+}
+
+.docs-nav:hover .nav-menu-btn::before,
+.docs-nav.is-hovered .nav-menu-btn::before {
+  animation: liquidGleamSweep 0.85s var(--motion-smooth);
+}
+
+/* 液態動態光斑跟隨效果 */
+.nav-menu-btn::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(circle at var(--mouse-x, 50%) var(--mouse-y, 50%), rgba(255, 255, 255, 0.35) 0%, rgba(255, 255, 255, 0) 65%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+  z-index: 1;
+}
+
+.docs-nav:hover .nav-menu-btn::after,
+.docs-nav.is-hovered .nav-menu-btn::after {
+  opacity: 1;
+}
+
+.docs-nav:hover .nav-menu-btn,
+.docs-nav.is-hovered .nav-menu-btn,
+.docs-nav.is-open .nav-menu-btn {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.16) 0%, rgba(167, 139, 250, 0.12) 50%, rgba(20, 32, 60, 0.35) 100%);
+  border-color: rgba(255, 255, 255, 0.38);
+  box-shadow: inset 0 1px 1.5px 0 rgba(255, 255, 255, 0.6),
+              inset 0 -1px 2px 0 rgba(0, 0, 0, 0.25),
+              0 12px 32px rgba(0, 0, 0, 0.45),
+              0 0 24px rgba(167, 139, 250, 0.28);
+  transform: translateY(-2px) scale(1.05);
+}
+
+.nav-menu-btn:active {
+  transform: scale(0.92);
+  box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.5),
+              0 6px 16px rgba(0, 0, 0, 0.35);
+}
+
+.nav-menu-icon {
+  width: 24px;
+  height: 24px;
+  pointer-events: none;
+}
+
+/* ---------- 頂部 Header ---------- */
+.page-header {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  margin-bottom: 24px;
+}
+
+/* 頂部橫向排列：左側 48dp 佔位 + 置中「指令文檔」+ 右側 48dp 對稱平衡佔位 */
+.header-top-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 48px;
+  position: relative;
+}
+
+/* 左右對稱 48dp 佔位槽，確保中間標題能夠絕對置中 */
+.header-side-placeholder {
+  width: 48px;
+  height: 48px;
+  min-width: 48px;
+  flex-shrink: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* 標題「指令文檔」字樣：乾淨俐落的 Apple Presentation 純白排版 */
+.page-title {
+  margin: 0;
+  text-align: center;
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: 0.06em;
+  background: linear-gradient(180deg, #ffffff 40%, rgba(225, 230, 248, 0.85) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  flex: 1;
+  white-space: nowrap;
+  filter: drop-shadow(0 2px 14px rgba(0, 0, 0, 0.5));
+}
+
+/* 上部分割線：細緻晶透 1dp 漸層玻璃線 */
+.header-divider {
+  height: 1px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.22) 50%, rgba(255, 255, 255, 0) 100%);
+  border: none;
+  margin: 14px 0 16px 0;
+  width: 100%;
+}
+
+/* 上部靠左放置“返回首頁”色調按鈕 */
+.header-action-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: 100%;
+}
+
+/* Apple Liquid Glass: “返回首頁”膠囊按鈕 */
+.back-link,
+.back-link:visited {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 44px;
+  padding: 0 22px;
+  border-radius: 22px; /* 膠囊形 */
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.06) 0%, rgba(255, 255, 255, 0.02) 50%, rgba(15, 23, 42, 0.2) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #ffffff;
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 0.95rem;
+  box-shadow: inset 0 1px 1px 0 rgba(255, 255, 255, 0.28),
+              inset 0 -1px 1.5px 0 rgba(0, 0, 0, 0.25),
+              0 6px 20px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(24px) saturate(200%);
+  -webkit-backdrop-filter: blur(24px) saturate(200%);
+  overflow: hidden;
+  transition: transform 0.28s var(--motion-spring),
+              background 0.25s ease,
+              border-color 0.25s ease,
+              box-shadow 0.25s ease;
+}
+
+.back-link > * {
+  position: relative;
+  z-index: 2;
+}
+
+/* 液態動態光斑追蹤 */
+.back-link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(circle at var(--mouse-x, 50%) var(--mouse-y, 50%), rgba(255, 255, 255, 0.35) 0%, rgba(255, 255, 255, 0) 65%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+  z-index: 1;
+}
+
+/* 懸停時掠過的斜向折射光澤 (Prismatic Gleam) */
+.back-link::before {
+  content: "";
+  position: absolute;
+  top: -50%;
+  left: -60%;
+  width: 45%;
+  height: 200%;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.35) 50%, rgba(255, 255, 255, 0) 100%);
+  transform: rotate(25deg);
+  pointer-events: none;
+  opacity: 0;
+  z-index: 1;
+}
+
+.back-link:hover {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.14) 0%, rgba(167, 139, 250, 0.1) 50%, rgba(22, 34, 62, 0.35) 100%);
+  border-color: rgba(255, 255, 255, 0.35);
+  box-shadow: inset 0 1px 1.5px 0 rgba(255, 255, 255, 0.55),
+              0 10px 28px rgba(0, 0, 0, 0.38),
+              0 0 18px rgba(167, 139, 250, 0.22);
+  text-decoration: none;
+  transform: translateY(-2px) scale(1.03);
+}
+
+.back-link:hover::after {
+  opacity: 1;
+}
+
+.back-link:hover::before {
+  animation: liquidGleamSweep 0.85s var(--motion-smooth);
+}
+
+.back-link:active {
+  transform: scale(0.94);
+  box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.5),
+              0 4px 14px rgba(0, 0, 0, 0.3);
+}
+
+.back-icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+/* ---------- 中部卡片容器區（Apple Bento Grid 質感液態玻璃面板） ---------- */
+.docs-stack {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  align-items: stretch;
+}
+
+.card {
+  position: relative;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0.01) 40%, rgba(12, 18, 34, 0.24) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 28px; /* Apple 曲面大圓角 */
+  padding: 24px 22px 22px;
+  box-shadow: inset 0 1px 1px 0 rgba(255, 255, 255, 0.2),
+              inset 0 -1px 2px 0 rgba(0, 0, 0, 0.25),
+              0 16px 44px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(28px) saturate(200%);
+  -webkit-backdrop-filter: blur(28px) saturate(200%);
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  scroll-margin-top: 24px;
+  overflow: hidden;
+  transition: border-color 0.28s ease,
+              box-shadow 0.28s ease,
+              transform 0.32s var(--motion-spring);
+}
+
+/* 卡片內部文字與內容位於折射高光層之上 */
+.card > * {
+  position: relative;
+  z-index: 3;
+}
+
+/* 液態玻璃表面動態游標聚光 (Surface Specular Sheen) */
+.card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(650px circle at var(--mouse-x, 50%) var(--mouse-y, 50%), rgba(255, 255, 255, 0.08) 0%, rgba(125, 211, 252, 0.02) 35%, transparent 65%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.35s ease;
+  z-index: 1;
+}
+
+/* 液態玻璃曲面邊緣動態折射光斑 (Curved Edge Bevel Refraction) */
+.card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: radial-gradient(420px circle at var(--mouse-x, 50%) var(--mouse-y, 50%), rgba(255, 255, 255, 0.45) 0%, rgba(125, 211, 252, 0.2) 30%, transparent 70%);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.35s ease;
+  z-index: 2;
+}
+
+.card:hover {
+  transform: translateY(-3px) scale(1.004);
+  border-color: rgba(255, 255, 255, 0.22);
+  box-shadow: inset 0 1px 1.5px 0 rgba(255, 255, 255, 0.35),
+              0 24px 60px rgba(0, 0, 0, 0.5),
+              0 0 28px rgba(125, 211, 252, 0.1);
+}
+
+.card:hover::before,
+.card:hover::after {
+  opacity: 1;
+}
+
+/* 捲動聚焦中的段落卡片：柔和的液態輝光環繞 */
+.card.is-active {
+  border-color: rgba(125, 211, 252, 0.38);
+  box-shadow: inset 0 1px 1.5px 0 rgba(255, 255, 255, 0.35),
+              0 22px 56px rgba(0, 0, 0, 0.5),
+              0 0 32px rgba(125, 211, 252, 0.16);
+}
+
+.card h2 {
+  margin: 0 0 14px;
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: #ffffff;
+  line-height: 1.35;
+  letter-spacing: 0.02em;
+}
+
+.card ul {
+  margin: 0;
+  padding-left: 1.25rem;
+  color: var(--muted);
+  line-height: 1.55;
+  list-style: disc;
+}
+
+.card li {
+  margin-bottom: 10px;
+  color: var(--muted);
+  line-height: 1.55;
+  overflow-wrap: break-word;
+}
+
+.card li:last-child {
+  margin-bottom: 0;
+}
+
+.card li ul {
+  margin-top: 6px;
+  padding-left: 1.15rem;
+}
+
+/* ---------- Apple Liquid Glass: 選單清單項目 ---------- */
+.flyout-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.flyout-list li {
+  will-change: transform, opacity;
+}
+
+/* 抽屜或飛出面板展開時，清單項目液態瀑布級聯淡入 */
+.docs-nav:hover .flyout-list li,
+.docs-nav.is-hovered .flyout-list li,
+.docs-nav.is-open .flyout-list li,
+.nav-drawer.is-open .flyout-list li {
+  animation: menuItemSlideIn 0.32s var(--motion-spring) both;
+  animation-delay: calc(var(--item-idx, 0) * 0.032s);
+}
+
+.flyout-list a,
+.flyout-list a:visited {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-radius: 14px;
+  color: var(--muted);
+  text-decoration: none;
+  border: 1px solid transparent;
+  overflow: hidden;
+  transition: background 0.24s var(--motion-smooth),
+              color 0.2s ease,
+              border-color 0.2s ease,
+              box-shadow 0.24s ease,
+              transform 0.25s var(--motion-spring);
+}
+
+.flyout-list a:hover {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.14) 0%, rgba(125, 211, 252, 0.08) 100%);
+  border-color: rgba(255, 255, 255, 0.24);
+  box-shadow: inset 0 1px 1px 0 rgba(255, 255, 255, 0.35),
+              0 4px 16px rgba(0, 0, 0, 0.3),
+              0 0 12px rgba(125, 211, 252, 0.15);
+  color: #ffffff;
+  transform: translateX(4px) scale(1.01);
+}
+
+.flyout-list a:active {
+  transform: translateX(2px) scale(0.97);
+}
+
+.flyout-list a.is-active,
+.flyout-list a.is-active:visited {
+  background: linear-gradient(135deg, rgba(125, 211, 252, 0.28) 0%, rgba(167, 139, 250, 0.2) 100%);
+  border-color: rgba(125, 211, 252, 0.5);
+  box-shadow: inset 0 1px 1.5px 0 rgba(255, 255, 255, 0.5),
+              0 4px 20px rgba(125, 211, 252, 0.3),
+              0 0 16px rgba(167, 139, 250, 0.25);
+  color: #ffffff;
+  font-weight: 700;
+  transform: translateX(3px);
+}
+
+.flyout-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.nav-label {
+  font-size: 0.94rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.nav-tag {
+  color: var(--accent);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: linear-gradient(135deg, rgba(167, 139, 250, 0.2) 0%, rgba(167, 139, 250, 0.06) 100%);
+  border: 1px solid rgba(167, 139, 250, 0.35);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.25);
+  padding: 2px 7px;
+  border-radius: 9999px;
+  line-height: 1.2;
+  width: fit-content;
+}
+
+.flyout-list a.is-active .nav-tag {
+  background: linear-gradient(135deg, rgba(125, 211, 252, 0.3) 0%, rgba(125, 211, 252, 0.12) 100%);
+  border-color: rgba(125, 211, 252, 0.5);
+  color: #ffffff;
+}
+
+.nav-empty {
+  padding: 12px 14px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+/* ---------- 電腦版（寬度 > 768px）：Apple Liquid Glass 飛出選單 ---------- */
+@media (min-width: 769px) {
+  .nav-backdrop,
+  .nav-drawer {
+    display: none !important;
+  }
+
+  .nav-flyout {
+    position: absolute;
+    top: 0;
+    left: calc(100% + 14px);
+    width: 285px;
+    max-height: calc(100vh - 48px);
+    background: linear-gradient(145deg, rgba(18, 26, 46, 0.52) 0%, rgba(10, 16, 30, 0.65) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 24px;
+    box-shadow: inset 0 1px 1px 0 rgba(255, 255, 255, 0.25),
+                inset 0 -1px 2px 0 rgba(0, 0, 0, 0.35),
+                0 20px 48px rgba(0, 0, 0, 0.52),
+                0 0 24px rgba(125, 211, 252, 0.08);
+    backdrop-filter: blur(32px) saturate(220%);
+    -webkit-backdrop-filter: blur(32px) saturate(220%);
+    padding: 12px 10px;
+    opacity: 0;
+    visibility: hidden;
+    transform: translateX(-10px) scale(0.96);
+    pointer-events: none;
+    transition: opacity 0.22s var(--motion-smooth),
+                transform 0.22s var(--motion-spring),
+                visibility 0.22s;
+    overflow-x: hidden;
+    overflow-y: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .nav-flyout::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+
+  /* 父容器無感橋接區：覆蓋按鈕右側與選單之間的 14px 間隙 */
+  .docs-nav::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 44px;
+    width: 24px;
+    height: 48px;
+    pointer-events: auto;
+  }
+
+  /* 電腦版：滑鼠移入、JS 寬容計時中、或點擊釘住時展開 */
+  .docs-nav:hover .nav-flyout,
+  .docs-nav.is-hovered .nav-flyout,
+  .docs-nav.is-open .nav-flyout {
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(0) scale(1);
+    pointer-events: auto;
+    transition: opacity 0.2s var(--motion-smooth),
+                transform 0.2s var(--motion-spring),
+                visibility 0s;
+  }
+
+  .flyout-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px 10px;
+    color: var(--primary);
+  }
+
+  .flyout-title {
+    font-size: 0.96rem;
+    font-weight: 700;
+    color: #ffffff;
+    letter-spacing: 0.02em;
+  }
+
+  .flyout-divider {
+    height: 1px;
+    background: linear-gradient(90deg, rgba(255, 255, 255, 0.2) 0%, rgba(255, 255, 255, 0.04) 100%);
+    margin: 2px 0 8px;
+    border: none;
+  }
+}
+
+/* ---------- 手機與窄螢幕（寬度 <= 768px）：Apple Liquid Glass 抽屜式選單 ---------- */
+@media (max-width: 768px) {
+  body {
+    padding: 20px 16px 40px;
+  }
+
+  .docs-nav {
+    top: 20px;
+    left: 16px;
+  }
+
+  .page-title {
+    font-size: 26px;
+  }
+
+  .header-divider {
+    margin: 12px 0 14px 0;
+  }
+
+  .header-action-row {
+    margin-bottom: 18px;
+  }
+
+  .back-link {
+    height: 44px;
+    padding: 0 16px;
+  }
+
+  .docs-stack {
+    gap: 16px;
+  }
+
+  .card {
+    border-radius: 28px;
+    padding: 20px 16px;
+  }
+
+  .fab-back-to-top {
+    bottom: 20px;
+    right: 16px;
+  }
+
+  .nav-flyout {
+    display: none !important;
+  }
+
+  /* 側邊抽屜遮罩 */
+  .nav-backdrop {
+    display: block;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.65);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    z-index: 90;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.26s ease, visibility 0.26s;
+  }
+
+  .nav-backdrop.is-open {
+    opacity: 1;
+    visibility: visible;
+  }
+
+  /* 手機版抽屜式選單 */
+  .nav-drawer {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 310px;
+    max-width: 84vw;
+    background: linear-gradient(155deg, rgba(16, 24, 42, 0.75) 0%, rgba(10, 15, 28, 0.85) 100%);
+    border-right: 1px solid rgba(255, 255, 255, 0.16);
+    box-shadow: inset 1px 1px 1.5px 0 rgba(255, 255, 255, 0.25),
+                18px 0 50px rgba(0, 0, 0, 0.7),
+                0 0 24px rgba(125, 211, 252, 0.08);
+    backdrop-filter: blur(32px) saturate(220%);
+    -webkit-backdrop-filter: blur(32px) saturate(220%);
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    padding: 20px 16px;
+    border-top-right-radius: 28px;
+    border-bottom-right-radius: 28px;
+    transform: translateX(-100%);
+    transition: transform 0.34s var(--motion-spring);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .nav-drawer.is-open {
+    transform: translateX(0);
+  }
+
+  .drawer-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 4px 14px;
+  }
+
+  .drawer-title-group {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--primary);
+  }
+
+  .drawer-title {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: #ffffff;
+    letter-spacing: 0.02em;
+  }
+
+  .drawer-close-btn {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background 0.2s ease, color 0.2s ease, transform 0.2s var(--motion-spring);
+  }
+
+  .drawer-close-btn:hover {
+    background: rgba(255, 255, 255, 0.18);
+    color: #ffffff;
+    transform: scale(1.08);
+  }
+
+  .drawer-close-btn:active {
+    transform: scale(0.92);
+  }
+
+  .drawer-divider {
+    height: 1px;
+    background: linear-gradient(90deg, rgba(255, 255, 255, 0.18) 0%, rgba(255, 255, 255, 0.03) 100%);
+    margin: 4px 0 12px;
+    border: none;
+  }
+}
+

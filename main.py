@@ -139,20 +139,34 @@ class MyBot(commands.Bot):
             user_info = f"{interaction.user} ({interaction.user.id})" if interaction else 'N/A'
             guild_info = f"{interaction.guild} ({interaction.guild.id})" if interaction and interaction.guild else 'Direct Message / N/A'
             trace = ''.join(traceback.format_exception(type(error), error, error.__traceback__))
-            if len(trace) > 1500:
-                trace = trace[-1500:]
 
-            content = (
+            err_str = redact_secrets(str(error))
+            if len(err_str) > 300:
+                err_str = err_str[:297] + "..."
+
+            header = (
                 f"⚠️ **機器人錯誤通知**\n"
                 f"**使用者**: {user_info}\n"
                 f"**伺服器**: {guild_info}\n"
                 f"**指令**: {command_name}\n"
                 f"**錯誤類型**: {type(error).__name__}\n"
-                f"**錯誤訊息**: {redact_secrets(str(error))}\n"
+                f"**錯誤訊息**: {err_str}\n"
             )
             if extra_info:
-                content += f"**額外資訊**: {redact_secrets(extra_info)}\n"
-            content += f"```py\n{redact_secrets(trace)}\n```"
+                clean_extra = redact_secrets(extra_info)
+                if len(clean_extra) > 200:
+                    clean_extra = clean_extra[:197] + "..."
+                header += f"**額外資訊**: {clean_extra}\n"
+
+            # Discord 單則訊息上限 2000 字元，保留 50 字元餘裕給代碼區塊與換行
+            max_trace_len = 1950 - len(header) - len("```py\n\n```")
+            if max_trace_len > 100:
+                trace_clean = redact_secrets(trace)
+                if len(trace_clean) > max_trace_len:
+                    trace_clean = trace_clean[-max_trace_len:]
+                content = f"{header}```py\n{trace_clean}\n```"
+            else:
+                content = header[:1950]
 
             await owner.send(content)
         except discord.HTTPException as exc:
@@ -164,7 +178,16 @@ class MyBot(commands.Bot):
         # 綁定全局 app command 錯誤處理器
         self.tree.on_error = self.on_app_command_error
 
-        print("🔧 setup_hook 已被呼叫，開始載入 Cogs...")
+        # 初始化 SQLite 資料庫（建立資料表與自動資料遷移）
+        try:
+            from cogs.database import init_db
+            init_db()
+            print("📦 SQLite 資料庫初始化完成（已確認資料表與既有資料遷移）。")
+        except Exception as e:
+            print(f"⚠️ SQLite 資料庫初始化失敗: {e}")
+            traceback.print_exc()
+
+        print("🔧 開始載入 Cogs...")
         for extension in INITIAL_EXTENSIONS:
             try:
                 await self.load_extension(extension)

@@ -59,35 +59,10 @@ LOOP_LABELS = {
 }
 LOOP_NEXT = {"off": "single", "single": "all", "all": "off"}
 
-# 點歌頻道限制的設定檔：key 是 guild_id 字串，value 是 {"music_channel_id": int}。
-# 沒有設定的伺服器 = 不限制，任何頻道都可以使用音樂指令。
-MUSIC_SETTINGS_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'music_settings.json')
-
-
-def _load_music_settings() -> dict:
-    """讀取各伺服器的點歌頻道設定；檔案不存在或損壞時回傳空 dict（=全部不限制）。"""
-    if os.path.exists(MUSIC_SETTINGS_FILE):
-        try:
-            with open(MUSIC_SETTINGS_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
-            print(f"⚠️ music_settings.json 讀取失敗，所有伺服器將暫時不限頻道：{e}")
-            return {}
-    return {}
-
-
-def _save_music_settings(data: dict):
-    """原子寫入設定檔（先寫暫存檔再 os.replace），避免寫到一半斷電留下半份 JSON。
-    模式與 welcome.py 的 _save_welcome_settings 一致。"""
-    dir_path = os.path.dirname(MUSIC_SETTINGS_FILE)
-    try:
-        with tempfile.NamedTemporaryFile('w', encoding='utf-8', dir=dir_path, delete=False, suffix='.tmp') as tmp:
-            json.dump(data, tmp, ensure_ascii=False, indent=2)
-            tmp_path = tmp.name
-        os.replace(tmp_path, MUSIC_SETTINGS_FILE)
-    except Exception as e:
-        print(f"❌ 儲存點歌頻道設定失敗: {e}")
-        raise
+from cogs.database import (
+    load_music_settings as _load_music_settings,
+    save_music_settings as _save_music_settings,
+)
 
 
 _TIME_RE = re.compile(r"^(?:(\d+):)?(?:(\d+):)?(\d+)$")

@@ -1,0 +1,345 @@
+/* ==========================================================================
+   炙彗JI器人 - 核心共用樣式 (Apple Liquid Glass Design Language)
+   包含：設計系統變數、基礎重設、背景液態流體光暈、共用膠囊標籤、56dp 回頂端晶球與頁尾
+   ========================================================================== */
+
+:root {
+  /* 主題配色角色 */
+  --bg: #0b1020;
+  --bg2: #111827;
+  --panel: rgba(15, 23, 42, 0.65);
+  --panel-border: rgba(255, 255, 255, 0.14);
+  --primary: #7dd3fc;
+  --secondary: #34d399;
+  --accent: #a78bfa;
+  --text: #f8fafc;
+  --muted: #b9c6db;
+  --danger: #f87171;
+
+  /* Apple Liquid Glass: 彈性流體運動曲線 */
+  --motion-spring: cubic-bezier(0.28, 1.45, 0.58, 1);
+  --motion-smooth: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", Roboto, "Microsoft JhengHei", sans-serif;
+  background: #090d1a;
+  color: var(--text);
+  min-height: 100vh;
+  padding: 32px 20px 56px;
+  overflow-x: hidden;
+  position: relative;
+}
+
+/* ---------- 全域超連結樣式與狀態重設 ---------- */
+a {
+  color: var(--primary);
+  text-decoration: none;
+  transition: color 0.2s ease, text-decoration-color 0.2s ease;
+}
+
+a:visited {
+  color: var(--primary);
+}
+
+a:hover {
+  color: #bae6fd;
+}
+
+/* ---------- Apple Liquid Glass: 鮮活流體漸層背板 ---------- */
+.glass-ambient-backdrop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  z-index: -1;
+  overflow: hidden;
+}
+
+.ambient-orb {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(95px);
+  opacity: 0.5;
+  will-change: transform, border-radius, opacity;
+}
+
+.ambient-orb-1 {
+  top: -10%;
+  left: 15%;
+  width: 540px;
+  height: 540px;
+  background: radial-gradient(circle, rgba(167, 139, 250, 0.38) 0%, rgba(167, 139, 250, 0) 70%);
+  animation: floatOrb1 20s ease-in-out infinite alternate;
+}
+
+.ambient-orb-2 {
+  top: 35%;
+  right: -8%;
+  width: 640px;
+  height: 640px;
+  background: radial-gradient(circle, rgba(125, 211, 252, 0.32) 0%, rgba(56, 189, 248, 0) 70%);
+  animation: floatOrb2 24s ease-in-out infinite alternate;
+}
+
+.ambient-orb-3 {
+  bottom: -10%;
+  left: 20%;
+  width: 580px;
+  height: 580px;
+  background: radial-gradient(circle, rgba(52, 211, 153, 0.24) 0%, rgba(52, 211, 153, 0) 70%);
+  animation: floatOrb3 22s ease-in-out infinite alternate;
+}
+
+/* 有機液態漫射光斑多維度流體蠕動動效 */
+@keyframes floatOrb1 {
+  0% {
+    transform: translate(0, 0) scale(1) rotate(0deg);
+    border-radius: 60% 40% 70% 30% / 50% 60% 40% 50%;
+    opacity: 0.45;
+  }
+  50% {
+    transform: translate(80px, 60px) scale(1.14) rotate(45deg);
+    border-radius: 40% 60% 30% 70% / 60% 40% 70% 30%;
+    opacity: 0.58;
+  }
+  100% {
+    transform: translate(-40px, 100px) scale(0.94) rotate(90deg);
+    border-radius: 50% 50% 60% 40% / 40% 60% 50% 50%;
+    opacity: 0.48;
+  }
+}
+
+@keyframes floatOrb2 {
+  0% {
+    transform: translate(0, 0) scale(1) rotate(0deg);
+    border-radius: 50% 50% 40% 60% / 40% 60% 50% 50%;
+    opacity: 0.4;
+  }
+  50% {
+    transform: translate(-90px, -60px) scale(1.18) rotate(-60deg);
+    border-radius: 60% 40% 70% 30% / 50% 40% 60% 50%;
+    opacity: 0.55;
+  }
+  100% {
+    transform: translate(50px, -40px) scale(0.92) rotate(-120deg);
+    border-radius: 40% 60% 50% 50% / 60% 50% 40% 60%;
+    opacity: 0.44;
+  }
+}
+
+@keyframes floatOrb3 {
+  0% {
+    transform: translate(0, 0) scale(1) rotate(0deg);
+    border-radius: 70% 30% 50% 50% / 30% 70% 60% 40%;
+    opacity: 0.35;
+  }
+  50% {
+    transform: translate(-50px, 60px) scale(1.1) rotate(55deg);
+    border-radius: 50% 50% 40% 60% / 60% 40% 50% 50%;
+    opacity: 0.48;
+  }
+  100% {
+    transform: translate(70px, -50px) scale(0.94) rotate(115deg);
+    border-radius: 40% 60% 60% 40% / 50% 50% 30% 70%;
+    opacity: 0.38;
+  }
+}
+
+
+
+/* 鏡面液態折射光斑掃掠動效 */
+@keyframes liquidGleamSweep {
+  0% {
+    transform: translateX(-160%) rotate(25deg);
+    opacity: 0;
+  }
+  20% {
+    opacity: 0.9;
+  }
+  80% {
+    opacity: 0.9;
+  }
+  100% {
+    transform: translateX(280%) rotate(25deg);
+    opacity: 0;
+  }
+}
+
+/* Apple Liquid Glass: 標籤膠囊 */
+.tag {
+  display: inline-block;
+  font-size: 0.72rem;
+  padding: 4px 12px;
+  border-radius: 9999px;
+  background: linear-gradient(135deg, rgba(125, 211, 252, 0.14) 0%, rgba(125, 211, 252, 0.03) 100%);
+  border: 1px solid rgba(125, 211, 252, 0.28);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.25),
+              0 2px 8px rgba(0, 0, 0, 0.2);
+  color: var(--primary);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  margin-bottom: 12px;
+  text-transform: uppercase;
+  width: fit-content;
+  transition: transform 0.24s var(--motion-spring),
+              box-shadow 0.24s ease,
+              border-color 0.24s ease,
+              background 0.24s ease;
+}
+
+.tag:hover {
+  transform: translateY(-1.5px) scale(1.04);
+  background: linear-gradient(135deg, rgba(125, 211, 252, 0.24) 0%, rgba(125, 211, 252, 0.08) 100%);
+  border-color: rgba(125, 211, 252, 0.45);
+  box-shadow: inset 0 1px 1.5px rgba(255, 255, 255, 0.4),
+              0 0 14px rgba(125, 211, 252, 0.25);
+}
+
+/* 程式碼標籤 */
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.15);
+  padding: 2px 7px;
+  border-radius: 6px;
+  color: #e2e8f0;
+  font-size: 0.9em;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+code:hover {
+  background: rgba(255, 255, 255, 0.15);
+  border-color: rgba(125, 211, 252, 0.45);
+  color: #ffffff;
+}
+
+/* ---------- Apple Liquid Glass: 回到最頂端浮動玻璃晶球（56dp） ---------- */
+.fab-back-to-top {
+  position: fixed;
+  bottom: 24px;
+  right: 20px;
+  z-index: 60;
+  width: 56px;
+  height: 56px;
+  border-radius: 9999px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.1) 0%, rgba(125, 211, 252, 0.08) 45%, rgba(12, 18, 34, 0.25) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: var(--primary);
+  box-shadow: inset 0 1px 1.5px 0 rgba(255, 255, 255, 0.45),
+              inset 0 -1.5px 2px 0 rgba(0, 0, 0, 0.3),
+              0 12px 32px rgba(0, 0, 0, 0.4),
+              0 0 18px rgba(125, 211, 252, 0.16);
+  backdrop-filter: blur(28px) saturate(200%);
+  -webkit-backdrop-filter: blur(28px) saturate(200%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  visibility: hidden;
+  transform: scale(0.7) translateY(12px);
+  overflow: hidden;
+  transition: opacity 0.28s var(--motion-spring),
+              transform 0.28s var(--motion-spring),
+              visibility 0.28s,
+              background 0.25s ease,
+              border-color 0.25s ease,
+              box-shadow 0.25s ease;
+}
+
+.fab-back-to-top > * {
+  position: relative;
+  z-index: 2;
+}
+
+/* 液態動態光斑追蹤 */
+.fab-back-to-top::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(circle at var(--mouse-x, 50%) var(--mouse-y, 50%), rgba(255, 255, 255, 0.35) 0%, rgba(255, 255, 255, 0) 65%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+  z-index: 1;
+}
+
+/* 懸停時掠過的斜向折射光澤 (Prismatic Gleam) */
+.fab-back-to-top::before {
+  content: "";
+  position: absolute;
+  top: -50%;
+  left: -60%;
+  width: 45%;
+  height: 200%;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.35) 50%, rgba(255, 255, 255, 0) 100%);
+  transform: rotate(25deg);
+  pointer-events: none;
+  opacity: 0;
+  z-index: 1;
+}
+
+.fab-back-to-top.is-visible {
+  opacity: 1;
+  visibility: visible;
+  transform: scale(1) translateY(0);
+}
+
+.fab-back-to-top:hover::after {
+  opacity: 1;
+}
+
+.fab-back-to-top:hover::before {
+  animation: liquidGleamSweep 0.85s var(--motion-smooth);
+}
+
+.fab-back-to-top:hover {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.18) 0%, rgba(125, 211, 252, 0.16) 45%, rgba(18, 28, 52, 0.4) 100%);
+  border-color: rgba(255, 255, 255, 0.4);
+  box-shadow: inset 0 1px 2px 0 rgba(255, 255, 255, 0.65),
+              0 16px 42px rgba(0, 0, 0, 0.5),
+              0 0 28px rgba(125, 211, 252, 0.3);
+  color: #ffffff;
+  transform: scale(1.08) translateY(-3px);
+}
+
+.fab-back-to-top:active {
+  transform: scale(0.92);
+  box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.5),
+              0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
+.fab-back-to-top svg {
+  width: 24px;
+  height: 24px;
+}
+
+/* ---------- 頁尾 ---------- */
+.footer {
+  margin-top: 40px;
+  padding-bottom: 24px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.footer-line {
+  display: block;
+}
+
