@@ -47,15 +47,32 @@
 
       <div class="topbar-right">
         {% if user %}
-        <div class="topbar-user">
-          <img class="topbar-user-avatar" src="{{ user.avatar_url }}" alt="使用者頭像" />
-          <span class="topbar-username">{{ user.global_name or user.username }}</span>
+        <div class="topbar-user-menu-wrapper">
           {% if is_owner %}
-          <span class="owner-pill" style="font-size: 0.72rem; padding: 2px 7px; border-radius: 9999px; background: rgba(245, 158, 11, 0.15); border: 1px solid rgba(245, 158, 11, 0.4); color: #fbbf24; font-weight: 800;">👑 BOT OWNER</span>
-          {% else %}
-          <span class="admin-pill" style="font-size: 0.72rem; padding: 2px 7px; border-radius: 9999px; background: rgba(125, 211, 252, 0.15); border: 1px solid rgba(125, 211, 252, 0.4); color: #7dd3fc; font-weight: 800;">🛡️ SERVER ADMIN</span>
+          <span class="topbar-owner-crown" title="BOT OWNER">👑</span>
           {% endif %}
-          <a class="topbar-logout-link" href="/logout" title="登出">登出</a>
+          <button class="topbar-avatar-btn" id="topbar-user-btn" type="button" aria-expanded="false" aria-label="使用者選單" title="{{ user.global_name or user.username }}">
+            <img class="topbar-user-avatar" src="{{ user.avatar_url }}" alt="使用者頭像" />
+          </button>
+
+          <div class="topbar-user-dropdown" id="topbar-user-dropdown">
+            <div class="dropdown-user-header">
+              <img class="dropdown-user-avatar" src="{{ user.avatar_url }}" alt="使用者頭像" />
+              <div class="dropdown-user-info">
+                <span class="dropdown-user-name">{{ user.global_name or user.username }}</span>
+                {% if is_owner %}
+                <span class="dropdown-user-role">👑 BOT OWNER</span>
+                {% endif %}
+              </div>
+            </div>
+            <div class="dropdown-divider"></div>
+            <a class="dropdown-item dropdown-logout-btn" href="/logout">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                <path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/>
+              </svg>
+              <span>登出</span>
+            </a>
+          </div>
         </div>
         {% else %}
         <a class="topbar-login-link top-nav-link" href="/login">

@@ -58,7 +58,9 @@ def test_panel_non_owner_isolation():
     # 1. 前端頁面防護：確保不包含 owner_guild_only 與擁有者專區
     res_panel = client.get('/panel')
     html = res_panel.data.decode('utf-8')
-    assert 'SERVER ADMIN' in html
+    assert '伺服器管理員' in html
+    assert 'BOT OWNER' not in html
+    assert 'topbar-owner-crown' not in html
     assert 'tab-owner' not in html
     assert '擁有者專屬控制面板' not in html
     assert '管理員設定' not in html
@@ -101,6 +103,9 @@ def test_panel_owner_access():
     res_panel = client.get('/panel')
     html = res_panel.data.decode('utf-8')
     assert 'BOT OWNER' in html
+    assert 'topbar-owner-crown' in html
+    assert 'topbar-avatar-btn' in html
+    assert 'topbar-user-dropdown' in html
     assert 'tab-owner' in html
     assert '管理員設定' in html
     assert '經濟系統設定' in html

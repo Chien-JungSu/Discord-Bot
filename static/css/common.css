@@ -622,57 +622,161 @@ code:hover {
   transform: translateY(-1px);
 }
 
-.topbar-user {
+/* ---------- 頂部 Bar 使用者頭像與下拉選單 (Avatar & User Dropdown) ---------- */
+.topbar-user-menu-wrapper {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 4px 12px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 9999px;
-  font-size: 0.86rem;
+  gap: 8px;
+}
+
+/* 皇冠 emoji 位於頭像左方 */
+.topbar-owner-crown {
+  font-size: 1.15rem;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
+  filter: drop-shadow(0 0 6px rgba(251, 191, 36, 0.6));
+  animation: crownGentleFloat 3s ease-in-out infinite;
+}
+
+@keyframes crownGentleFloat {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-2px); }
+}
+
+/* 頭像觸發按鈕（僅顯示圓形頭像） */
+.topbar-avatar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1.5px solid rgba(255, 255, 255, 0.2);
+  border-radius: 50%;
+  cursor: pointer;
+  transition: all 0.2s var(--motion-spring);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.topbar-avatar-btn:hover,
+.topbar-avatar-btn.is-active {
+  background: rgba(125, 211, 252, 0.2);
+  border-color: rgba(125, 211, 252, 0.6);
+  transform: scale(1.08);
+  box-shadow: 0 0 14px rgba(125, 211, 252, 0.4);
+}
+
+.topbar-avatar-btn:active {
+  transform: scale(0.95);
 }
 
 .topbar-user-avatar {
-  width: 24px;
-  height: 24px;
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
   object-fit: cover;
+  display: block;
 }
 
-.topbar-username {
+/* 點開後出現的下拉彈出選單 */
+.topbar-user-dropdown {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  width: 220px;
+  background: rgba(15, 23, 42, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 16px;
+  padding: 12px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.65), inset 0 1px 1px rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(28px) saturate(200%);
+  -webkit-backdrop-filter: blur(28px) saturate(200%);
+  z-index: 110;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-8px) scale(0.96);
+  transition: all 0.22s cubic-bezier(0.28, 1.45, 0.58, 1);
+}
+
+.topbar-user-dropdown.is-open {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0) scale(1);
+}
+
+.dropdown-user-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 6px 10px;
+}
+
+.dropdown-user-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.dropdown-user-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.dropdown-user-name {
+  font-size: 0.92rem;
   font-weight: 700;
   color: #ffffff;
-  max-width: 110px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.topbar-user-panel-link {
+.dropdown-user-role {
+  font-size: 0.72rem;
+  color: #fbbf24;
+  font-weight: 800;
+  margin-top: 2px;
+}
+
+.dropdown-divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.08);
+  margin: 4px 0 8px;
+}
+
+.dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  text-decoration: none;
+  font-size: 0.88rem;
+  font-weight: 600;
+  transition: all 0.18s ease;
+}
+
+.dropdown-panel-link {
   color: var(--primary);
-  font-weight: 700;
-  text-decoration: none;
-  font-size: 0.82rem;
-  margin-left: 2px;
 }
 
-.topbar-user-panel-link:hover {
-  text-decoration: underline;
+.dropdown-panel-link:hover {
+  background: rgba(125, 211, 252, 0.12);
+  color: #ffffff;
 }
 
-.topbar-logout-link {
+.dropdown-logout-btn {
   color: #f87171;
-  font-size: 0.78rem;
-  font-weight: 700;
-  padding: 2px 7px;
-  border-radius: 5px;
-  background: rgba(248, 113, 113, 0.1);
-  text-decoration: none;
 }
 
-.topbar-logout-link:hover {
-  background: rgba(248, 113, 113, 0.25);
+.dropdown-logout-btn:hover {
+  background: rgba(248, 113, 113, 0.16);
   color: #ffffff;
 }
 

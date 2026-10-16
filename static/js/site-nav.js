@@ -45,12 +45,40 @@
     });
   }
 
-  // 按 ESC 鍵關閉全站選單
+  // 按 ESC 鍵關閉全站選單與使用者下拉
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       toggleSiteNav(false);
+      toggleUserDropdown(false);
     }
   });
+
+  // ==========================================================================
+  // 1-2. 頂部 Bar 使用者頭像點擊彈出下拉選單
+  // ==========================================================================
+  const userBtn = document.getElementById('topbar-user-btn');
+  const userDropdown = document.getElementById('topbar-user-dropdown');
+
+  function toggleUserDropdown(force) {
+    if (!userBtn || !userDropdown) return;
+    const isOpen = typeof force === 'boolean' ? force : !userDropdown.classList.contains('is-open');
+    userDropdown.classList.toggle('is-open', isOpen);
+    userBtn.classList.toggle('is-active', isOpen);
+    userBtn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+  }
+
+  if (userBtn && userDropdown) {
+    userBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleUserDropdown();
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!userDropdown.contains(e.target) && !userBtn.contains(e.target)) {
+        toggleUserDropdown(false);
+      }
+    });
+  }
 
   // ==========================================================================
   // 2. docs.html 專屬指令目錄側邊欄：鼠標抵達最左側或點擊 UI 標籤時展開
