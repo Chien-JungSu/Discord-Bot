@@ -39,45 +39,47 @@ main {
   left: 0;
   top: 50%;
   transform: translateY(-50%);
-  z-index: 106;
+  z-index: 110;
   display: flex;
   align-items: center;
   justify-content: center;
   width: 26px;
   height: 48px;
   padding: 0;
-  background: rgba(15, 23, 42, 0.88);
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.2);
   border-left: none;
   border-top-right-radius: 12px;
   border-bottom-right-radius: 12px;
   color: var(--primary);
   cursor: pointer;
-  box-shadow: 4px 0 16px rgba(0, 0, 0, 0.35), inset 0 1px 1px rgba(255, 255, 255, 0.2);
+  box-shadow: 4px 0 16px rgba(0, 0, 0, 0.4), inset 0 1px 1px rgba(255, 255, 255, 0.25);
   backdrop-filter: blur(20px) saturate(180%);
   -webkit-backdrop-filter: blur(20px) saturate(180%);
-  transition: left 0.3s cubic-bezier(0.28, 1.35, 0.58, 1), background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+  transition: background 0.25s ease, border-color 0.25s ease, color 0.25s ease, box-shadow 0.25s ease, width 0.2s ease;
 }
 
 .docs-sidebar-trigger:hover {
-  background: rgba(15, 23, 42, 0.96);
-  border-color: rgba(125, 211, 252, 0.5);
+  background: rgba(15, 23, 42, 0.98);
+  border-color: rgba(125, 211, 252, 0.6);
   color: #ffffff;
   width: 30px;
-  box-shadow: 6px 0 20px rgba(125, 211, 252, 0.3);
+  box-shadow: 6px 0 20px rgba(125, 211, 252, 0.35);
 }
 
 .docs-sidebar-trigger.is-active {
-  left: 260px;
-  background: rgba(15, 23, 42, 0.96);
-  border-color: rgba(125, 211, 252, 0.5);
+  left: 0;
+  background: rgba(15, 23, 42, 0.98);
+  border-color: rgba(125, 211, 252, 0.6);
   color: #ffffff;
   width: 28px;
-  box-shadow: 6px 0 20px rgba(0, 0, 0, 0.5);
+  box-shadow: 4px 0 16px rgba(0, 0, 0, 0.5);
 }
 
 .trigger-chevron {
-  transition: transform 0.28s cubic-bezier(0.28, 1.35, 0.58, 1);
+  display: block;
+  transition: transform 0.35s cubic-bezier(0.28, 1.35, 0.58, 1);
+  transform-origin: center center;
 }
 
 .docs-sidebar-trigger.is-active .trigger-chevron {
@@ -106,9 +108,9 @@ main {
   position: fixed;
   top: 72px;
   left: 0;
-  width: 260px;
+  width: 290px;
   max-width: calc(100vw - 32px);
-  max-height: calc(100vh - 90px);
+  max-height: calc(100vh - 86px);
   background: rgba(15, 23, 42, 0.95);
   border: 1px solid rgba(255, 255, 255, 0.15);
   border-left: none;
@@ -122,10 +124,10 @@ main {
   z-index: 105;
   display: flex;
   flex-direction: column;
-  padding: 18px 16px 16px;
+  padding: 14px 12px 14px 34px;
   transform: translateX(-100%);
   transition: transform 0.3s cubic-bezier(0.28, 1.35, 0.58, 1);
-  overflow-y: hidden;
+  overflow: hidden;
 }
 
 .docs-sidebar.is-open {
@@ -184,9 +186,10 @@ main {
 .sidebar-hint {
   font-size: 0.72rem;
   color: var(--muted);
-  padding: 6px 2px 8px;
+  padding: 4px 2px 6px;
   letter-spacing: 0.02em;
   flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .sidebar-nav-list {
@@ -195,11 +198,18 @@ main {
   padding: 2px 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
   overflow-y: auto;
+  overflow-x: hidden;
   flex: 1;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.sidebar-nav-list::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 .sidebar-nav-item {
@@ -210,20 +220,22 @@ main {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 12px;
-  border-radius: 10px;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
   color: #cbd5e1;
   text-decoration: none;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid transparent;
-  transition: all 0.2s ease;
+  transition: all 0.18s ease;
+  box-sizing: border-box;
+  width: 100%;
 }
 
 .sidebar-nav-link:hover {
   background: rgba(255, 255, 255, 0.08);
   border-color: rgba(255, 255, 255, 0.16);
   color: #ffffff;
-  transform: translateX(4px);
 }
 
 .sidebar-nav-link.is-active {
@@ -535,17 +547,18 @@ main {
   .docs-sidebar {
     top: 66px;
     left: 0;
-    width: min(280px, calc(100vw - 44px));
+    width: min(290px, calc(100vw - 20px));
     max-height: calc(100vh - 80px);
     border-top-left-radius: 0;
     border-bottom-left-radius: 0;
     border-top-right-radius: 16px;
     border-bottom-right-radius: 16px;
     border-left: none;
+    padding: 14px 10px 14px 32px;
   }
 
   .docs-sidebar-trigger.is-active {
-    left: min(280px, calc(100vw - 44px));
+    left: 0;
   }
 
   .header-top-row {
