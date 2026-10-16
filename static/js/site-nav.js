@@ -282,5 +282,13 @@
       updateActiveDocSection();
     }
   }
+
+  // 全域：點擊任何返回首頁的按鈕/連結時，設定置頂標籤
+  document.addEventListener('click', (e) => {
+    const homeLink = e.target.closest('a[href="/"], .topbar-brand, #back-link, .back-link, .unauth-back-link');
+    if (homeLink) {
+      sessionStorage.setItem('scroll_to_top', 'true');
+    }
+  });
 })();
 

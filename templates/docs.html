@@ -82,9 +82,9 @@
           </div>
         </div>
         {% else %}
-        <a class="topbar-login-link top-nav-link" href="/panel">
+        <button type="button" class="topbar-login-btn top-nav-link" onclick="window.location.href='/panel'">
           <span>登入</span>
-        </a>
+        </button>
         {% endif %}
       </div>
     </div>
@@ -362,20 +362,17 @@
       setupSpecularHighlight(backToTopBtn);
       document.querySelectorAll('.docs-stack > .card').forEach((card) => setupSpecularHighlight(card));
 
-      // “返回首頁”按鈕：平滑退出過渡動效並導回首頁 / 上一頁
+      // “返回首頁”按鈕：平滑退出過渡動效並導回首頁頂端
       if (backLink) {
         backLink.addEventListener('click', (e) => {
           if (e.metaKey || e.ctrlKey || e.shiftKey) return;
           e.preventDefault();
+          sessionStorage.setItem('scroll_to_top', 'true');
           document.body.style.transition = 'opacity 0.2s cubic-bezier(0.2, 0, 0, 1), transform 0.2s cubic-bezier(0.2, 0, 0, 1)';
           document.body.style.opacity = '0';
           document.body.style.transform = 'scale(0.98)';
           setTimeout(() => {
-            if (window.history.length > 1 && document.referrer.includes(window.location.host)) {
-              window.history.back();
-            } else {
-              window.location.href = '/';
-            }
+            window.location.href = '/';
           }, 180);
         });
       }

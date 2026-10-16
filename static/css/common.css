@@ -595,6 +595,7 @@ code:hover {
   gap: 12px;
 }
 
+.topbar-login-btn,
 .topbar-login-link {
   display: inline-flex;
   align-items: center;
@@ -604,23 +605,35 @@ code:hover {
   background: rgba(125, 211, 252, 0.1);
   border: 1px solid rgba(125, 211, 252, 0.28);
   color: var(--primary) !important;
+  font-family: inherit;
   font-size: 14px;
   font-weight: 700;
   letter-spacing: 0.04em;
   text-decoration: none;
   white-space: nowrap;
+  cursor: pointer;
+  outline: none;
+  line-height: normal;
   transition: all 0.2s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
 }
 
 .topbar-login-link:visited {
   color: var(--primary) !important;
 }
 
+.topbar-login-btn:hover,
 .topbar-login-link:hover {
   background: rgba(125, 211, 252, 0.22);
   border-color: rgba(125, 211, 252, 0.55);
   color: #ffffff !important;
   transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(125, 211, 252, 0.25);
+}
+
+.topbar-login-btn:active,
+.topbar-login-link:active {
+  transform: scale(0.96);
 }
 
 /* ---------- 頂部 Bar 使用者頭像與下拉選單 (Avatar & User Dropdown) ---------- */

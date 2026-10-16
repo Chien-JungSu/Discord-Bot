@@ -79,9 +79,9 @@
           </div>
         </div>
         {% else %}
-        <a class="topbar-login-link top-nav-link" href="/panel">
+        <button type="button" class="topbar-login-btn top-nav-link" onclick="window.location.href='/panel'">
           <span>登入</span>
-        </a>
+        </button>
         {% endif %}
       </div>
     </div>
@@ -587,6 +587,25 @@
       window.addEventListener('scroll', () => {
         backToTopBtn.classList.toggle('is-visible', window.scrollY > 120);
       }, { passive: true });
+    }
+
+    // 確保返回首頁時從網頁最頂端開始，而非先前點擊按鈕的滾動位置
+    if ('scrollRestoration' in history) {
+      history.scrollRestoration = 'manual';
+    }
+    function resetScrollToTop() {
+      if (!window.location.hash) {
+        window.scrollTo(0, 0);
+        document.documentElement.scrollTop = 0;
+        document.body.scrollTop = 0;
+      }
+    }
+    window.addEventListener('pageshow', resetScrollToTop);
+    if (sessionStorage.getItem('scroll_to_top') === 'true' || !window.location.hash) {
+      sessionStorage.removeItem('scroll_to_top');
+      resetScrollToTop();
+      window.addEventListener('DOMContentLoaded', resetScrollToTop);
+      window.addEventListener('load', resetScrollToTop);
     }
 
     // 為所有液態玻璃主要元件綁定光學追蹤
