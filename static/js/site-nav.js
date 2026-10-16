@@ -101,7 +101,11 @@
       if (sidebarBackdrop && (isPinned || window.innerWidth <= 768)) {
         sidebarBackdrop.classList.add('is-open');
       }
-      if (sidebarTrigger) sidebarTrigger.classList.add('is-active');
+      if (sidebarTrigger) {
+        sidebarTrigger.classList.add('is-active');
+        sidebarTrigger.setAttribute('aria-label', '收合指令目錄');
+        sidebarTrigger.setAttribute('title', '收合指令目錄');
+      }
     }
 
     function scheduleCloseSidebar(delay = 280) {
@@ -117,11 +121,23 @@
       isPinned = false;
       docsSidebar.classList.remove('is-open');
       if (sidebarBackdrop) sidebarBackdrop.classList.remove('is-open');
-      if (sidebarTrigger) sidebarTrigger.classList.remove('is-active');
+      if (sidebarTrigger) {
+        sidebarTrigger.classList.remove('is-active');
+        sidebarTrigger.setAttribute('aria-label', '展開指令目錄');
+        sidebarTrigger.setAttribute('title', '展開指令目錄');
+      }
     }
 
-    // 觸發方式 A：點擊展開 UI 標籤
+    // 觸發方式 A：點擊展開 / 收合 UI 標籤
     if (sidebarTrigger) {
+      sidebarTrigger.addEventListener('mouseenter', () => {
+        if (closeTimer) clearTimeout(closeTimer);
+      });
+      sidebarTrigger.addEventListener('mouseleave', () => {
+        if (window.innerWidth > 768 && !isPinned) {
+          scheduleCloseSidebar(280);
+        }
+      });
       sidebarTrigger.addEventListener('click', (e) => {
         e.stopPropagation();
         if (docsSidebar.classList.contains('is-open')) {
