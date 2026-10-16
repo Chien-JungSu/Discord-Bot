@@ -26,9 +26,31 @@
     );
   }
 
+  function updateNavDrawerPosition() {
+    if (!navDrawer) return;
+    const topbar = document.getElementById('site-topbar');
+    if (topbar) {
+      const rect = topbar.getBoundingClientRect();
+      const gap = 8;
+      navDrawer.style.top = `${Math.round(rect.bottom + gap)}px`;
+
+      if (window.innerWidth > 640) {
+        navDrawer.style.left = `${Math.round(rect.left)}px`;
+        navDrawer.style.width = '280px';
+      } else {
+        navDrawer.style.left = '12px';
+        navDrawer.style.width = 'calc(100vw - 24px)';
+      }
+    }
+  }
+
   function toggleSiteNav(force) {
     if (!menuBtn || !navDrawer) return;
     const isOpen = typeof force === 'boolean' ? force : !menuBtn.classList.contains('is-active');
+
+    if (isOpen) {
+      updateNavDrawerPosition();
+    }
 
     menuBtn.classList.toggle('is-active', isOpen);
     menuBtn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
@@ -63,6 +85,19 @@
       link.addEventListener('click', () => toggleSiteNav(false));
     });
   }
+
+  // 視窗縮放或滾動時，若選單已展開則即時更新對齊位置
+  window.addEventListener('resize', () => {
+    if (navDrawer && navDrawer.classList.contains('is-open')) {
+      updateNavDrawerPosition();
+    }
+  });
+
+  window.addEventListener('scroll', () => {
+    if (navDrawer && navDrawer.classList.contains('is-open')) {
+      updateNavDrawerPosition();
+    }
+  }, { passive: true });
 
   // 按 ESC 鍵關閉全站選單與使用者下拉
   document.addEventListener('keydown', (e) => {

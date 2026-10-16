@@ -827,7 +827,7 @@ h1 {
 /* ---------- 窄螢幕與手機響應式適配 ---------- */
 @media (max-width: 768px) {
   body {
-    padding: 16px 14px 40px;
+    padding: 12px 14px 40px;
   }
 
   .hero {
