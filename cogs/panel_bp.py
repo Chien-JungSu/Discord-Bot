@@ -368,6 +368,16 @@ def dev_login():
                 'bot_in_guild': True,
             }
         ]
+    elif mode == 'none':
+        session['user'] = {
+            'id': '777777777777777777',
+            'username': 'Normal_User',
+            'global_name': '普通成員 (無任何伺服器管理權限)',
+            'avatar': None,
+            'avatar_url': 'https://cdn.discordapp.com/embed/avatars/2.png',
+            'is_owner': False,
+        }
+        bot_guilds = []
     else:
         session['user'] = {
             'id': '888888888888888888',

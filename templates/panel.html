@@ -145,8 +145,27 @@
       </div>
     </section>
 
+    {% elif not guilds %}
+    <!-- 已登入但無可管理伺服器：僅顯示提示，不顯示設定選項 -->
+    <section class="no-guilds-card">
+      <div class="no-guilds-icon">⚠️</div>
+      <h3 class="no-guilds-title">您目前沒有可管理的伺服器</h3>
+      <p class="no-guilds-desc">
+        控制面板僅會顯示您擁有「<strong>管理伺服器</strong>」或「<strong>管理者</strong>」權限的伺服器。<br>
+        如果您剛獲得權限，或想在全新伺服器中使用「炙彗JI器人」，請點擊下方按鈕將機器人加入伺服器。
+      </p>
+      <div class="no-guilds-actions">
+        <a class="btn primary" href="{{ invite_url }}" target="_blank" rel="noreferrer">
+          <span>🚀 邀請機器人加入新伺服器</span>
+        </a>
+        <a class="btn secondary" href="/">
+          <span>返回首頁</span>
+        </a>
+      </div>
+    </section>
+
     {% else %}
-    <!-- 已登入狀態：控制面板核心 -->
+    <!-- 已登入且擁有可管理伺服器：控制面板核心 -->
 
     <!-- 頂部伺服器選擇與專區切換器 -->
     <section class="server-selector-section">
@@ -687,54 +706,54 @@
 
       </section>
     </div>
+
+    <!-- 自動回覆規則 新增/編輯 Modal 彈出視窗 -->
+    <div id="modal-auto-reply" class="modal-backdrop" style="display: none;" aria-hidden="true">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 id="modal-auto-reply-title">新增自動回覆規則</h3>
+          <button id="modal-auto-reply-close" class="btn-close-modal" type="button">&times;</button>
+        </div>
+        <form id="form-modal-auto-reply" class="modal-body">
+          <input type="hidden" id="modal-rule-id" value="" />
+          <div class="form-group">
+            <label>規則名稱 (管理用)</label>
+            <input type="text" id="modal-rule-name" class="form-control" maxlength="40" placeholder="例如：打招呼、社群連結" required />
+          </div>
+          <div class="form-group">
+            <label>觸發關鍵字 (多個請用逗號隔開)</label>
+            <input type="text" id="modal-rule-keywords" class="form-control" placeholder="例如：你好, 早安, hello" required />
+            <small class="form-hint">訊息內容只要包含上述任一關鍵字即可觸發。</small>
+          </div>
+          <div class="form-group">
+            <label>回覆內容 (一行一則；多行時隨機挑選一則回覆)</label>
+            <textarea id="modal-rule-replies" class="form-control" rows="4" placeholder="例如：&#10;你好呀！祝你有美好的一天！&#10;哈囉！今天過得好嗎？" required></textarea>
+          </div>
+          <div class="form-group">
+            <label>限定生效文字頻道 (可選)</label>
+            <select id="modal-rule-channel" class="form-control">
+              <option value="">-- 全伺服器所有文字頻道生效 --</option>
+            </select>
+          </div>
+          <div class="form-group checkbox-group">
+            <label class="custom-checkbox-label">
+              <input type="checkbox" id="modal-rule-paused" />
+              <span>暫停此規則（不觸發回覆）</span>
+            </label>
+          </div>
+          <div class="modal-footer">
+            <button type="submit" class="btn primary">
+              <span>💾 儲存規則</span>
+            </button>
+            <button type="button" id="modal-auto-reply-cancel" class="btn secondary">
+              <span>取消</span>
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
     {% endif %}
   </main>
-
-  <!-- 自動回覆規則 新增/編輯 Modal 彈出視窗 -->
-  <div id="modal-auto-reply" class="modal-backdrop" style="display: none;" aria-hidden="true">
-    <div class="modal-card">
-      <div class="modal-header">
-        <h3 id="modal-auto-reply-title">新增自動回覆規則</h3>
-        <button id="modal-auto-reply-close" class="btn-close-modal" type="button">&times;</button>
-      </div>
-      <form id="form-modal-auto-reply" class="modal-body">
-        <input type="hidden" id="modal-rule-id" value="" />
-        <div class="form-group">
-          <label>規則名稱 (管理用)</label>
-          <input type="text" id="modal-rule-name" class="form-control" maxlength="40" placeholder="例如：打招呼、社群連結" required />
-        </div>
-        <div class="form-group">
-          <label>觸發關鍵字 (多個請用逗號隔開)</label>
-          <input type="text" id="modal-rule-keywords" class="form-control" placeholder="例如：你好, 早安, hello" required />
-          <small class="form-hint">訊息內容只要包含上述任一關鍵字即可觸發。</small>
-        </div>
-        <div class="form-group">
-          <label>回覆內容 (一行一則；多行時隨機挑選一則回覆)</label>
-          <textarea id="modal-rule-replies" class="form-control" rows="4" placeholder="例如：&#10;你好呀！祝你有美好的一天！&#10;哈囉！今天過得好嗎？" required></textarea>
-        </div>
-        <div class="form-group">
-          <label>限定生效文字頻道 (可選)</label>
-          <select id="modal-rule-channel" class="form-control">
-            <option value="">-- 全伺服器所有文字頻道生效 --</option>
-          </select>
-        </div>
-        <div class="form-group checkbox-group">
-          <label class="custom-checkbox-label">
-            <input type="checkbox" id="modal-rule-paused" />
-            <span>暫停此規則（不觸發回覆）</span>
-          </label>
-        </div>
-        <div class="modal-footer">
-          <button type="submit" class="btn primary">
-            <span>💾 儲存規則</span>
-          </button>
-          <button type="button" id="modal-auto-reply-cancel" class="btn secondary">
-            <span>取消</span>
-          </button>
-        </div>
-      </form>
-    </div>
-  </div>
 
   <script src="{{ url_for('static', filename='js/panel.js') }}"></script>
   <script src="{{ url_for('static', filename='js/site-nav.js') }}"></script>

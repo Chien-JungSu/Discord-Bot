@@ -205,3 +205,33 @@ def test_local_logo_asset():
         assert 'logo.png' in page_html
 
 
+def test_panel_user_without_manageable_guilds():
+    client = app.test_client()
+    # 模擬登入無任何可管理伺服器的普通成員帳號
+    res_login = client.get('/api/auth/dev-login?role=none')
+    assert res_login.status_code == 302
+
+    res_panel = client.get('/panel')
+    assert res_panel.status_code == 200
+    html = res_panel.data.decode('utf-8')
+
+    # 1. 確保有顯示溫馨提示卡片與邀請連結
+    assert 'no-guilds-card' in html
+    assert '您目前沒有可管理的伺服器' in html
+    assert '邀請機器人加入新伺服器' in html
+
+    # 2. 確保絕對不顯示任何伺服器設定選項、工作區與側邊欄 Tabs
+    assert 'server-selector-section' not in html
+    assert '選擇管理伺服器或控制專區' not in html
+    assert 'panel-sidebar' not in html
+    assert 'tab-welcome' not in html
+    assert 'tab-music' not in html
+    assert 'tab-auto-reply' not in html
+    assert 'tab-reaction-roles' not in html
+    assert 'tab-commands' not in html
+    assert 'tab-owner' not in html
+    assert 'btn-save-setting' not in html
+    assert 'btn-clear-setting' not in html
+    assert 'modal-auto-reply' not in html
+
+
