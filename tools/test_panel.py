@@ -8,8 +8,8 @@ def test_home_page():
     html = res.data.decode('utf-8')
     assert 'hero-top-row' in html
     assert '登入' in html
-    assert 'primary' in html
-    assert 'panel-entry-btn' in html
+    assert 'top-nav-link' in html
+    assert 'cta-links-row' in html
     assert 'top-right-nav' not in html
     assert '⚙️' not in html
     assert '(Control Panel)' not in html
@@ -22,8 +22,7 @@ def test_docs_page():
     html = res.data.decode('utf-8')
     assert 'header-top-right' in html
     assert '登入' in html
-    assert 'primary' in html
-    assert 'panel-entry-btn' in html
+    assert 'top-nav-link' in html
     assert 'top-right-nav' not in html
     assert '⚙️' not in html
     assert '(Control Panel)' not in html

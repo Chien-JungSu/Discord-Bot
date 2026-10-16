@@ -343,7 +343,36 @@ code:hover {
   display: block;
 }
 
-/* ---------- 統一登入 / 控制面板入口膠囊按鈕 (Primary 表現，與 .status 相同高度規格與對齊) ---------- */
+/* ---------- 頂部純文字導覽連結 (取代厚重膠囊按鈕，避免手機端擠壓折行) ---------- */
+.top-nav-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--primary) !important;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-decoration: none;
+  white-space: nowrap;
+  flex-shrink: 0;
+  padding: 6px 14px;
+  border-radius: 8px;
+  transition: color 0.2s ease, background 0.2s ease, transform 0.2s ease;
+}
+
+.top-nav-link:visited {
+  color: var(--primary) !important;
+}
+
+.top-nav-link:hover {
+  color: #ffffff !important;
+  background: rgba(125, 211, 252, 0.12);
+  text-decoration: underline;
+  text-underline-offset: 4px;
+  transform: translateY(-1px);
+}
+
+/* ---------- 統一控制面板入口膠囊按鈕 ---------- */
 .panel-entry-btn,
 .panel-entry-btn.primary,
 .btn.primary.panel-entry-btn {

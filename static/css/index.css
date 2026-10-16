@@ -74,12 +74,13 @@ main {
               0 0 28px rgba(125, 211, 252, 0.08);
 }
 
-/* 首頁 Hero 頂部橫列：左側機器人狀態膠囊，右側控制面板入口，兩者水平對齊 */
+/* 首頁 Hero 頂部橫列：左側機器人狀態膠囊，右側登入純連結，兩者水平對齊 */
 .hero-top-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   width: 100%;
+  gap: 12px;
 }
 
 /* Apple Liquid Glass: 狀態膠囊 */
@@ -96,6 +97,8 @@ main {
   font-size: 13.5px;
   font-weight: 700;
   letter-spacing: 0.06em;
+  white-space: nowrap; /* 核心修正：手機端絕不被擠壓逐字折行 */
+  flex-shrink: 0;
   box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.2),
               0 4px 14px rgba(0, 0, 0, 0.25);
   backdrop-filter: blur(14px);
@@ -199,9 +202,45 @@ h1 {
 
 .cta-row {
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
-  gap: 14px;
+  gap: 16px;
   margin-top: 24px;
+}
+
+/* 次要項目純文字連結列表 (取代厚重膠囊按鈕，保持首頁清爽簡潔) */
+.cta-links-row {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-left: 6px;
+}
+
+.cta-link {
+  color: var(--muted);
+  font-size: 0.95rem;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+  text-decoration-color: rgba(255, 255, 255, 0.28);
+  transition: color 0.2s ease, text-decoration-color 0.2s ease;
+  white-space: nowrap;
+}
+
+.cta-link:visited {
+  color: var(--muted);
+}
+
+.cta-link:hover {
+  color: #ffffff;
+  text-decoration-color: var(--primary);
+}
+
+.cta-sep {
+  color: rgba(255, 255, 255, 0.3);
+  font-size: 0.8rem;
+  user-select: none;
 }
 
 /* Apple Liquid Glass: 膠囊按鈕 */
@@ -785,37 +824,88 @@ h1 {
 /* ---------- 窄螢幕與手機響應式適配 ---------- */
 @media (max-width: 768px) {
   body {
-    padding: 20px 16px 40px;
+    padding: 16px 14px 40px;
   }
 
   .hero {
-    padding: 24px 20px;
-    border-radius: 24px;
+    padding: 20px 16px;
+    border-radius: 20px;
+  }
+
+  .hero-top-row {
+    width: 100%;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .status {
+    padding: 6px 14px;
+    font-size: 12.5px;
+    gap: 7px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .top-nav-link {
+    font-size: 13.5px;
+    padding: 4px 8px;
+    white-space: nowrap;
+    flex-shrink: 0;
   }
 
   h1 {
-    font-size: 2rem;
-    margin-top: 18px;
+    font-size: 1.85rem;
+    margin-top: 16px;
   }
 
   .subtitle {
-    font-size: 0.95rem;
-    line-height: 1.65;
+    font-size: 0.92rem;
+    line-height: 1.6;
+    margin-bottom: 20px;
   }
 
   .cta-row {
     flex-direction: column;
+    align-items: stretch;
     width: 100%;
-    gap: 10px;
+    gap: 14px;
   }
 
-  .btn {
+  .cta-primary {
     width: 100%;
+    text-align: center;
+  }
+
+  .cta-links-row {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 12px;
+    margin-left: 0;
+    padding-top: 4px;
+  }
+
+  .cta-link {
+    font-size: 0.9rem;
   }
 
   .monitor-card {
-    padding: 20px 16px;
-    border-radius: 24px;
+    padding: 18px 16px;
+    border-radius: 20px;
+  }
+
+  .monitor-header-text {
+    gap: 10px;
+  }
+
+  .monitor-header h3 {
+    font-size: 1.15rem;
+  }
+
+  .monitor-subtitle {
+    font-size: 0.8rem;
   }
 
   .monitor-metrics {
@@ -828,8 +918,8 @@ h1 {
   }
 
   .stat-card {
-    min-height: 160px;
-    padding: 20px 16px;
+    min-height: 140px;
+    padding: 18px 16px;
   }
 
   .features-grid {
@@ -838,8 +928,8 @@ h1 {
   }
 
   .card {
-    padding: 20px 18px;
-    border-radius: 24px;
+    padding: 18px 16px;
+    border-radius: 20px;
   }
 
   .fab-back-to-top {
