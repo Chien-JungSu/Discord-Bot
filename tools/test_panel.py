@@ -115,6 +115,18 @@ def test_panel_owner_access():
     assert '經濟系統設定' in html
     assert '系統維護設定' in html
     assert '擁有者專屬控制面板' not in html
+    assert '儲存設定' in html
+    assert '清除設定' in html
+    assert 'btn-save-setting' in html
+    assert 'btn-clear-setting' in html
+    assert '<span>基礎與簽到設定</span>' in html
+    assert '<span>小遊戲倍率設定</span>' in html
+    assert '<span>玩家金幣帳戶</span>' in html
+    assert '<span>模組熱重載</span>' in html
+    assert '<span>指令同步與日誌</span>' in html
+    assert '<span>外部 API 配額</span>' in html
+    assert '<span>🪙 基礎與簽到設定</span>' not in html
+    assert '<span>🔄 模組熱重載</span>' not in html
 
     # 2. 後端 API：擁有者可正常存取經濟參數、Cog 清單與 API 配額
     res_econ = client.get('/api/panel/owner/economy-config')

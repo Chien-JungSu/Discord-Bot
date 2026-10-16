@@ -665,6 +665,64 @@ select.form-control option {
   margin-top: 10px;
 }
 
+/* ---------- 綠色配色：儲存設定按鈕 ---------- */
+.btn-save-setting,
+.btn-save-setting:visited {
+  background: linear-gradient(135deg, rgba(52, 211, 153, 0.24) 0%, rgba(16, 185, 129, 0.12) 100%) !important;
+  border: 1px solid rgba(52, 211, 153, 0.5) !important;
+  color: #ffffff !important;
+  box-shadow: inset 0 1px 1.5px 0 rgba(255, 255, 255, 0.45),
+              inset 0 -1px 2px 0 rgba(0, 0, 0, 0.3),
+              0 8px 24px rgba(16, 185, 129, 0.28),
+              0 0 16px rgba(52, 211, 153, 0.2) !important;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+}
+
+.btn-save-setting:hover {
+  background: linear-gradient(135deg, rgba(52, 211, 153, 0.38) 0%, rgba(16, 185, 129, 0.2) 100%) !important;
+  border-color: rgba(52, 211, 153, 0.8) !important;
+  box-shadow: inset 0 1px 2px 0 rgba(255, 255, 255, 0.65),
+              0 12px 32px rgba(16, 185, 129, 0.38),
+              0 0 24px rgba(52, 211, 153, 0.32) !important;
+  color: #ffffff !important;
+  transform: translateY(-2px) scale(1.02);
+}
+
+.btn-save-setting:active {
+  transform: scale(0.96);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.4) !important;
+}
+
+/* ---------- 紅色配色：清除設定按鈕 ---------- */
+.btn-clear-setting,
+.btn-clear-setting:visited {
+  background: linear-gradient(135deg, rgba(248, 113, 113, 0.22) 0%, rgba(239, 68, 68, 0.1) 100%) !important;
+  border: 1px solid rgba(248, 113, 113, 0.45) !important;
+  color: #ffffff !important;
+  box-shadow: inset 0 1px 1.5px 0 rgba(255, 255, 255, 0.4),
+              inset 0 -1px 2px 0 rgba(0, 0, 0, 0.3),
+              0 8px 24px rgba(239, 68, 68, 0.25),
+              0 0 16px rgba(248, 113, 113, 0.18) !important;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+}
+
+.btn-clear-setting:hover {
+  background: linear-gradient(135deg, rgba(248, 113, 113, 0.35) 0%, rgba(239, 68, 68, 0.18) 100%) !important;
+  border-color: rgba(248, 113, 113, 0.8) !important;
+  box-shadow: inset 0 1px 2px 0 rgba(255, 255, 255, 0.6),
+              0 12px 32px rgba(239, 68, 68, 0.35),
+              0 0 24px rgba(248, 113, 113, 0.3) !important;
+  color: #ffffff !important;
+  transform: translateY(-2px) scale(1.02);
+}
+
+.btn-clear-setting:active {
+  transform: scale(0.96);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.4) !important;
+}
+
 .btn-danger-action {
   color: #f87171 !important;
   border-color: rgba(248, 113, 113, 0.35) !important;
