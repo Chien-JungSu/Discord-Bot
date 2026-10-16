@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>炙彗JI器人 - 官方控制面板</title>
   <link rel="icon" type="image/png"
-    href="https://www.dropbox.com/scl/fi/8mx3kit88y0ojmihwt034/IMG_6426.PNG?rlkey=9iud5rml003o9bzq4mq54uhib&dl=1" />
+    href="{{ url_for('static', filename='logo.png') }}" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -39,7 +39,7 @@
         </button>
         <a class="topbar-brand" href="/">
           <img class="topbar-logo"
-            src="https://www.dropbox.com/scl/fi/8mx3kit88y0ojmihwt034/IMG_6426.PNG?rlkey=9iud5rml003o9bzq4mq54uhib&dl=1"
+            src="{{ url_for('static', filename='logo.png') }}"
             alt="炙彗JI器人 Logo" />
           <span class="topbar-name">炙彗JI器人</span>
         </a>

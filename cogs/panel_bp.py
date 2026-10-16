@@ -354,7 +354,7 @@ def dev_login():
             'username': 'Bot_Owner',
             'global_name': '炙彗 (機器人擁有者)',
             'avatar': None,
-            'avatar_url': 'https://www.dropbox.com/scl/fi/8mx3kit88y0ojmihwt034/IMG_6426.PNG?rlkey=9iud5rml003o9bzq4mq54uhib&dl=1',
+            'avatar_url': '/static/logo.png',
             'is_owner': True,
         }
         # 機器人擁有者只在自己具備權限的伺服器 (owner_gid) 具有管理伺服器權限

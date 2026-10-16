@@ -187,3 +187,21 @@ def test_site_topbar_and_sidebar_ui():
     assert 'docs-sidebar-list' in docs_html
 
 
+def test_local_logo_asset():
+    client = app.test_client()
+    res = client.get('/logo.png')
+    assert res.status_code == 200
+    assert 'image/png' in res.content_type
+
+    res_static = client.get('/static/logo.png')
+    assert res_static.status_code == 200
+
+    # 確保所有頁面皆使用本地 logo.png 且不包含 dropbox 外部連結
+    for path in ['/', '/docs', '/panel', '/api/auth']:
+        page_res = client.get(path)
+        assert page_res.status_code == 200
+        page_html = page_res.data.decode('utf-8')
+        assert 'dropbox.com' not in page_html
+        assert 'logo.png' in page_html
+
+

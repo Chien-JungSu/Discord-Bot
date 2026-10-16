@@ -207,6 +207,11 @@ def home():
 def docs_page():
     return render_template('docs.html')
 
+
+@app.route('/logo.png')
+def root_logo():
+    return app.send_static_file('logo.png')
+
 @app.route('/health')
 def health_check():
     bot = app.config.get('BOT')
