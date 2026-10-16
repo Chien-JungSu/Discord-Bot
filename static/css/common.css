@@ -367,8 +367,7 @@ code:hover {
 .top-nav-link:hover {
   color: #ffffff !important;
   background: rgba(125, 211, 252, 0.12);
-  text-decoration: underline;
-  text-underline-offset: 4px;
+  text-decoration: none !important;
   transform: translateY(-1px);
 }
 
@@ -609,7 +608,7 @@ code:hover {
   font-size: 14px;
   font-weight: 700;
   letter-spacing: 0.04em;
-  text-decoration: none;
+  text-decoration: none !important;
   white-space: nowrap;
   cursor: pointer;
   outline: none;
@@ -618,15 +617,24 @@ code:hover {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
 }
 
+.topbar-login-btn *,
+.topbar-login-link * {
+  text-decoration: none !important;
+}
+
 .topbar-login-link:visited {
   color: var(--primary) !important;
+  text-decoration: none !important;
 }
 
 .topbar-login-btn:hover,
-.topbar-login-link:hover {
+.topbar-login-link:hover,
+.topbar-login-btn:hover *,
+.topbar-login-link:hover * {
   background: rgba(125, 211, 252, 0.22);
   border-color: rgba(125, 211, 252, 0.55);
   color: #ffffff !important;
+  text-decoration: none !important;
   transform: translateY(-1px);
   box-shadow: 0 4px 14px rgba(125, 211, 252, 0.25);
 }
@@ -634,6 +642,7 @@ code:hover {
 .topbar-login-btn:active,
 .topbar-login-link:active {
   transform: scale(0.96);
+  text-decoration: none !important;
 }
 
 /* ---------- 頂部 Bar 使用者頭像與下拉選單 (Avatar & User Dropdown) ---------- */
