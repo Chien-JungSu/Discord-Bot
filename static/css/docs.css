@@ -297,18 +297,23 @@ main {
   margin-bottom: 24px;
 }
 
-/* 頂部同行排列：左側返回首頁按鈕 + 置中「指令文檔」+ 右側對稱平衡佔位 */
+/* 頂部同行排列：左側返回首頁按鈕 + 置中「指令文檔」 */
 .header-top-row {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  position: relative;
+  display: flex;
   align-items: center;
+  justify-content: center;
   width: 100%;
-  gap: 16px;
   min-height: 48px;
 }
 
 .header-top-row .back-link {
-  justify-self: start;
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  margin: auto 0;
+  z-index: 2;
 }
 
 /* 標題「指令文檔」字樣：乾淨俐落的 Apple Presentation 純白排版 */
@@ -325,16 +330,11 @@ main {
   -webkit-text-fill-color: transparent;
   white-space: nowrap;
   filter: drop-shadow(0 2px 14px rgba(0, 0, 0, 0.5));
-  justify-self: center;
 }
 
-/* 左右對稱佔位槽，確保中間標題能夠完美置中 */
+/* 左右對稱佔位槽（Flex 置中無須額外佔位槽） */
 .header-side-placeholder {
-  justify-self: end;
-  width: 130px;
-  height: 44px;
-  visibility: hidden;
-  pointer-events: none;
+  display: none;
 }
 
 /* 上部分割線：細緻晶透 1dp 漸層玻璃線 */
@@ -583,8 +583,30 @@ main {
   }
 
   .header-top-row {
-    grid-template-columns: auto 1fr;
-    gap: 12px;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    min-height: 42px;
+  }
+
+  .header-top-row .back-link {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    margin: auto 0;
+    height: 36px;
+    padding: 0 12px;
+    font-size: 0.84rem;
+    gap: 5px;
+    z-index: 2;
+  }
+
+  .header-top-row .back-link svg {
+    width: 16px;
+    height: 16px;
   }
 
   .header-top-row .header-side-placeholder {
@@ -592,8 +614,10 @@ main {
   }
 
   .page-title {
-    font-size: 22px;
-    text-align: right;
+    font-size: 20px;
+    text-align: center;
+    margin: 0;
+    line-height: 1.2;
   }
 
   .header-divider {
