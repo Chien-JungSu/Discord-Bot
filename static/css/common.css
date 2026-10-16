@@ -449,3 +449,344 @@ code:hover {
               0 4px 14px rgba(0, 0, 0, 0.3);
 }
 
+/* ==========================================================================
+   全站統一頂部導覽 Bar (Site-wide Top Bar)
+   - 最左邊：漢堡選單符號 (平滑動畫轉換成 X，再點一下關閉)
+   - 選單右邊：機器人 Logo + 名稱「炙彗JI器人」
+   - 最右邊：登入按鈕 / 已登入使用者資訊
+   ========================================================================== */
+
+.site-topbar {
+  position: sticky;
+  top: 12px;
+  z-index: 100;
+  max-width: 1200px;
+  margin: 0 auto 24px;
+  padding: 10px 18px;
+  background: rgba(15, 23, 42, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 18px;
+  backdrop-filter: blur(28px) saturate(200%);
+  -webkit-backdrop-filter: blur(28px) saturate(200%);
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.4), inset 0 1px 1px rgba(255, 255, 255, 0.15);
+  transition: all 0.25s ease;
+}
+
+.topbar-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* 漢堡按鈕與 ☰ -> ✕ 動畫過渡 */
+.site-menu-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #ffffff;
+  cursor: pointer;
+  flex-shrink: 0;
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.2), 0 2px 8px rgba(0, 0, 0, 0.25);
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s var(--motion-spring);
+}
+
+.site-menu-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(125, 211, 252, 0.4);
+  transform: scale(1.05);
+}
+
+.site-menu-btn:active {
+  transform: scale(0.94);
+}
+
+.hamburger-box {
+  position: relative;
+  width: 18px;
+  height: 14px;
+  display: block;
+}
+
+.hamburger-bar {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background: #ffffff;
+  border-radius: 2px;
+  transition: transform 0.3s cubic-bezier(0.28, 1.45, 0.58, 1), opacity 0.22s ease;
+  transform-origin: center;
+}
+
+.hamburger-bar.bar-1 {
+  top: 0;
+}
+
+.hamburger-bar.bar-2 {
+  top: 6px;
+}
+
+.hamburger-bar.bar-3 {
+  top: 12px;
+}
+
+/* 點開選單時：符號經過動畫平滑轉換為 X 符號 */
+.site-menu-btn.is-active .hamburger-bar.bar-1 {
+  transform: translateY(6px) rotate(45deg);
+}
+
+.site-menu-btn.is-active .hamburger-bar.bar-2 {
+  opacity: 0;
+  transform: scaleX(0);
+}
+
+.site-menu-btn.is-active .hamburger-bar.bar-3 {
+  transform: translateY(-6px) rotate(-45deg);
+}
+
+/* 機器人 Logo + 名稱 */
+.topbar-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.topbar-logo {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+  box-shadow: 0 0 12px rgba(125, 211, 252, 0.3);
+  border: 1px solid rgba(125, 211, 252, 0.45);
+  flex-shrink: 0;
+}
+
+.topbar-name {
+  font-size: 1.05rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  background: linear-gradient(180deg, #ffffff 40%, #cbd5e1 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  white-space: nowrap;
+}
+
+/* 最右邊：登入連結或使用者狀態 */
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.topbar-login-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 16px;
+  border-radius: 8px;
+  background: rgba(125, 211, 252, 0.1);
+  border: 1px solid rgba(125, 211, 252, 0.28);
+  color: var(--primary) !important;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: all 0.2s ease;
+}
+
+.topbar-login-link:visited {
+  color: var(--primary) !important;
+}
+
+.topbar-login-link:hover {
+  background: rgba(125, 211, 252, 0.22);
+  border-color: rgba(125, 211, 252, 0.55);
+  color: #ffffff !important;
+  transform: translateY(-1px);
+}
+
+.topbar-user {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 9999px;
+  font-size: 0.86rem;
+}
+
+.topbar-user-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.topbar-username {
+  font-weight: 700;
+  color: #ffffff;
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbar-user-panel-link {
+  color: var(--primary);
+  font-weight: 700;
+  text-decoration: none;
+  font-size: 0.82rem;
+  margin-left: 2px;
+}
+
+.topbar-user-panel-link:hover {
+  text-decoration: underline;
+}
+
+.topbar-logout-link {
+  color: #f87171;
+  font-size: 0.78rem;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: rgba(248, 113, 113, 0.1);
+  text-decoration: none;
+}
+
+.topbar-logout-link:hover {
+  background: rgba(248, 113, 113, 0.25);
+  color: #ffffff;
+}
+
+/* 全站導航下拉選單 (Site Nav Drawer) */
+.site-nav-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  z-index: 98;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+
+.site-nav-backdrop.is-open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.site-nav-drawer {
+  position: fixed;
+  top: 72px;
+  left: max(16px, calc((100% - 1200px) / 2 + 16px));
+  width: 280px;
+  max-width: calc(100vw - 32px);
+  background: rgba(15, 23, 42, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 20px;
+  padding: 16px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6), inset 0 1px 1px rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(28px) saturate(200%);
+  -webkit-backdrop-filter: blur(28px) saturate(200%);
+  z-index: 99;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-8px) scale(0.96);
+  transition: all 0.24s cubic-bezier(0.28, 1.45, 0.58, 1);
+}
+
+.site-nav-drawer.is-open {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0) scale(1);
+}
+
+.drawer-header {
+  padding: 4px 8px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  margin-bottom: 8px;
+}
+
+.drawer-header-title {
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.drawer-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.drawer-link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  color: #e2e8f0;
+  font-size: 0.92rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: background 0.18s ease, color 0.18s ease, transform 0.18s ease;
+}
+
+.drawer-link svg {
+  width: 18px;
+  height: 18px;
+  color: var(--primary);
+  flex-shrink: 0;
+}
+
+.drawer-link:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+  transform: translateX(3px);
+}
+
+@media (max-width: 640px) {
+  .site-topbar {
+    top: 8px;
+    padding: 8px 14px;
+    border-radius: 14px;
+    margin-bottom: 16px;
+  }
+
+  .site-nav-drawer {
+    top: 64px;
+    left: 12px;
+    width: calc(100vw - 24px);
+  }
+
+  .topbar-name {
+    font-size: 0.95rem;
+  }
+
+  .topbar-logo {
+    width: 28px;
+    height: 28px;
+  }
+}
+

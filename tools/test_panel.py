@@ -127,3 +127,37 @@ def test_panel_owner_access():
     res_unauth_guild = client.get('/api/panel/guild/222222222222222222/data')
     assert res_unauth_guild.status_code == 403
 
+
+def test_site_topbar_and_sidebar_ui():
+    client = app.test_client()
+
+    # 1. 檢驗首頁、指令頁、控制面板、登入提示頁均具備 site-topbar 與漢堡符號動畫結構
+    for path in ['/', '/docs', '/panel']:
+        res = client.get(path)
+        assert res.status_code == 200
+        html = res.data.decode('utf-8')
+        assert 'site-topbar' in html
+        assert 'site-menu-btn' in html
+        assert 'hamburger-bar' in html
+        assert 'topbar-brand' in html
+        assert '炙彗JI器人' in html
+        assert 'site-nav.js' in html
+
+    # 檢驗 login_error.html
+    res_err = client.get('/api/auth')
+    assert res_err.status_code == 200
+    err_html = res_err.data.decode('utf-8')
+    assert 'site-topbar' in err_html
+    assert 'site-menu-btn' in err_html
+    assert 'hamburger-bar' in err_html
+    assert 'site-nav.js' in err_html
+
+    # 2. 檢驗 docs.html 專屬的側邊欄 UI 與邊緣熱區
+    res_docs = client.get('/docs')
+    docs_html = res_docs.data.decode('utf-8')
+    assert 'docs-edge-hotspot' in docs_html
+    assert 'docs-sidebar-trigger' in docs_html
+    assert 'docs-sidebar' in docs_html
+    assert 'docs-sidebar-list' in docs_html
+
+

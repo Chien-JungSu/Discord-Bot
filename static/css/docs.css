@@ -16,110 +16,232 @@
   }
 }
 
-/* ---------- 固定跟隨畫面頂部的選單按鈕容器 (docs-nav) ---------- */
-.docs-nav {
+/* ---------- 側邊欄螢幕左側感應熱區 (Edge Hotspot) ---------- */
+.docs-edge-hotspot {
   position: fixed;
-  top: 32px;
-  left: max(20px, calc((100% - 1040px) / 2 + 20px));
-  z-index: 80;
-  display: flex;
-  align-items: flex-start;
+  top: 0;
+  left: 0;
+  width: 18px;
+  height: 100vh;
+  z-index: 92;
+  pointer-events: auto;
 }
 
-/* Apple Liquid Glass: 選單圖標按鈕（48dp） */
-.nav-menu-btn {
-  position: relative;
+/* ---------- 側邊欄展開 UI 標籤 (Docs Sidebar Trigger) ---------- */
+.docs-sidebar-trigger {
+  position: fixed;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 93;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 12px 7px 12px 6px;
+  background: rgba(15, 23, 42, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-left: none;
+  border-top-right-radius: 14px;
+  border-bottom-right-radius: 14px;
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  box-shadow: 4px 0 20px rgba(0, 0, 0, 0.4), inset 0 1px 1px rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  transition: all 0.25s var(--motion-spring);
+  writing-mode: vertical-rl;
+}
+
+.docs-sidebar-trigger .trigger-icon {
+  font-size: 15px;
+  writing-mode: horizontal-tb;
+  line-height: 1;
+}
+
+.docs-sidebar-trigger .trigger-text {
+  letter-spacing: 0.12em;
+}
+
+.docs-sidebar-trigger:hover,
+.docs-sidebar-trigger.is-active {
+  background: rgba(15, 23, 42, 0.95);
+  border-color: rgba(125, 211, 252, 0.45);
+  color: #ffffff;
+  padding-right: 10px;
+  box-shadow: 6px 0 24px rgba(125, 211, 252, 0.25);
+}
+
+/* ---------- 指令文檔側邊欄本體 (Docs Sidebar) ---------- */
+.docs-sidebar-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  z-index: 98;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+
+.docs-sidebar-backdrop.is-open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.docs-sidebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 320px;
+  max-width: 86vw;
+  background: rgba(15, 23, 42, 0.92);
+  border-right: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 20px 0 50px rgba(0, 0, 0, 0.65), inset 1px 1px 1px rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(32px) saturate(220%);
+  -webkit-backdrop-filter: blur(32px) saturate(220%);
+  z-index: 99;
+  display: flex;
+  flex-direction: column;
+  padding: 24px 18px 20px;
+  transform: translateX(-100%);
+  transition: transform 0.3s cubic-bezier(0.28, 1.35, 0.58, 1);
+  overflow-y: hidden;
+}
+
+.docs-sidebar.is-open {
+  transform: translateX(0);
+}
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  flex-shrink: 0;
+}
+
+.sidebar-title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--primary);
+}
+
+.sidebar-title-icon {
+  font-size: 1.15rem;
+}
+
+.sidebar-title {
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: #ffffff;
+  letter-spacing: 0.03em;
+}
+
+.sidebar-close-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 48px;
-  height: 48px;
-  min-width: 48px;
-  min-height: 48px;
+  width: 32px;
+  height: 32px;
   padding: 0;
-  border-radius: 9999px;
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 45%, rgba(15, 23, 42, 0.22) 100%);
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  color: var(--accent);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #cbd5e1;
   cursor: pointer;
-  box-shadow: inset 0 1px 1px 0 rgba(255, 255, 255, 0.35),
-              inset 0 -1px 2px 0 rgba(0, 0, 0, 0.3),
-              0 8px 24px rgba(0, 0, 0, 0.32),
-              0 0 14px rgba(167, 139, 250, 0.12);
-  backdrop-filter: blur(28px) saturate(200%);
-  -webkit-backdrop-filter: blur(28px) saturate(200%);
-  overflow: hidden;
-  transition: transform 0.28s var(--motion-spring),
-              background 0.25s ease,
-              border-color 0.25s ease,
-              box-shadow 0.25s ease;
+  transition: all 0.2s ease;
 }
 
-.nav-menu-btn > * {
-  position: relative;
-  z-index: 2;
+.sidebar-close-btn:hover {
+  background: rgba(248, 113, 113, 0.2);
+  border-color: rgba(248, 113, 113, 0.5);
+  color: #ffffff;
+  transform: rotate(90deg);
 }
 
-/* 懸停時掠過的斜向折射光澤 (Prismatic Gleam) */
-.nav-menu-btn::before {
-  content: "";
-  position: absolute;
-  top: -50%;
-  left: -60%;
-  width: 45%;
-  height: 200%;
-  background: linear-gradient(90deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.35) 50%, rgba(255, 255, 255, 0) 100%);
-  transform: rotate(25deg);
-  pointer-events: none;
-  opacity: 0;
-  z-index: 1;
+.sidebar-hint {
+  font-size: 0.76rem;
+  color: var(--muted);
+  padding: 8px 4px 12px;
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
 }
 
-.docs-nav:hover .nav-menu-btn::before,
-.docs-nav.is-hovered .nav-menu-btn::before {
-  animation: liquidGleamSweep 0.85s var(--motion-smooth);
+.sidebar-nav-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  flex: 1;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
 }
 
-/* 液態動態光斑跟隨效果 */
-.nav-menu-btn::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background: radial-gradient(circle at var(--mouse-x, 50%) var(--mouse-y, 50%), rgba(255, 255, 255, 0.35) 0%, rgba(255, 255, 255, 0) 65%);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.3s ease;
-  z-index: 1;
+.sidebar-nav-item {
+  width: 100%;
 }
 
-.docs-nav:hover .nav-menu-btn::after,
-.docs-nav.is-hovered .nav-menu-btn::after {
-  opacity: 1;
+.sidebar-nav-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-radius: 12px;
+  color: #cbd5e1;
+  text-decoration: none;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid transparent;
+  transition: all 0.2s ease;
 }
 
-.docs-nav:hover .nav-menu-btn,
-.docs-nav.is-hovered .nav-menu-btn,
-.docs-nav.is-open .nav-menu-btn {
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.16) 0%, rgba(167, 139, 250, 0.12) 50%, rgba(20, 32, 60, 0.35) 100%);
-  border-color: rgba(255, 255, 255, 0.38);
-  box-shadow: inset 0 1px 1.5px 0 rgba(255, 255, 255, 0.6),
-              inset 0 -1px 2px 0 rgba(0, 0, 0, 0.25),
-              0 12px 32px rgba(0, 0, 0, 0.45),
-              0 0 24px rgba(167, 139, 250, 0.28);
-  transform: translateY(-2px) scale(1.05);
+.sidebar-nav-link:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.16);
+  color: #ffffff;
+  transform: translateX(4px);
 }
 
-.nav-menu-btn:active {
-  transform: scale(0.92);
-  box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.5),
-              0 6px 16px rgba(0, 0, 0, 0.35);
+.sidebar-nav-link.is-active {
+  background: linear-gradient(135deg, rgba(125, 211, 252, 0.2) 0%, rgba(167, 139, 250, 0.15) 100%);
+  border-color: rgba(125, 211, 252, 0.45);
+  color: #ffffff;
+  font-weight: 700;
+  box-shadow: 0 4px 14px rgba(125, 211, 252, 0.15);
 }
 
-.nav-menu-icon {
-  width: 24px;
-  height: 24px;
-  pointer-events: none;
+.sidebar-item-title {
+  font-size: 0.92rem;
+  line-height: 1.3;
+}
+
+.sidebar-item-tag {
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 9999px;
+  background: rgba(167, 139, 250, 0.18);
+  border: 1px solid rgba(167, 139, 250, 0.35);
+  color: var(--accent);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.sidebar-nav-link.is-active .sidebar-item-tag {
+  background: rgba(125, 211, 252, 0.25);
+  border-color: rgba(125, 211, 252, 0.6);
+  color: #ffffff;
 }
 
 /* ---------- 頂部 Header ---------- */
@@ -404,216 +526,14 @@
   padding-left: 1.15rem;
 }
 
-/* ---------- Apple Liquid Glass: 選單清單項目 ---------- */
-.flyout-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.flyout-list li {
-  will-change: transform, opacity;
-}
-
-/* 抽屜或飛出面板展開時，清單項目液態瀑布級聯淡入 */
-.docs-nav:hover .flyout-list li,
-.docs-nav.is-hovered .flyout-list li,
-.docs-nav.is-open .flyout-list li,
-.nav-drawer.is-open .flyout-list li {
-  animation: menuItemSlideIn 0.32s var(--motion-spring) both;
-  animation-delay: calc(var(--item-idx, 0) * 0.032s);
-}
-
-.flyout-list a,
-.flyout-list a:visited {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 14px;
-  border-radius: 14px;
-  color: var(--muted);
-  text-decoration: none;
-  border: 1px solid transparent;
-  overflow: hidden;
-  transition: background 0.24s var(--motion-smooth),
-              color 0.2s ease,
-              border-color 0.2s ease,
-              box-shadow 0.24s ease,
-              transform 0.25s var(--motion-spring);
-}
-
-.flyout-list a:hover {
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.14) 0%, rgba(125, 211, 252, 0.08) 100%);
-  border-color: rgba(255, 255, 255, 0.24);
-  box-shadow: inset 0 1px 1px 0 rgba(255, 255, 255, 0.35),
-              0 4px 16px rgba(0, 0, 0, 0.3),
-              0 0 12px rgba(125, 211, 252, 0.15);
-  color: #ffffff;
-  transform: translateX(4px) scale(1.01);
-}
-
-.flyout-list a:active {
-  transform: translateX(2px) scale(0.97);
-}
-
-.flyout-list a.is-active,
-.flyout-list a.is-active:visited {
-  background: linear-gradient(135deg, rgba(125, 211, 252, 0.28) 0%, rgba(167, 139, 250, 0.2) 100%);
-  border-color: rgba(125, 211, 252, 0.5);
-  box-shadow: inset 0 1px 1.5px 0 rgba(255, 255, 255, 0.5),
-              0 4px 20px rgba(125, 211, 252, 0.3),
-              0 0 16px rgba(167, 139, 250, 0.25);
-  color: #ffffff;
-  font-weight: 700;
-  transform: translateX(3px);
-}
-
-.flyout-text {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.nav-label {
-  font-size: 0.94rem;
-  font-weight: 600;
-  line-height: 1.3;
-}
-
-.nav-tag {
-  color: var(--accent);
-  font-size: 0.66rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  background: linear-gradient(135deg, rgba(167, 139, 250, 0.2) 0%, rgba(167, 139, 250, 0.06) 100%);
-  border: 1px solid rgba(167, 139, 250, 0.35);
-  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.25);
-  padding: 2px 7px;
-  border-radius: 9999px;
-  line-height: 1.2;
-  width: fit-content;
-}
-
-.flyout-list a.is-active .nav-tag {
-  background: linear-gradient(135deg, rgba(125, 211, 252, 0.3) 0%, rgba(125, 211, 252, 0.12) 100%);
-  border-color: rgba(125, 211, 252, 0.5);
-  color: #ffffff;
-}
-
-.nav-empty {
-  padding: 12px 14px;
-  color: var(--muted);
-  font-size: 0.9rem;
-}
-
-/* ---------- 電腦版（寬度 > 768px）：Apple Liquid Glass 飛出選單 ---------- */
-@media (min-width: 769px) {
-  .nav-backdrop,
-  .nav-drawer {
-    display: none !important;
-  }
-
-  .nav-flyout {
-    position: absolute;
-    top: 0;
-    left: calc(100% + 14px);
-    width: 285px;
-    max-height: calc(100vh - 48px);
-    background: linear-gradient(145deg, rgba(18, 26, 46, 0.52) 0%, rgba(10, 16, 30, 0.65) 100%);
-    border: 1px solid rgba(255, 255, 255, 0.14);
-    border-radius: 24px;
-    box-shadow: inset 0 1px 1px 0 rgba(255, 255, 255, 0.25),
-                inset 0 -1px 2px 0 rgba(0, 0, 0, 0.35),
-                0 20px 48px rgba(0, 0, 0, 0.52),
-                0 0 24px rgba(125, 211, 252, 0.08);
-    backdrop-filter: blur(32px) saturate(220%);
-    -webkit-backdrop-filter: blur(32px) saturate(220%);
-    padding: 12px 10px;
-    opacity: 0;
-    visibility: hidden;
-    transform: translateX(-10px) scale(0.96);
-    pointer-events: none;
-    transition: opacity 0.22s var(--motion-smooth),
-                transform 0.22s var(--motion-spring),
-                visibility 0.22s;
-    overflow-x: hidden;
-    overflow-y: auto;
-    scrollbar-width: none;
-    -ms-overflow-style: none;
-  }
-
-  .nav-flyout::-webkit-scrollbar {
-    display: none;
-    width: 0;
-    height: 0;
-  }
-
-  /* 父容器無感橋接區：覆蓋按鈕右側與選單之間的 14px 間隙 */
-  .docs-nav::before {
-    content: "";
-    position: absolute;
-    top: 0;
-    left: 44px;
-    width: 24px;
-    height: 48px;
-    pointer-events: auto;
-  }
-
-  /* 電腦版：滑鼠移入、JS 寬容計時中、或點擊釘住時展開 */
-  .docs-nav:hover .nav-flyout,
-  .docs-nav.is-hovered .nav-flyout,
-  .docs-nav.is-open .nav-flyout {
-    opacity: 1;
-    visibility: visible;
-    transform: translateX(0) scale(1);
-    pointer-events: auto;
-    transition: opacity 0.2s var(--motion-smooth),
-                transform 0.2s var(--motion-spring),
-                visibility 0s;
-  }
-
-  .flyout-header {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 10px 10px;
-    color: var(--primary);
-  }
-
-  .flyout-title {
-    font-size: 0.96rem;
-    font-weight: 700;
-    color: #ffffff;
-    letter-spacing: 0.02em;
-  }
-
-  .flyout-divider {
-    height: 1px;
-    background: linear-gradient(90deg, rgba(255, 255, 255, 0.2) 0%, rgba(255, 255, 255, 0.04) 100%);
-    margin: 2px 0 8px;
-    border: none;
-  }
-}
-
-/* ---------- 手機與窄螢幕（寬度 <= 768px）：Apple Liquid Glass 抽屜式選單 ---------- */
+/* ---------- 響應式佈局優化 ---------- */
 @media (max-width: 768px) {
   body {
-    padding: 20px 16px 40px;
-  }
-
-  .docs-nav {
-    top: 20px;
-    left: 16px;
+    padding: 12px 14px 40px;
   }
 
   .page-title {
-    font-size: 26px;
+    font-size: 24px;
   }
 
   .header-divider {
@@ -625,7 +545,7 @@
   }
 
   .back-link {
-    height: 44px;
+    height: 42px;
     padding: 0 16px;
   }
 
@@ -634,122 +554,13 @@
   }
 
   .card {
-    border-radius: 28px;
+    border-radius: 22px;
     padding: 20px 16px;
   }
 
   .fab-back-to-top {
     bottom: 20px;
     right: 16px;
-  }
-
-  .nav-flyout {
-    display: none !important;
-  }
-
-  /* 側邊抽屜遮罩 */
-  .nav-backdrop {
-    display: block;
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0, 0, 0, 0.65);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    z-index: 90;
-    opacity: 0;
-    visibility: hidden;
-    transition: opacity 0.26s ease, visibility 0.26s;
-  }
-
-  .nav-backdrop.is-open {
-    opacity: 1;
-    visibility: visible;
-  }
-
-  /* 手機版抽屜式選單 */
-  .nav-drawer {
-    position: fixed;
-    top: 0;
-    left: 0;
-    bottom: 0;
-    width: 310px;
-    max-width: 84vw;
-    background: linear-gradient(155deg, rgba(16, 24, 42, 0.75) 0%, rgba(10, 15, 28, 0.85) 100%);
-    border-right: 1px solid rgba(255, 255, 255, 0.16);
-    box-shadow: inset 1px 1px 1.5px 0 rgba(255, 255, 255, 0.25),
-                18px 0 50px rgba(0, 0, 0, 0.7),
-                0 0 24px rgba(125, 211, 252, 0.08);
-    backdrop-filter: blur(32px) saturate(220%);
-    -webkit-backdrop-filter: blur(32px) saturate(220%);
-    z-index: 100;
-    display: flex;
-    flex-direction: column;
-    padding: 20px 16px;
-    border-top-right-radius: 28px;
-    border-bottom-right-radius: 28px;
-    transform: translateX(-100%);
-    transition: transform 0.34s var(--motion-spring);
-    overflow-y: auto;
-    -webkit-overflow-scrolling: touch;
-  }
-
-  .nav-drawer.is-open {
-    transform: translateX(0);
-  }
-
-  .drawer-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 4px 4px 14px;
-  }
-
-  .drawer-title-group {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    color: var(--primary);
-  }
-
-  .drawer-title {
-    font-size: 1.05rem;
-    font-weight: 700;
-    color: #ffffff;
-    letter-spacing: 0.02em;
-  }
-
-  .drawer-close-btn {
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    background: rgba(255, 255, 255, 0.08);
-    border: 1px solid rgba(255, 255, 255, 0.18);
-    color: var(--muted);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    transition: background 0.2s ease, color 0.2s ease, transform 0.2s var(--motion-spring);
-  }
-
-  .drawer-close-btn:hover {
-    background: rgba(255, 255, 255, 0.18);
-    color: #ffffff;
-    transform: scale(1.08);
-  }
-
-  .drawer-close-btn:active {
-    transform: scale(0.92);
-  }
-
-  .drawer-divider {
-    height: 1px;
-    background: linear-gradient(90deg, rgba(255, 255, 255, 0.18) 0%, rgba(255, 255, 255, 0.03) 100%);
-    margin: 4px 0 12px;
-    border: none;
   }
 }
 

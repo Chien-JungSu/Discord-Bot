@@ -93,6 +93,82 @@
     <div class="ambient-orb ambient-orb-3"></div>
   </div>
 
+  <!-- 全站統一頂部導覽列 (Site Top Bar) -->
+  <header class="site-topbar" id="site-topbar">
+    <div class="topbar-inner">
+      <div class="topbar-left">
+        <button class="site-menu-btn" id="site-menu-btn" type="button" aria-label="切換選單" aria-expanded="false">
+          <span class="hamburger-box">
+            <span class="hamburger-bar bar-1"></span>
+            <span class="hamburger-bar bar-2"></span>
+            <span class="hamburger-bar bar-3"></span>
+          </span>
+        </button>
+        <a class="topbar-brand" href="/">
+          <img class="topbar-logo"
+            src="https://www.dropbox.com/scl/fi/8mx3kit88y0ojmihwt034/IMG_6426.PNG?rlkey=9iud5rml003o9bzq4mq54uhib&dl=1"
+            alt="炙彗JI器人 Logo" />
+          <span class="topbar-name">炙彗JI器人</span>
+        </a>
+      </div>
+
+      <div class="topbar-right">
+        {% if session.get('user') %}
+        <div class="topbar-user">
+          <img class="topbar-user-avatar" src="{{ session.get('user').get('avatar_url') }}" alt="User Avatar" />
+          <span class="topbar-username">{{ session.get('user').get('global_name') or session.get('user').get('username') }}</span>
+          <a class="topbar-user-panel-link" href="/panel">控制面板</a>
+          <a class="topbar-logout-link" href="/logout">登出</a>
+        </div>
+        {% else %}
+        <a class="topbar-login-link top-nav-link" href="/login">
+          <span>登入</span>
+        </a>
+        {% endif %}
+      </div>
+    </div>
+  </header>
+
+  <!-- 全站導覽抽屜遮罩與面板 (Site Nav Drawer) -->
+  <div class="site-nav-backdrop" id="site-nav-backdrop" aria-hidden="true"></div>
+  <aside class="site-nav-drawer" id="site-nav-drawer" aria-label="全站導航選單">
+    <div class="drawer-header">
+      <span class="drawer-header-title">網站導覽</span>
+    </div>
+    <nav class="drawer-nav">
+      <a class="drawer-link" href="/">
+        <svg viewBox="0 0 24 24" fill="currentColor">
+          <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/>
+        </svg>
+        <span>官網首頁</span>
+      </a>
+      <a class="drawer-link" href="/docs">
+        <svg viewBox="0 0 24 24" fill="currentColor">
+          <path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/>
+        </svg>
+        <span>指令文檔</span>
+      </a>
+      <a class="drawer-link" href="/panel">
+        <svg viewBox="0 0 24 24" fill="currentColor">
+          <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>
+        </svg>
+        <span>控制面板</span>
+      </a>
+      <a class="drawer-link" href="https://discord.gg/YjjdJMa8rm" target="_blank" rel="noreferrer">
+        <svg viewBox="0 0 24 24" fill="currentColor">
+          <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/>
+        </svg>
+        <span>官方支援群</span>
+      </a>
+      <a class="drawer-link" href="https://github.com/Chien-JungSu/Discord-Bot" target="_blank" rel="noreferrer">
+        <svg viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/>
+        </svg>
+        <span>GitHub 原始碼</span>
+      </a>
+    </nav>
+  </aside>
+
   <main>
     <div class="error-container">
       <div class="tag">{{ title or 'OAuth2 授權狀態' }}</div>
@@ -143,6 +219,7 @@
       </div>
     </div>
   </main>
+  <script src="{{ url_for('static', filename='js/site-nav.js') }}"></script>
 </body>
 
 </html>
