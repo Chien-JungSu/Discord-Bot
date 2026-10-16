@@ -134,9 +134,10 @@
   <div class="docs-edge-hotspot" id="docs-edge-hotspot" aria-hidden="true" title="移至此處展開目錄"></div>
 
   <!-- 側邊欄展開 UI 標籤：點擊展開/收合側邊欄 -->
-  <button class="docs-sidebar-trigger" id="docs-sidebar-trigger" type="button" aria-label="展開指令目錄" title="點擊展開指令目錄">
-    <span class="trigger-icon">📑</span>
-    <span class="trigger-text">目錄</span>
+  <button class="docs-sidebar-trigger" id="docs-sidebar-trigger" type="button" aria-label="展開指令目錄" title="展開指令目錄">
+    <svg class="trigger-chevron" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="9 18 15 12 9 6"></polyline>
+    </svg>
   </button>
 
   <!-- 指令文檔側邊欄遮罩 -->
@@ -161,22 +162,8 @@
 
   <main>
     <header class="page-header">
-      <!-- 頂部第一行：左側 48dp 佔位 + 置中「指令文檔」 + 右側控制面板按鈕 -->
+      <!-- 頂部同行：左側返回首頁按鈕 + 置中「指令文檔」標題 + 右側對稱平衡佔位 -->
       <div class="header-top-row">
-        <div class="header-side-placeholder" id="nav-placeholder" aria-hidden="true"></div>
-        <h1 class="page-title">指令文檔</h1>
-        <div class="header-top-right">
-          <a class="top-nav-link" href="/panel">
-            <span>登入</span>
-          </a>
-        </div>
-      </div>
-
-      <!-- 上部分割線（1dp，左右留邊距） -->
-      <hr class="header-divider" />
-
-      <!-- 上部靠左放置“返回首頁”色調按鈕 -->
-      <div class="header-action-row">
         <a class="back-link" href="/" id="back-link">
           <!-- Material Symbols Rounded: arrow_back 圖標 -->
           <svg class="back-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -184,7 +171,12 @@
           </svg>
           <span>返回首頁</span>
         </a>
+        <h1 class="page-title">指令文檔</h1>
+        <div class="header-side-placeholder" aria-hidden="true"></div>
       </div>
+
+      <!-- 上部分割線（1dp，左右留邊距） -->
+      <hr class="header-divider" />
     </header>
 
     <!-- 中部容器卡片列表（Apple Bento Grid 液態玻璃面板，圓角 28dp） -->

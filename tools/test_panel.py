@@ -9,7 +9,9 @@ def test_home_page():
     assert 'hero-top-row' in html
     assert '登入' in html
     assert 'top-nav-link' in html
-    assert 'cta-links-row' in html
+    assert '加入官方支援群' in html
+    assert 'GitHub Repository' in html
+    assert 'cta-links-row' not in html
     assert 'top-right-nav' not in html
     assert '⚙️' not in html
     assert '(Control Panel)' not in html
@@ -20,9 +22,11 @@ def test_docs_page():
     res = client.get('/docs')
     assert res.status_code == 200
     html = res.data.decode('utf-8')
-    assert 'header-top-right' in html
+    assert 'page-title' in html
+    assert '指令文檔' in html
+    assert 'back-link' in html
     assert '登入' in html
-    assert 'top-nav-link' in html
+    assert 'header-top-right' not in html
     assert 'top-right-nav' not in html
     assert '⚙️' not in html
     assert '(Control Panel)' not in html
@@ -166,6 +170,7 @@ def test_site_topbar_and_sidebar_ui():
     docs_html = res_docs.data.decode('utf-8')
     assert 'docs-edge-hotspot' in docs_html
     assert 'docs-sidebar-trigger' in docs_html
+    assert 'trigger-chevron' in docs_html
     assert 'docs-sidebar' in docs_html
     assert 'docs-sidebar-list' in docs_html
 
