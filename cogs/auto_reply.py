@@ -94,15 +94,14 @@ def _normalize_rule(rule: dict) -> dict:
     if not rule.get('scope'):
         chan_id = rule.get('channel_id')
         rule['scope'] = str(chan_id) if chan_id else SCOPE_ALL
-    if 'channel_id' not in rule:
-        scope = rule.get('scope')
-        if scope and scope != SCOPE_ALL:
-            try:
-                rule['channel_id'] = int(scope)
-            except (ValueError, TypeError):
-                rule['channel_id'] = None
-        else:
+    scope = rule.get('scope')
+    if scope and scope != SCOPE_ALL:
+        try:
+            rule['channel_id'] = int(scope)
+        except (ValueError, TypeError):
             rule['channel_id'] = None
+    else:
+        rule['channel_id'] = None
     return rule
 
 
@@ -514,7 +513,7 @@ class AutoReplyEditView(discord.ui.View):
 
 
 class AutoReplyEditActionView(discord.ui.View):
-    """選取規則後的編輯按鈕：編輯關鍵字／編輯回覆內容／暫停或恢復規則／取消，只有執行指令的人能按。
+    """選取規則後的編輯按鈕：編輯關鍵字／編輯回覆內容／編輯生效範圍／暫停或恢復規則／取消，只有執行指令的人能按。
     按鈕按下後不會停用，方便連續編輯；每次操作都會重新計時，連續 120 秒沒動作才自動失效。
 
     page_link 是「繼續編輯另一頁」的按鈕：(文字, 目標頁, 彈出視窗類別)，由編輯視窗存檔後帶進來，
@@ -571,6 +570,31 @@ class AutoReplyEditActionView(discord.ui.View):
     async def edit_replies_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(AutoReplyEditRepliesModal(self.cog, self.guild, self.rule))
 
+    @discord.ui.button(label='編輯生效範圍', style=discord.ButtonStyle.primary, emoji='🌐')
+    async def edit_scope_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """切換至生效範圍選擇介面（可選特定文字頻道或設為整個伺服器）。"""
+        rule = next((r for r in self.cog._get_rules(self.guild.id)
+                     if str(r.get('id')) == str(self.rule.get('id'))), None)
+        if rule is None:
+            await interaction.response.send_message('❌ 找不到這條規則，它可能已被其他管理員刪除。', ephemeral=True)
+            return
+        self.rule = rule
+        scope_view = AutoReplyScopeEditView(self.cog, self.guild, self.rule)
+        scope_view.initiator_id = self.initiator_id or interaction.user.id
+        scope_view.message = self.message
+        embed = discord.Embed(
+            title=f'🌐 編輯生效範圍：{_rule_name(self.rule)}',
+            description=(
+                f'**規則名稱**：{_rule_name(self.rule)}\n'
+                f'**關鍵字**：{_keywords_text(self.rule)}\n'
+                f'**目前生效範圍**：{_scope_text(self.rule.get("scope"), self.guild)}\n\n'
+                '請從下方選單選擇要限制生效的**文字頻道**（僅在該頻道觸發），\n'
+                '或按「**🌐 設為整個伺服器**」讓所有文字頻道都能觸發此規則。'
+            ),
+            color=discord.Color.blurple(),
+        )
+        await interaction.response.edit_message(embed=embed, view=scope_view)
+
     @discord.ui.button(label='⏸️ 暫停規則', style=discord.ButtonStyle.secondary)
     async def toggle_rule_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """暫停／恢復這條規則：只切換 enabled，關鍵字與回覆設定完整保留（再按一次即可回來）。"""
@@ -611,6 +635,112 @@ class AutoReplyEditActionView(discord.ui.View):
             color=discord.Color.light_grey(),
         )
         await interaction.response.edit_message(embed=embed, view=self)
+
+
+class AutoReplyScopeChannelSelect(discord.ui.ChannelSelect):
+    """生效範圍的頻道選單：僅列出文字頻道與公告頻道，支援關鍵字搜尋頻道名稱。"""
+
+    def __init__(self, parent_view: 'AutoReplyScopeEditView'):
+        self.parent_view = parent_view
+        super().__init__(
+            placeholder='選擇指定文字頻道（僅在該頻道生效）…',
+            channel_types=[discord.ChannelType.text, discord.ChannelType.news],
+            min_values=1,
+            max_values=1,
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        selected = self.values[0]
+        await self.parent_view._apply_scope(interaction, str(selected.id))
+
+
+class AutoReplyScopeEditView(discord.ui.View):
+    """編輯規則生效範圍的互動介面：可從頻道選單挑一個文字頻道，或按按鈕設為整個伺服器。"""
+
+    def __init__(self, cog: 'AutoReply', guild: discord.Guild, rule: dict):
+        super().__init__(timeout=BUTTON_IDLE_TIMEOUT)
+        self.cog = cog
+        self.guild = guild
+        self.rule = rule
+        self.initiator_id: Optional[int] = None
+        self.message: Optional[discord.Message] = None
+        self.add_item(AutoReplyScopeChannelSelect(self))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if self.initiator_id is not None and interaction.user.id != self.initiator_id:
+            await interaction.response.send_message('❌ 只有執行編輯指令的人才能操作這些按鈕。', ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+    async def _apply_scope(self, interaction: discord.Interaction, new_scope: str):
+        old_scope = self.rule.get('scope') or SCOPE_ALL
+        if not self.cog.set_rule_scope(self.guild.id, self.rule.get('id'), new_scope):
+            await interaction.response.send_message('❌ 找不到這條規則，它可能已被其他管理員刪除。', ephemeral=True)
+            return
+        try:
+            _save_auto_reply_settings(self.cog.settings)
+        except Exception as e:
+            self.cog.set_rule_scope(self.guild.id, self.rule.get('id'), old_scope)
+            traceback.print_exc()
+            await self.cog.bot.notify_owner_error(e, interaction, extra_info='auto_reply_edit: 儲存生效範圍失敗')
+            await interaction.response.send_message('❌ 儲存設定時發生錯誤，變更未生效，已回報開發者。', ephemeral=True)
+            return
+
+        warning: Optional[str] = None
+        if new_scope != SCOPE_ALL:
+            target = self.guild.get_channel(int(new_scope))
+            me = self.guild.me
+            if target is not None and me is not None:
+                perms = target.permissions_for(me)
+                if not (perms.view_channel and perms.send_messages):
+                    warning = f'機器人在 {target.mention} 缺少「檢視頻道／發送訊息」權限，這條規則可能無法正常回覆。'
+
+        embed = discord.Embed(
+            title='✅ 已更新生效範圍',
+            description=(
+                f'**規則名稱**：{_rule_name(self.rule)}\n'
+                f'**關鍵字**：{_keywords_text(self.rule)}\n'
+                f'**變更前**：{_scope_text(old_scope, self.guild)}\n'
+                f'**變更後**：{_scope_text(new_scope, self.guild)}'
+            ),
+            color=discord.Color.green(),
+        )
+        if warning:
+            embed.add_field(name='⚠️ 權限提醒', value=warning, inline=False)
+
+        action_view = AutoReplyEditActionView(self.cog, self.guild, self.rule)
+        action_view.initiator_id = self.initiator_id or interaction.user.id
+        action_view.message = self.message
+        await interaction.response.edit_message(embed=embed, view=action_view)
+
+    @discord.ui.button(label='🌐 設為整個伺服器', style=discord.ButtonStyle.primary, row=1)
+    async def set_all_scope_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._apply_scope(interaction, SCOPE_ALL)
+
+    @discord.ui.button(label='⬅️ 返回', style=discord.ButtonStyle.secondary, row=1)
+    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        rule = next((r for r in self.cog._get_rules(self.guild.id)
+                     if str(r.get('id')) == str(self.rule.get('id'))), None)
+        if rule is None:
+            await interaction.response.send_message('❌ 找不到這條規則，它可能已被其他管理員刪除。', ephemeral=True)
+            return
+        action_view = AutoReplyEditActionView(self.cog, self.guild, rule)
+        action_view.initiator_id = self.initiator_id or interaction.user.id
+        action_view.message = self.message
+        await interaction.response.edit_message(
+            embed=build_rule_summary_embed(rule, self.guild),
+            view=action_view,
+        )
 
 
 class AutoReplyListEditModal(discord.ui.Modal):
@@ -890,6 +1020,7 @@ class AutoReply(commands.Cog):
             'reply': reply,      # 相容舊欄位：永遠等同第一則回覆
             'replies': [reply],  # 完整回覆清單；超過一則時觸發會隨機挑選
             'scope': scope,
+            'channel_id': int(scope) if (scope and scope != SCOPE_ALL) else None,
             'enabled': True,  # 預設啟用；暫停只改這個欄位，設定不會不見
         })
         return new_id
@@ -912,6 +1043,21 @@ class AutoReply(commands.Cog):
         for r in self._get_rules(guild_id):
             if str(r.get('id')) == str(rule_id):
                 r['enabled'] = bool(enabled)
+                return True
+        return False
+
+    def set_rule_scope(self, guild_id: int, rule_id, scope: str) -> bool:
+        """修改一條規則的生效範圍（'all' 代表整個伺服器，或傳入頻道 ID 字串代表僅限該文字頻道）。"""
+        for r in self._get_rules(guild_id):
+            if str(r.get('id')) == str(rule_id):
+                r['scope'] = scope
+                if scope and scope != SCOPE_ALL:
+                    try:
+                        r['channel_id'] = int(scope)
+                    except (ValueError, TypeError):
+                        r['channel_id'] = None
+                else:
+                    r['channel_id'] = None
                 return True
         return False
 
@@ -1098,7 +1244,7 @@ class AutoReply(commands.Cog):
         embed.set_footer(text='訊息內容「包含」關鍵字即觸發（不分大小寫、忽略多餘空白）；同一人對同一條規則 3 秒內不重複回覆。之後可用 /auto_reply_edit 增修關鍵字與回覆內容，或暫停／恢復這條規則。')
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-    @app_commands.command(name='auto_reply_edit', description='編輯自動回覆規則：輸入框編輯關鍵字／回覆內容（留空＝刪除該項），也能暫停或恢復整條規則（設定保留）')
+    @app_commands.command(name='auto_reply_edit', description='編輯自動回覆規則：編輯關鍵字／回覆內容／生效範圍，也能暫停或恢復整條規則（設定保留）')
     @app_commands.guild_only()
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.checks.has_permissions(manage_guild=True)  # H3: 執行期檢查，伺服器端覆寫權限也擋得住
@@ -1125,12 +1271,10 @@ class AutoReply(commands.Cog):
             description=(
                 f'此伺服器目前有 **{len(rules)}/{MAX_RULES_PER_GUILD}** 條自動回覆規則。\n'
                 '請從下方選單選擇要編輯的規則（選項即為**規則名稱**，舊規則會顯示偵測關鍵字），'
-                '選取後可按「**編輯關鍵字**」或「**編輯回覆內容**」開啟輸入框自行填寫：\n'
-                '• 每個輸入框對應清單中的一項，並已預先帶入現有內容，可直接修改\n'
-                '• **留空＝刪除該項**；每頁 5 格、最多 10 項，第 6–10 項可按存檔訊息上的按鈕開下一頁\n'
-                '• 關鍵字或回覆內容**全部留空**時，會再問你要不要把整條規則刪掉\n\n'
-                '同一排還有「**⏸️ 暫停規則**」按鈕：按下即暫停（設定完整保留、只是不再回覆），'
-                '暫停後按鈕會變成「▶️ 恢復規則」，再按一次就恢復。'
+                '選取後可操作下方按鈕：\n'
+                '• **✏️ 編輯關鍵字／💬 編輯回覆內容**：開啟輸入框修改（**留空＝刪除該項**；每頁 5 格、最多 10 項；全部留空會詢問是否刪除整條規則）\n'
+                '• **🌐 編輯生效範圍**：改為指定文字頻道，或設為整個伺服器皆生效\n'
+                '• **⏸️ 暫停規則／▶️ 恢復規則**：切換啟用狀態（設定完整保留、暫停時不再回覆）'
             ),
             color=discord.Color.blurple(),
         )

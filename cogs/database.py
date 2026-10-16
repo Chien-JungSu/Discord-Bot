@@ -1,7 +1,9 @@
+import datetime
 import os
 import json
 import sqlite3
 import threading
+import time
 from typing import Optional, Dict, List, Any
 
 DB_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'bot_database.db')
@@ -40,9 +42,14 @@ def init_db():
                 guild_id TEXT PRIMARY KEY,
                 welcome_channel_id INTEGER,
                 rules_channel_id INTEGER,
-                role_channel_id INTEGER
+                role_channel_id INTEGER,
+                auto_role_id INTEGER
             );
             """)
+            # 舊版資料庫沒有 auto_role_id 欄位：就地補上（既有設定不受影響）
+            cursor.execute("PRAGMA table_info(welcome_settings);")
+            if 'auto_role_id' not in {row[1] for row in cursor.fetchall()}:
+                cursor.execute("ALTER TABLE welcome_settings ADD COLUMN auto_role_id INTEGER;")
 
             # 2. 音樂頻道設定表
             cursor.execute("""
@@ -94,6 +101,37 @@ def init_db():
             CREATE TABLE IF NOT EXISTS reaction_roles_cooldowns (
                 key TEXT PRIMARY KEY,
                 timestamp REAL NOT NULL
+            );
+            """)
+
+            # 7. 外部 API 每日使用配額表
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS daily_api_usage (
+                service TEXT PRIMARY KEY,
+                usage_date TEXT NOT NULL,
+                count INTEGER NOT NULL DEFAULT 0
+            );
+            """)
+
+            # 8. 經濟系統全域使用者帳戶表
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS economy_users (
+                user_id INTEGER PRIMARY KEY,
+                balance INTEGER NOT NULL DEFAULT 0,
+                last_daily_ts REAL NOT NULL DEFAULT 0,
+                daily_streak INTEGER NOT NULL DEFAULT 0,
+                last_hourly_ts REAL NOT NULL DEFAULT 0,
+                total_earned INTEGER NOT NULL DEFAULT 0,
+                total_wagered INTEGER NOT NULL DEFAULT 0
+            );
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_economy_balance ON economy_users (balance DESC);")
+
+            # 9. 經濟系統後台參數設定表
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS economy_config (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
             );
             """)
 
@@ -259,19 +297,20 @@ def _migrate_from_json(conn: sqlite3.Connection):
 # ==============================================================================
 
 def load_welcome_settings() -> dict:
-    """讀取歡迎訊息設定：{guild_id: {'welcome_channel_id', 'rules_channel_id', 'role_channel_id'}}"""
+    """讀取歡迎訊息設定：{guild_id: {'welcome_channel_id', 'rules_channel_id', 'role_channel_id', 'auto_role_id'}}"""
     init_db()
     with _lock:
         conn = get_connection()
         try:
             cursor = conn.cursor()
-            cursor.execute("SELECT guild_id, welcome_channel_id, rules_channel_id, role_channel_id FROM welcome_settings;")
+            cursor.execute("SELECT guild_id, welcome_channel_id, rules_channel_id, role_channel_id, auto_role_id FROM welcome_settings;")
             res = {}
             for row in cursor.fetchall():
                 res[str(row['guild_id'])] = {
                     'welcome_channel_id': row['welcome_channel_id'],
                     'rules_channel_id': row['rules_channel_id'],
                     'role_channel_id': row['role_channel_id'],
+                    'auto_role_id': row['auto_role_id'],
                 }
             return res
         finally:
@@ -289,13 +328,14 @@ def save_welcome_settings(data: dict):
             for gid, val in data.items():
                 if isinstance(val, dict):
                     cursor.execute("""
-                    INSERT INTO welcome_settings (guild_id, welcome_channel_id, rules_channel_id, role_channel_id)
-                    VALUES (?, ?, ?, ?)
+                    INSERT INTO welcome_settings (guild_id, welcome_channel_id, rules_channel_id, role_channel_id, auto_role_id)
+                    VALUES (?, ?, ?, ?, ?)
                     """, (
                         str(gid),
                         val.get('welcome_channel_id'),
                         val.get('rules_channel_id'),
                         val.get('role_channel_id'),
+                        val.get('auto_role_id'),
                     ))
             conn.commit()
         finally:
@@ -399,12 +439,16 @@ def save_auto_reply_settings(data: dict):
                             kw = r.get('keywords') or ([r.get('keyword')] if r.get('keyword') else [])
                             rep = r.get('replies') or ([r.get('reply')] if r.get('reply') else [])
                             is_paused = 0 if r.get('enabled', True) else 1
-                            chan_id = r.get('channel_id')
-                            if chan_id is None and r.get('scope') and str(r.get('scope')) != 'all':
+                            scope = r.get('scope')
+                            if scope == 'all':
+                                chan_id = None
+                            elif scope:
                                 try:
-                                    chan_id = int(r.get('scope'))
+                                    chan_id = int(scope)
                                 except (ValueError, TypeError):
-                                    chan_id = None
+                                    chan_id = r.get('channel_id')
+                            else:
+                                chan_id = r.get('channel_id')
                             rule_id = r.get('id')
                             if rule_id is not None:
                                 cursor.execute("""
@@ -541,3 +585,592 @@ def save_reaction_cooldowns(data: dict):
             conn.commit()
         finally:
             conn.close()
+
+
+def get_daily_api_usage(service: str) -> tuple[int, str]:
+    """取得特定服務今日的累計呼叫次數及當前日期（若日期已跨日則自動回傳 0）。"""
+    init_db()
+    today_str = datetime.date.today().isoformat()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT usage_date, count FROM daily_api_usage WHERE service = ?;", (service,))
+            row = cursor.fetchone()
+            if row and row['usage_date'] == today_str:
+                return int(row['count']), today_str
+            return 0, today_str
+        finally:
+            conn.close()
+
+
+def record_api_call_success(service: str) -> int:
+    """呼叫成功後遞增該服務的今日計數，回傳遞增後的次數。"""
+    init_db()
+    today_str = datetime.date.today().isoformat()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT usage_date, count FROM daily_api_usage WHERE service = ?;", (service,))
+            row = cursor.fetchone()
+            if row and row['usage_date'] == today_str:
+                new_count = int(row['count']) + 1
+            else:
+                new_count = 1
+            cursor.execute("""
+            INSERT OR REPLACE INTO daily_api_usage (service, usage_date, count)
+            VALUES (?, ?, ?);
+            """, (service, today_str, new_count))
+            conn.commit()
+            return new_count
+        finally:
+            conn.close()
+
+
+def mark_api_quota_exhausted(service: str, limit: int = 100):
+    """當外部 API 回傳 429 或配額用盡時，直接將今日計數標記為已達上限。"""
+    init_db()
+    today_str = datetime.date.today().isoformat()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+            INSERT OR REPLACE INTO daily_api_usage (service, usage_date, count)
+            VALUES (?, ?, ?);
+            """, (service, today_str, limit))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+# ==============================================================================
+# Economy System API
+# ==============================================================================
+
+TZ_UTC8 = datetime.timezone(datetime.timedelta(hours=8))
+
+DEFAULT_ECONOMY_CONFIG: dict[str, Any] = {
+    # 貨幣與轉帳設定
+    "currency_name": "金幣",
+    "currency_emoji": "🪙",
+    "transfer_enabled": True,
+    "transfer_tax_percent": 5,
+    "transfer_min": 10,
+
+    # 初始資金與每日簽到設定（固定於每日 00:00 UTC+8 刷新）
+    "initial_balance": 200,
+    "daily_min": 100,
+    "daily_max": 300,
+    "daily_streak_bonus": 20,
+    "daily_streak_max": 200,
+
+    # 每小時簽到設定（固定於每小時整點 XX:00 UTC+8 刷新）
+    "hourly_min": 20,
+    "hourly_max": 60,
+
+    # 小遊戲通用與賠率設定（擲硬幣 / 骰子 / 21點）
+    "bet_min": 10,
+    "bet_max": 50000,
+    "coinflip_multiplier": 2.0,
+    "dice_multiplier": 2.0,
+    "blackjack_multiplier": 2.0,
+    "blackjack_natural_multiplier": 2.5,
+
+    # 拉霸機與刮刮樂設定
+    "slots_jackpot_multiplier": 15.0,
+    "slots_triple_multiplier": 5.0,
+    "slots_pair_multiplier": 1.5,
+    "scratch_cost": 100,
+    "scratch_jackpot_multiplier": 10.0,
+    "scratch_second_multiplier": 3.0,
+    "scratch_third_multiplier": 1.5,
+}
+
+
+def get_daily_window_utc8(now_ts: Optional[float] = None) -> tuple[float, float, float]:
+    """計算 UTC+8 時區下的每日簽到時間視窗：
+    回傳 (今日 00:00 時間戳, 明日 00:00 下次刷新時間戳, 昨日 00:00 時間戳)。
+    """
+    ts = time.time() if now_ts is None else float(now_ts)
+    now_dt = datetime.datetime.fromtimestamp(ts, tz=TZ_UTC8)
+    today_start_dt = now_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+    next_midnight_dt = today_start_dt + datetime.timedelta(days=1)
+    yesterday_start_dt = today_start_dt - datetime.timedelta(days=1)
+    return today_start_dt.timestamp(), next_midnight_dt.timestamp(), yesterday_start_dt.timestamp()
+
+
+def get_hourly_window_utc8(now_ts: Optional[float] = None) -> tuple[float, float]:
+    """計算 UTC+8 時區下的每小時整點簽到時間視窗：
+    回傳 (本小時整點 XX:00 時間戳, 下個整點刷新時間戳)。
+    """
+    ts = time.time() if now_ts is None else float(now_ts)
+    now_dt = datetime.datetime.fromtimestamp(ts, tz=TZ_UTC8)
+    hour_start_dt = now_dt.replace(minute=0, second=0, microsecond=0)
+    next_hour_dt = hour_start_dt + datetime.timedelta(hours=1)
+    return hour_start_dt.timestamp(), next_hour_dt.timestamp()
+
+
+def load_economy_config() -> dict[str, Any]:
+    """讀取經濟系統後台參數設定（自動合併預設值、轉型，並執行上下限防呆校正）。"""
+    init_db()
+    config = dict(DEFAULT_ECONOMY_CONFIG)
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT key, value FROM economy_config;")
+            for row in cursor.fetchall():
+                k = row["key"]
+                if k not in DEFAULT_ECONOMY_CONFIG:
+                    continue
+                default_val = DEFAULT_ECONOMY_CONFIG[k]
+                try:
+                    loaded_val = json.loads(row["value"])
+                    if isinstance(default_val, bool):
+                        config[k] = bool(loaded_val)
+                    elif isinstance(default_val, int):
+                        config[k] = int(float(loaded_val))
+                    elif isinstance(default_val, float):
+                        config[k] = float(loaded_val)
+                    elif isinstance(default_val, str):
+                        config[k] = str(loaded_val)
+                    else:
+                        config[k] = loaded_val
+                except Exception:
+                    pass
+
+            # 防呆保護：避免資料庫中因手動修改出現「最高上限低於初始值」導致執行期例外
+            if config["daily_max"] < config["daily_min"]:
+                config["daily_max"] = config["daily_min"]
+            if config["daily_streak_bonus"] > 0 and config["daily_streak_max"] < config["daily_streak_bonus"]:
+                config["daily_streak_max"] = config["daily_streak_bonus"]
+            if config["hourly_max"] < config["hourly_min"]:
+                config["hourly_max"] = config["hourly_min"]
+            if config["bet_max"] < config["bet_min"]:
+                config["bet_max"] = config["bet_min"]
+
+            return config
+        finally:
+            conn.close()
+
+
+def save_economy_config(config: dict[str, Any]):
+    """儲存經濟系統後台參數設定至 SQLite。"""
+    init_db()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM economy_config;")
+            for k, default_val in DEFAULT_ECONOMY_CONFIG.items():
+                val = config.get(k, default_val)
+                cursor.execute(
+                    "INSERT OR REPLACE INTO economy_config (key, value) VALUES (?, ?);",
+                    (str(k), json.dumps(val, ensure_ascii=False)),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def get_economy_user(user_id: int) -> dict[str, Any]:
+    """取得指定使用者的經濟帳戶資訊（若尚未建立則回傳預設 0 值結構）。"""
+    init_db()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT user_id, balance, last_daily_ts, daily_streak, last_hourly_ts, total_earned, total_wagered
+                FROM economy_users
+                WHERE user_id = ?;
+                """,
+                (int(user_id),),
+            )
+            row = cursor.fetchone()
+            if row:
+                return {
+                    "user_id": int(row["user_id"]),
+                    "balance": int(row["balance"]),
+                    "last_daily_ts": float(row["last_daily_ts"]),
+                    "daily_streak": int(row["daily_streak"]),
+                    "last_hourly_ts": float(row["last_hourly_ts"]),
+                    "total_earned": int(row["total_earned"]),
+                    "total_wagered": int(row["total_wagered"]),
+                }
+            return {
+                "user_id": int(user_id),
+                "balance": 0,
+                "last_daily_ts": 0.0,
+                "daily_streak": 0,
+                "last_hourly_ts": 0.0,
+                "total_earned": 0,
+                "total_wagered": 0,
+            }
+        finally:
+            conn.close()
+
+
+def _ensure_user_row(cursor: sqlite3.Cursor, user_id: int):
+    cursor.execute(
+        """
+        INSERT OR IGNORE INTO economy_users (user_id, balance, last_daily_ts, daily_streak, last_hourly_ts, total_earned, total_wagered)
+        VALUES (?, 0, 0, 0, 0, 0, 0);
+        """,
+        (int(user_id),),
+    )
+
+
+def update_economy_balance(
+    user_id: int,
+    delta: int,
+    *,
+    add_earned: int = 0,
+    add_wagered: int = 0,
+    allow_negative: bool = False,
+) -> tuple[bool, int]:
+    """原子化增減使用者餘額。
+
+    當 delta < 0 且 allow_negative=False 時，若餘額不足則不會扣款並回傳 (False, 目前餘額)；
+    成功時回傳 (True, 更新後餘額)。
+    """
+    init_db()
+    uid = int(user_id)
+    delta_int = int(delta)
+    earned_int = max(0, int(add_earned))
+    wagered_int = max(0, int(add_wagered))
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            _ensure_user_row(cursor, uid)
+            cursor.execute("SELECT balance FROM economy_users WHERE user_id = ?;", (uid,))
+            current_balance = int(cursor.fetchone()["balance"])
+            if delta_int < 0 and not allow_negative and current_balance + delta_int < 0:
+                return False, current_balance
+
+            new_balance = max(0, current_balance + delta_int) if not allow_negative else (current_balance + delta_int)
+            cursor.execute(
+                """
+                UPDATE economy_users
+                SET balance = ?,
+                    total_earned = total_earned + ?,
+                    total_wagered = total_wagered + ?
+                WHERE user_id = ?;
+                """,
+                (new_balance, earned_int, wagered_int, uid),
+            )
+            conn.commit()
+            return True, new_balance
+        finally:
+            conn.close()
+
+
+def set_economy_balance(user_id: int, new_balance: int) -> int:
+    """直接設定指定使用者的餘額（供後台管理指令使用），回傳設定後的餘額。"""
+    init_db()
+    uid = int(user_id)
+    target = max(0, int(new_balance))
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            _ensure_user_row(cursor, uid)
+            cursor.execute(
+                "UPDATE economy_users SET balance = ? WHERE user_id = ?;",
+                (target, uid),
+            )
+            conn.commit()
+            return target
+        finally:
+            conn.close()
+
+
+def claim_economy_daily(
+    user_id: int,
+    now_ts: float,
+    base_reward: int,
+    streak_bonus_per_day: int,
+    streak_bonus_max: int,
+    initial_balance: int = 200,
+) -> dict[str, Any]:
+    """原子化執行每日簽到：以每日 00:00 (UTC+8) 為刷新基準，檢查當日是否已簽到、計算連簽天數與獎勵並寫入資料庫。
+    若為第一次使用簽到指令（last_daily_ts == 0 且 last_hourly_ts == 0），額外發放初始資金 initial_balance。
+    """
+    init_db()
+    uid = int(user_id)
+    today_start_ts, next_midnight_ts, yesterday_start_ts = get_daily_window_utc8(now_ts)
+
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            _ensure_user_row(cursor, uid)
+            cursor.execute(
+                "SELECT balance, last_daily_ts, daily_streak, last_hourly_ts FROM economy_users WHERE user_id = ?;",
+                (uid,),
+            )
+            row = cursor.fetchone()
+            balance = int(row["balance"])
+            last_ts = float(row["last_daily_ts"])
+            old_streak = int(row["daily_streak"])
+            last_hourly_ts = float(row["last_hourly_ts"])
+
+            # 若今日 00:00 (UTC+8) 之後已經簽到過，則需等到明日 00:00 (UTC+8)
+            if last_ts >= today_start_ts:
+                return {
+                    "ok": False,
+                    "next_available_ts": next_midnight_ts,
+                    "balance": balance,
+                    "streak": old_streak,
+                }
+
+            # 首次使用任何簽到指令時，發放初始資金（預設 200）
+            is_first_checkin = (last_ts == 0.0 and last_hourly_ts == 0.0)
+            init_bonus = max(0, int(initial_balance)) if is_first_checkin else 0
+
+            # 判斷是否維持連簽：上次簽到落在「昨日 00:00 ~ 今日 00:00 (UTC+8)」之間即為連續簽到
+            if last_ts >= yesterday_start_ts:
+                new_streak = old_streak + 1
+                streak_broken = False
+            else:
+                new_streak = 1
+                streak_broken = old_streak > 1
+
+            # 例外處理：若連簽加成上限設定低於單日加成初始值，以安全上限（不低於單日加成值）或 0 處理
+            clean_per_day = max(0, int(streak_bonus_per_day))
+            clean_max = max(0, int(streak_bonus_max))
+            if clean_per_day > 0 and clean_max < clean_per_day:
+                clean_max = clean_per_day
+
+            bonus = min(max(0, (new_streak - 1) * clean_per_day), clean_max)
+            total_reward = max(0, int(base_reward) + bonus + init_bonus)
+            new_balance = balance + total_reward
+
+            cursor.execute(
+                """
+                UPDATE economy_users
+                SET balance = ?,
+                    last_daily_ts = ?,
+                    daily_streak = ?,
+                    total_earned = total_earned + ?
+                WHERE user_id = ?;
+                """,
+                (new_balance, float(now_ts), new_streak, total_reward, uid),
+            )
+            conn.commit()
+            return {
+                "ok": True,
+                "base_reward": int(base_reward),
+                "streak_bonus": bonus,
+                "initial_bonus": init_bonus,
+                "total_reward": total_reward,
+                "new_balance": new_balance,
+                "streak": new_streak,
+                "streak_broken": streak_broken,
+                "old_streak": old_streak,
+                "next_available_ts": next_midnight_ts,
+            }
+        finally:
+            conn.close()
+
+
+def claim_economy_hourly(
+    user_id: int,
+    now_ts: float,
+    reward: int,
+    initial_balance: int = 200,
+) -> dict[str, Any]:
+    """原子化執行每小時簽到：以每小時整點 XX:00 (UTC+8) 為刷新基準，檢查本小時是否已領取並發放獎勵。
+    若為第一次使用簽到指令（last_daily_ts == 0 且 last_hourly_ts == 0），額外發放初始資金 initial_balance。
+    """
+    init_db()
+    uid = int(user_id)
+    hour_start_ts, next_hour_ts = get_hourly_window_utc8(now_ts)
+
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            _ensure_user_row(cursor, uid)
+            cursor.execute(
+                "SELECT balance, last_daily_ts, last_hourly_ts FROM economy_users WHERE user_id = ?;",
+                (uid,),
+            )
+            row = cursor.fetchone()
+            balance = int(row["balance"])
+            last_daily_ts = float(row["last_daily_ts"])
+            last_ts = float(row["last_hourly_ts"])
+
+            if last_ts >= hour_start_ts:
+                return {
+                    "ok": False,
+                    "next_available_ts": next_hour_ts,
+                    "balance": balance,
+                }
+
+            is_first_checkin = (last_daily_ts == 0.0 and last_ts == 0.0)
+            init_bonus = max(0, int(initial_balance)) if is_first_checkin else 0
+
+            clean_reward = max(0, int(reward))
+            total_reward = clean_reward + init_bonus
+            new_balance = balance + total_reward
+            cursor.execute(
+                """
+                UPDATE economy_users
+                SET balance = ?,
+                    last_hourly_ts = ?,
+                    total_earned = total_earned + ?
+                WHERE user_id = ?;
+                """,
+                (new_balance, float(now_ts), total_reward, uid),
+            )
+            conn.commit()
+            return {
+                "ok": True,
+                "reward": clean_reward,
+                "initial_bonus": init_bonus,
+                "total_reward": total_reward,
+                "new_balance": new_balance,
+                "next_available_ts": next_hour_ts,
+            }
+        finally:
+            conn.close()
+
+
+def transfer_economy_balance(
+    sender_id: int,
+    receiver_id: int,
+    amount: int,
+    tax_percent: int,
+) -> dict[str, Any]:
+    """原子化轉帳：從發送者扣除 amount，接收者獲得扣除手續費後的淨額。"""
+    init_db()
+    s_uid = int(sender_id)
+    r_uid = int(receiver_id)
+    amt = int(amount)
+    tax = max(0, int(amt * max(0, min(100, int(tax_percent))) // 100))
+    net_amount = max(0, amt - tax)
+
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            _ensure_user_row(cursor, s_uid)
+            _ensure_user_row(cursor, r_uid)
+            cursor.execute("SELECT balance FROM economy_users WHERE user_id = ?;", (s_uid,))
+            s_bal = int(cursor.fetchone()["balance"])
+            if s_bal < amt:
+                return {"ok": False, "sender_balance": s_bal}
+
+            cursor.execute("SELECT balance FROM economy_users WHERE user_id = ?;", (r_uid,))
+            r_bal = int(cursor.fetchone()["balance"])
+
+            new_s_bal = s_bal - amt
+            new_r_bal = r_bal + net_amount
+
+            cursor.execute(
+                "UPDATE economy_users SET balance = ? WHERE user_id = ?;",
+                (new_s_bal, s_uid),
+            )
+            cursor.execute(
+                "UPDATE economy_users SET balance = ? WHERE user_id = ?;",
+                (new_r_bal, r_uid),
+            )
+            conn.commit()
+            return {
+                "ok": True,
+                "amount": amt,
+                "tax": tax,
+                "net_amount": net_amount,
+                "sender_balance": new_s_bal,
+                "receiver_balance": new_r_bal,
+            }
+        finally:
+            conn.close()
+
+
+def get_economy_leaderboard(
+    limit: int = 10,
+    user_id: Optional[int] = None,
+    exclude_user_id: Optional[int] = None,
+) -> tuple[list[dict[str, Any]], Optional[dict[str, Any]]]:
+    """取得富豪排行榜前 limit 名（自動忽略 exclude_user_id 如機器人擁有者），以及可選的指定使用者排名資訊。"""
+    init_db()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            if exclude_user_id is not None:
+                cursor.execute(
+                    """
+                    SELECT user_id, balance, daily_streak, total_earned
+                    FROM economy_users
+                    WHERE balance > 0 AND user_id != ?
+                    ORDER BY balance DESC, total_earned DESC, user_id ASC
+                    LIMIT ?;
+                    """,
+                    (int(exclude_user_id), int(limit)),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT user_id, balance, daily_streak, total_earned
+                    FROM economy_users
+                    WHERE balance > 0
+                    ORDER BY balance DESC, total_earned DESC, user_id ASC
+                    LIMIT ?;
+                    """,
+                    (int(limit),),
+                )
+            top_list = [
+                {
+                    "rank": idx,
+                    "user_id": int(r["user_id"]),
+                    "balance": int(r["balance"]),
+                    "daily_streak": int(r["daily_streak"]),
+                    "total_earned": int(r["total_earned"]),
+                }
+                for idx, r in enumerate(cursor.fetchall(), start=1)
+            ]
+
+            user_rank_info = None
+            if user_id is not None:
+                uid = int(user_id)
+                cursor.execute(
+                    "SELECT balance, daily_streak, total_earned FROM economy_users WHERE user_id = ?;",
+                    (uid,),
+                )
+                u_row = cursor.fetchone()
+                u_bal = int(u_row["balance"]) if u_row else 0
+                u_streak = int(u_row["daily_streak"]) if u_row else 0
+                if exclude_user_id is not None and uid == int(exclude_user_id):
+                    rank = None
+                elif u_bal > 0:
+                    if exclude_user_id is not None:
+                        cursor.execute(
+                            "SELECT COUNT(*) FROM economy_users WHERE balance > ? AND user_id != ?;",
+                            (u_bal, int(exclude_user_id)),
+                        )
+                    else:
+                        cursor.execute(
+                            "SELECT COUNT(*) FROM economy_users WHERE balance > ?;",
+                            (u_bal,),
+                        )
+                    rank = int(cursor.fetchone()[0]) + 1
+                else:
+                    rank = None
+                user_rank_info = {
+                    "user_id": uid,
+                    "balance": u_bal,
+                    "daily_streak": u_streak,
+                    "rank": rank,
+                }
+            return top_list, user_rank_info
+        finally:
+            conn.close()
+
+

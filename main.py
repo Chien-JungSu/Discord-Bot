@@ -98,6 +98,8 @@ INITIAL_EXTENSIONS = [
     'cogs.auto_reply',    # /auto_reply_add /auto_reply_edit /auto_reply_list /auto_reply_remove 關鍵字自動回覆（重用 cogs.welcome 的頻道驗證工具）
     'cogs.music',         # /music_join /music_leave /music_play ...（第1週新增，之後每週持續擴充）
     'cogs.tts',           # /tts 文字轉語音 (gTTS)
+    'cogs.shortener',     # /shorten /reurl 短網址產生器 (reurl.cc API)
+    'cogs.economy',       # /economy_daily /economy_hourly /economy_balance /economy_leaderboard /economy_pay /economy_slots /economy_gamble /economy_blackjack /economy_scratch /economy_admin 經濟系統
 ]
 
 
@@ -304,11 +306,68 @@ async def on_disconnect():
     print('🔴 與 Discord 的連線已中斷（若非主動關閉，將自動重連）。')
 
 
+async def ensure_bot_role(guild: discord.Guild):
+    """檢查並為機器人自動建立與指派「炙彗JI器人」專屬身分組。"""
+    try:
+        bot_member = guild.me
+        if bot_member is None and bot.user:
+            bot_member = guild.get_member(bot.user.id)
+            if bot_member is None:
+                try:
+                    bot_member = await guild.fetch_member(bot.user.id)
+                except Exception:
+                    bot_member = None
+
+        if bot_member is None:
+            return
+
+        ROLE_NAME = "炙彗JI器人"
+        role = discord.utils.get(guild.roles, name=ROLE_NAME)
+
+        # 缺少「管理身分組」權限時，無法建立或指派身分組
+        if not bot_member.guild_permissions.manage_roles:
+            if role is None:
+                print(f"⚠️ [專屬身分組] 伺服器「{guild.name}」({guild.id}) 缺少「管理身分組」權限，無法自動建立「{ROLE_NAME}」身分組。")
+            return
+
+        # 若身分組不存在則建立
+        if role is None:
+            role = await guild.create_role(
+                name=ROLE_NAME,
+                reason="機器人加入伺服器時自動建立專屬身分組",
+            )
+            print(f"✅ [專屬身分組] 已在伺服器「{guild.name}」({guild.id}) 成功建立身分組「{ROLE_NAME}」")
+
+        # 為機器人自身指派身分組（若尚未指派且符合階層限制）
+        if role not in bot_member.roles:
+            if bot_member.top_role > role or guild.owner_id == bot_member.id:
+                await bot_member.add_roles(role, reason="機器人加入伺服器自動賦予自身專屬身分組")
+                print(f"✅ [專屬身分組] 已為機器人在伺服器「{guild.name}」({guild.id}) 成功指派身分組「{ROLE_NAME}」")
+            else:
+                print(f"⚠️ [專屬身分組] 伺服器「{guild.name}」身分組「{ROLE_NAME}」階層過高，無法指派給自己。")
+    except discord.Forbidden:
+        print(f"⚠️ [專屬身分組] 伺服器「{guild.name}」({guild.id}) 權限不足，無法建立或指派「炙彗JI器人」身分組。")
+    except Exception as e:
+        print(f"❌ [專屬身分組] 處理伺服器「{guild.name}」({guild.id}) 專屬身分組時發生例外: {e}")
+        await bot.notify_owner_error(e, extra_info=f"ensure_bot_role guild={guild.name} ({guild.id})")
+
+
+@bot.event
+async def on_guild_join(guild: discord.Guild):
+    """當機器人加入新伺服器時觸發：自動為自己建立並指派「炙彗JI器人」身分組。"""
+    print(f"🎉 機器人加入了新伺服器：{guild.name} (ID: {guild.id})，成員數：{guild.member_count}")
+    await ensure_bot_role(guild)
+
+
 @bot.event
 async def on_ready():
     print(f'目前登入身份：{bot.user}')
     print('ℹ️ on_ready event fired')
     print('✅ 機器人已經百分之百在雲端準備就緒！')
+
+    # 確保既有伺服器已建立並指派「炙彗JI器人」身分組
+    for guild in bot.guilds:
+        await ensure_bot_role(guild)
 
     if getattr(bot, '_global_synced', False):
         return

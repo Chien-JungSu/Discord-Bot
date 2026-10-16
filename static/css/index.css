@@ -74,6 +74,14 @@ main {
               0 0 28px rgba(125, 211, 252, 0.08);
 }
 
+/* 首頁 Hero 頂部橫列：左側機器人狀態膠囊，右側控制面板入口，兩者水平對齊 */
+.hero-top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
 /* Apple Liquid Glass: 狀態膠囊 */
 .status {
   position: relative;

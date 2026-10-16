@@ -15,8 +15,9 @@ Supported features:
 - `/weather <city>`: query real-time weather for Taiwan cities
 - `/bus`: query Taiwan bus arrivals through dropdown menus
 - `/server_info`: display detailed server information
-- `/welcome_active`: set up a server welcome message (welcome channel required; rules and role channels optional)
+- `/welcome_active`: open the welcome settings panel (configure welcome channel, rules channel, role claim channel, and new member auto-role)
 - `/welcome_inactive`: disable the server welcome message feature
+- **Automatic Dedicated Role**: automatically creates and assigns the "炙彗JI器人" role to the bot upon joining a server (requires "Manage Roles" permission)
 - `/reaction_roles_create`: post a reaction-role message with emoji + role pairs (multiple messages per server); members gain the role by reacting and lose it when un-reacting, and reactions that grant nothing are removed automatically. Requires **Manage Server** permission
 - `/reaction_roles_edit`: select a message from a dropdown menu to edit it interactively with the new visual pair editor (native Discord role selector + click reactions directly on the message to capture, no copying IDs required), modify message text, or toggle strict mode. Requires **Manage Server** permission
 - `/music_join`: join the voice channel where the user is currently connected
@@ -37,6 +38,16 @@ Supported features:
 - `/auto_reply_list`: list all auto-reply rules (one rule per page, with paging: rule name, status, keywords, reply text, active scope). Requires **Manage Server** permission
 - `/auto_reply_remove`: delete an auto-reply rule (pick from a menu of the currently active rules, with a confirmation step). Requires **Manage Server** permission
 - `/tts`: convert text to speech using Google Text-to-Speech (gTTS) and output as an MP3 audio file (supports custom filename and language code, defaults to English `en`)
+- `/economy_daily`: claim daily check-in coin rewards (with consecutive streak bonuses)
+- `/economy_hourly`: claim hourly check-in pocket money
+- `/economy_balance [member]`: check global coin balance, leaderboard rank, streak days, and game statistics for yourself or another member
+- `/economy_leaderboard`: view the global top 10 richest players and your own rank
+- `/economy_pay <recipient> <amount>`: transfer coins to another member (with configurable transfer tax)
+- `/economy_slots <bet>`: spend coins to play the Royal Slot Machine and win multiplier payouts
+- `/economy_gamble <bet> [choice]`: wager coins on coinflip (heads/tails) or dice (big/small, odd/even)
+- `/economy_blackjack <bet>`: play interactive Blackjack (21) against the dealer (Hit, Stand, Double Down)
+- `/economy_scratch`: buy an interactive 3×3 scratch card and match 3 identical symbols to win prizes
+- `/economy_admin`: owner-only (`owner_guild_only`) interactive control panel to configure check-in rewards, game multipliers, and user balances
 
 ### Requester control lock
 
@@ -117,7 +128,7 @@ When launched, the bot starts the Flask background server from `cogs/web_server.
 - `/weather city:<city name or English name>`: query weather, supports mappings like `臺北`, `Taichung`, `Matsu`
 - `/bus`: select a city, enter a bus route, choose a stop from a dropdown menu, and view real-time arrival information
 - `/server_info`: display the current server's details
-- `/welcome_active welcome_channel:<channel> [rules_channel:<channel>] [role_channel:<channel>]`: enable welcome messages with a required welcome channel and optional rules/role channels. Requires **Manage Server** permission.
+- `/welcome_active`: open the interactive welcome settings panel. Configure the welcome channel (required), rules channel (optional), role claim channel (optional), and auto-assigned role for new members (optional, automatically given upon join) via dropdown menus. Requires **Manage Server** permission.
 - `/welcome_inactive`: disable welcome messages for this server. Requires **Manage Server** permission.
 - `/reaction_roles_create message:<text> pairs:<emoji role emoji role ...> [channel:<channel>] [strict:<true/false>]`: post a reaction-role message to the role channel configured via `/welcome_active` (or the given channel). Emoji + role pairs are space-separated, one-to-one, up to 20 pairs; the bot reacts with every emoji first, and members gain or lose the matching role as they add or remove reactions. Each server keeps up to 10 reaction-role messages at once. `strict` is on by default and auto-removes reactions that grant no role (the bot needs **Manage Messages** in that channel). Requires **Manage Server** permission.
 - `/reaction_roles_edit`: edit a posted reaction-role message. Pick the message from a dropdown menu (options show a summary of its emoji/role pairs):
@@ -144,6 +155,16 @@ When launched, the bot starts the Flask background server from `cogs/web_server.
 - `/auto_reply_list`: a quick way to review the current rules. **One rule per page** (paged with "◀️ Previous / Next ▶️"), showing the rule name, status, all keywords, reply text, and active scope; a single reply longer than 300 characters is truncated, and if the content still does not fit it is marked as shortened with a hint to use `/auto_reply_edit`. Tells you to add one with `/auto_reply_add` when there is no rule yet. Requires **Manage Server** permission.
 - `/auto_reply_remove`: delete an auto-reply rule. After submission the bot builds a dropdown from the **currently active** trigger keywords; selecting one shows a confirmation message with "Confirm delete / Cancel" buttons that only the person who ran the command can press. Requires **Manage Server** permission.
 - `/tts text:<text> [file_name:<filename>] [language:<language_code>]`: convert input text to speech using Google Text-to-Speech (gTTS) and send the generated MP3 file. Defaults to English (`en`) if language is omitted, and defaults to the first 10 characters of the text if filename is omitted.
+- `/economy_daily`: claim daily check-in coin rewards (refreshes daily at **00:00 UTC+8**), including a random base reward plus a consecutive daily streak bonus (first-time check-in users also receive an initial **200** starter fund); resets the streak if a calendar day is missed, and displays a live Discord countdown to the next 00:00 (UTC+8) refresh.
+- `/economy_hourly`: claim hourly pocket money (refreshes at the **top of every hour XX:00**, also granting the **200** starter fund if it is the user's very first check-in), displaying a live countdown to the next hour when already claimed.
+- `/economy_balance [member:<user>]`: check the current global coin balance and leaderboard rank for yourself or a specified user (shows that the bot owner does not participate in rankings when querying `owner_id`).
+- `/economy_leaderboard`: view the global top 10 richest users (automatically excluding the bot owner `owner_id`) along with your own current rank and balance.
+- `/economy_pay recipient:<user> amount:<amount>`: transfer coins from your wallet to another user (cannot pay yourself or bots), automatically applying the configured transfer tax percentage and minimum transfer limit.
+- `/economy_slots`: open the interactive Royal Slot Machine betting panel (no command arguments needed). Adjust your bet (Min, Half, Double, Custom amount, or **🔥 All In** with an in-place confirmation prompt), then spin with a step-by-step message-edit animation revealing three reels (`🍒`, `🍋`, `🍇`, `🔔`, `💎`, `7️⃣`) for Jackpot, triple, or pair payouts.
+- `/economy_gamble`: open the interactive Coinflip & Dice betting panel (no command arguments needed). Supports quick bet adjustments, custom amounts, and **🔥 All In** (with in-place confirmation buttons); pick Coinflip (Heads/Tails) or Dice (Big 4–6 / Small 1–3, Odd / Even) to watch a live message-edit roll animation and reveal the outcome.
+- `/economy_blackjack`: open the interactive Blackjack (21) betting panel (no command arguments needed) with quick bet controls, custom bet input, and **🔥 All In** (with in-place confirmation buttons). Once dealt, play against the dealer using "🃏 Hit", "🛑 Stand", and "💰 Double Down" buttons with automatic Ace (1/11) valuation, Natural Blackjack payouts, and a "🔄 Play Again" button to return to the betting panel.
+- `/economy_scratch`: buy an interactive 3×3 scratch card, click cells one by one or press "✨ Scratch All", and match 3 identical symbols to win Jackpot (💎×3), 2nd Prize (🌟×3), 3rd Prize (🍀×3), or Consolation Prize (🍒×3), with a "🎫 Buy Another" button once finished.
+- `/economy_admin`: owner-only (`owner_guild_only` and restricted to the bot owner) interactive parameter control panel. Use the dropdown menu and pre-filled modals to modify daily/hourly check-in rewards and streak bonus caps, minigame bet limits and multipliers, scratch card price, currency name/emoji/transfer tax, or directly grant/deduct/set any user's coin balance; all parameters are persisted in SQLite (`bot_database.db`).
 
 ## Reaction Roles Feature
 

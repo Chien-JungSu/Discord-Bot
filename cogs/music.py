@@ -580,6 +580,22 @@ class Music(commands.Cog):
         }
         return status_name, labels.get(status_name, f"❔ 未知（{status_name}）")
 
+    def _is_any_node_connected(self) -> tuple[bool, str]:
+        """檢查目前是否有任何 Lavalink 節點處於可用狀態（CONNECTED）。"""
+        if wavelink is None:
+            return False, "語音模組尚未載入或安裝完成。"
+        nodes = getattr(wavelink.Pool, "nodes", {})
+        if not nodes:
+            return False, "目前沒有已連線的 Lavalink 音訊節點（節點未設定或連線中斷）。"
+        connected = [
+            n for n in nodes.values()
+            if getattr(getattr(n, "status", None), "name", None) == "CONNECTED"
+        ]
+        if not connected:
+            status_desc = ", ".join(f"{n.identifier} ({self._describe_node_status(n)[1]})" for n in nodes.values())
+            return False, f"音訊伺服器目前離線中（狀態：{status_desc}），正在嘗試自動重連，請稍候再試！"
+        return True, ""
+
     @tasks.loop(seconds=NODE_HEALTH_CHECK_INTERVAL)
     async def node_health_check(self):
         """新增：定期檢查所有已註冊 Lavalink 節點的連線狀態，離線時通知開發者。
@@ -964,7 +980,22 @@ class Music(commands.Cog):
         user_channel = interaction.user.voice.channel
         player: "wavelink_module.Player | None" = interaction.guild.voice_client
 
+        # 清理可能殘留的幽靈/失效連線
+        if player is not None and not getattr(player, "connected", True):
+            try:
+                await player.disconnect(force=True)
+            except Exception:
+                pass
+            player = None
+
         if player is None:
+            # 1. 預先檢查節點可用性，避免無謂等待 30 秒逾時
+            node_ready, node_err = self._is_any_node_connected()
+            if not node_ready:
+                await interaction.followup.send(f"❌ {node_err}", ephemeral=True)
+                asyncio.create_task(self._reconnect_lavalink_if_needed())
+                return None
+
             try:
                 player = await user_channel.connect(cls=wavelink.Player)
                 # 第3週更新：改成 disabled，改由我們自己的 song_queue +
@@ -974,8 +1005,21 @@ class Music(commands.Cog):
                 player.song_queue = deque()
             except Exception as e:
                 print(f">>> /play 加入語音頻道失敗：{e}")
+                # 關鍵防護：若 handshake 失敗或逾時，Discord 端可能已經將機器人移入語音頻道（半連線狀態）。
+                # 必須主動強制斷開退出，避免機器人像「幽靈」一樣殘留在語音房內無法播放且阻礙後續指令。
+                vc = interaction.guild.voice_client
+                if vc is not None:
+                    try:
+                        await vc.disconnect(force=True)
+                    except Exception as dc_err:
+                        print(f"⚠️ 清理失敗的語音連線時發生錯誤（不影響主流程）：{dc_err}")
+
                 await self.bot.notify_owner_error(e, interaction, extra_info=f"/play 加入 {user_channel} 失敗")
-                await interaction.followup.send("❌ 加入語音頻道時發生錯誤，已回報開發者。", ephemeral=True)
+                if isinstance(e, (asyncio.TimeoutError, TimeoutError)) or "timeout" in str(e).lower():
+                    err_msg = "❌ 加入語音頻道逾時（Lavalink 音訊伺服器反應逾時或連線重設），已自動退出重置狀態，請稍後再試！"
+                else:
+                    err_msg = f"❌ 加入語音頻道時發生錯誤：{e}（已自動退出重置狀態）"
+                await interaction.followup.send(err_msg, ephemeral=True)
                 return None
         elif player.channel.id != user_channel.id:
             await interaction.followup.send(
@@ -1016,10 +1060,18 @@ class Music(commands.Cog):
         channel = interaction.user.voice.channel
 
         if interaction.guild.voice_client is not None:
-            await interaction.response.send_message(
-                f"ℹ️ 我已經在 {interaction.guild.voice_client.channel.mention} 頻道中了。", ephemeral=True
-            )
-            return
+            vc = interaction.guild.voice_client
+            # 檢查是否為殘留的失效/非正常連線
+            if not getattr(vc, "connected", True):
+                try:
+                    await vc.disconnect(force=True)
+                except Exception:
+                    pass
+            else:
+                await interaction.response.send_message(
+                    f"ℹ️ 我已經在 {interaction.guild.voice_client.channel.mention} 頻道中了。", ephemeral=True
+                )
+                return
 
         # 修正（實測發現）: channel.connect() 內部要完成語音閘道 handshake，
         # 距離 Lavalink 節點較遠或 Render 冷啟動時很容易超過 Discord 給的 3 秒 ack
@@ -1032,12 +1084,32 @@ class Music(commands.Cog):
             print(f">>> /join interaction.defer() 失敗: {e}")
             return
 
+        # 1. 預先檢查節點可用性，避免無謂等待 30 秒逾時
+        node_ready, node_err = self._is_any_node_connected()
+        if not node_ready:
+            await interaction.followup.send(f"❌ {node_err}", ephemeral=True)
+            asyncio.create_task(self._reconnect_lavalink_if_needed())
+            return
+
         try:
             player = await channel.connect(cls=wavelink.Player)
         except Exception as e:
             print(f">>> 加入語音頻道失敗：{e}")
+            # 關鍵防護：若 handshake 失敗或逾時，Discord 端可能已經將機器人移入語音頻道（半連線狀態）。
+            # 必須主動強制斷開退出，避免機器人像「幽靈」一樣殘留在語音房內無法播放且阻礙後續指令。
+            vc = interaction.guild.voice_client
+            if vc is not None:
+                try:
+                    await vc.disconnect(force=True)
+                except Exception as dc_err:
+                    print(f"⚠️ 清理失敗的語音連線時發生錯誤（不影響主流程）：{dc_err}")
+
             await self.bot.notify_owner_error(e, interaction, extra_info=f"/join 加入 {channel} 失敗")
-            await interaction.followup.send("❌ 加入語音頻道時發生錯誤，已回報開發者。", ephemeral=True)
+            if isinstance(e, (asyncio.TimeoutError, TimeoutError)) or "timeout" in str(e).lower():
+                err_msg = "❌ 加入語音頻道逾時（Lavalink 音訊伺服器反應逾時或連線重設），已自動退出重置狀態，請稍後再試！"
+            else:
+                err_msg = f"❌ 加入語音頻道時發生錯誤：{e}（已自動退出重置狀態）"
+            await interaction.followup.send(err_msg, ephemeral=True)
             return
 
         # 第3週更新：與 _ensure_player 一致，改成 disabled，

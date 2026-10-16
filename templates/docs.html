@@ -68,17 +68,21 @@
 
   <main>
     <header class="page-header">
-      <!-- 頂部第一行：左側 48dp 佔位 + 置中「指令文檔」+ 右側 48dp 對稱佔位 -->
+      <!-- 頂部第一行：左側 48dp 佔位 + 置中「指令文檔」 + 右側控制面板按鈕 -->
       <div class="header-top-row">
         <div class="header-side-placeholder" id="nav-placeholder" aria-hidden="true"></div>
         <h1 class="page-title">指令文檔</h1>
-        <div class="header-side-placeholder" aria-hidden="true"></div>
+        <div class="header-top-right">
+          <a class="btn primary panel-entry-btn" href="/panel">
+            <span>登入</span>
+          </a>
+        </div>
       </div>
 
       <!-- 上部分割線（1dp，左右留邊距） -->
       <hr class="header-divider" />
 
-      <!-- 上部靠左放置“返回首頁”的色調按鈕（帶 arrow_back 圖標，高 44dp） -->
+      <!-- 上部靠左放置“返回首頁”色調按鈕 -->
       <div class="header-action-row">
         <a class="back-link" href="/" id="back-link">
           <!-- Material Symbols Rounded: arrow_back 圖標 -->
@@ -131,7 +135,7 @@
         <div class="tag">Welcome</div>
         <h2>歡迎訊息</h2>
         <ul>
-          <li><strong>/welcome_active</strong> <em>welcome_channel:&lt;頻道&gt; [rules_channel] [role_channel]</em>：啟用歡迎訊息，設定歡迎頻道（必填）、規則頻道與身份組頻道（選填）。需「管理伺服器」權限。</li>
+          <li><strong>/welcome_active</strong>：開啟歡迎設定互動面板，透過選單設定歡迎頻道（必填）、規則頻道、身份組領取頻道與新成員自動給予身份組（選填，加入時自動指派）。需「管理伺服器」權限。</li>
           <li><strong>/welcome_inactive</strong>：停用本伺服器歡迎訊息功能。需「管理伺服器」權限。</li>
         </ul>
       </article>
@@ -202,6 +206,40 @@
               <li><strong>language</strong>：語言代碼（選填）。若未指定則預設使用英文（<code>en</code>）進行轉換；亦支援 <code>zh-tw</code>（繁體中文）、<code>ja</code>（日文）等標準語言代碼。</li>
             </ul>
           </li>
+        </ul>
+      </article>
+
+      <article class="card" id="cog-shortener">
+        <div class="tag">Shortener</div>
+        <h2>短網址產生器</h2>
+        <ul>
+          <li><strong>/shorten</strong> <em>url:&lt;網址&gt; [utm_source] [utm_medium] [utm_campaign] [ephemeral]</em>：使用 reurl.cc 將長網址縮短為短網址（完全符合官方 OpenAPI 3.0 規範）。
+            <ul>
+              <li><strong>url</strong>：欲縮短的原始長網址（必填）。未輸入協定時自動補上 <code>https://</code>。</li>
+              <li><strong>utm_source</strong>：GA 流量來源標籤（選填，例如：<code>FB_AD</code>、<code>discord</code> 等）。</li>
+              <li><strong>utm_medium</strong>：GA 行銷媒介（選填，例如：<code>social</code>、<code>cpc</code> 等）。</li>
+              <li><strong>utm_campaign</strong>：GA 行銷活動名稱（選填，例如：<code>summer_sale</code> 等）。</li>
+              <li><strong>ephemeral</strong>：是否僅自己可見（選填，預設為 False，即公開分享）。</li>
+            </ul>
+          </li>
+          <li><strong>/reurl</strong>：同 <code>/shorten</code> 指令別名。</li>
+          <li><strong>應用程式選單（右鍵訊息）</strong>：對任何包含網址的訊息按右鍵 →「應用程式」→「縮短訊息中的網址」，即可快速產生短網址。</li>
+        </ul>
+      </article>
+
+      <article class="card" id="cog-economy">
+        <div class="tag">Economy</div>
+        <h2>經濟系統</h2>
+        <ul>
+          <li><strong>/economy_daily</strong>：領取每日簽到金幣獎勵（固定於每日 <code>00:00 (UTC+8)</code> 刷新，包含隨機基礎獎勵與連續簽到每日加成，首次使用簽到指令時額外獲得 <strong>200</strong> 初始資金；若前一日未簽到則重置連簽天數，已簽到時會顯示距離明日 00:00 刷新的動態倒數）。</li>
+          <li><strong>/economy_hourly</strong>：領取每小時簽到零用錢（固定於每小時整點 <code>XX:00</code> 刷新，首次使用簽到指令時亦會一併發放 <strong>200</strong> 初始資金；已領取時會顯示距離下個整點刷新的動態倒數時間）。</li>
+          <li><strong>/economy_balance</strong> <em>[member:&lt;成員&gt;]</em>：查詢自己或指定成員的目前全域金幣餘額與富豪排名（若查詢對象為機器人擁有者則顯示「機器人擁有者不參與排行」）。</li>
+          <li><strong>/economy_leaderboard</strong>：查看全域金幣富豪排行榜前 10 名（自動忽略機器人擁有者），並於底部顯示執行者自己的目前名次與餘額。</li>
+          <li><strong>/economy_pay</strong> <em>recipient:&lt;成員&gt; amount:&lt;金額&gt;</em>：將自己的金幣轉帳給其他成員（不可轉給自己或機器人），系統會自動依後台設定比例扣除手續費並檢查單筆最低轉帳金額。</li>
+          <li><strong>/economy_slots</strong>：🎰 開啟皇家拉霸機互動投注面板（免填指令參數），可一鍵切換最低、減半、加倍、自訂賭注或 <strong>🔥 All In 全押</strong>（附原訊息二次確認按鈕），點擊啟動後以動態編輯訊息動畫逐輪揭曉三個轉輪圖案（<code>🍒</code>、<code>🍋</code>、<code>🍇</code>、<code>🔔</code>、<code>💎</code>、<code>7️⃣</code>），依頭獎、三連線或雙連線獲得對應倍率獎金。</li>
+          <li><strong>/economy_gamble</strong>：🎲 開啟擲硬幣與骰子互動投注面板（免填指令參數），支援快速調整賭注、自訂金額與 <strong>🔥 All In 全押</strong>（附原訊息二次確認按鈕）；點選硬幣正反面或骰子大小（4~6／1~3）、單雙數即可觀看動態開獎動畫並立即續玩。</li>
+          <li><strong>/economy_blackjack</strong>：🃏 開啟 21 點撲克牌互動投注面板（免填指令參數），支援調整賭注、自訂金額與 <strong>🔥 All In 全押</strong>（附原訊息二次確認按鈕）；發牌後提供「🃏 抽牌 (Hit)」、「🛑 停牌 (Stand)」、「💰 雙倍下注 (Double)」互動按鈕，支援 A 自動 1／11 點切換與天生 Blackjack 高倍率派彩。</li>
+          <li><strong>/economy_scratch</strong>：🎫 花費金幣購買一張 3×3 九宮格互動刮刮樂，可逐格點擊刮開或按「✨ 全部刮開」，湊滿 3 個相同圖案即可贏得頭獎（<code>💎×3</code>）、貳獎（<code>🌟×3</code>）、參獎（<code>🍀×3</code>）或回本獎（<code>🍒×3</code>），刮完後可一鍵「🎫 再買一張」。</li>
         </ul>
       </article>
     </div>

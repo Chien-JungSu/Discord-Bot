@@ -41,6 +41,16 @@ app.config['TEMPLATES_AUTO_RELOAD'] = True
 #    瀏覽器會立即判定為新資源並下載最新內容，無需手動清除快取（免 Ctrl+F5），更無需重啟機器人服務。
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
 
+# Session 密鑰與 Cookie 安全設定（供控制面板 OAuth2 登入與權限管理使用）
+app.secret_key = os.getenv('FLASK_SECRET_KEY') or os.getenv('SECRET_KEY') or 'ji-robot-control-panel-secret-key-2026'
+app.config['SESSION_COOKIE_NAME'] = 'ji_robot_session'
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+
+from cogs.panel_bp import panel_bp
+app.register_blueprint(panel_bp)
+
+
 
 @app.context_processor
 def override_url_for():

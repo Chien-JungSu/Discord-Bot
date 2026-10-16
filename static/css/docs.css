@@ -141,7 +141,7 @@
   position: relative;
 }
 
-/* 左右對稱 48dp 佔位槽，確保中間標題能夠絕對置中 */
+/* 左右對稱佔位槽，確保中間標題能夠平衡置中 */
 .header-side-placeholder {
   width: 48px;
   height: 48px;
@@ -149,6 +149,14 @@
   flex-shrink: 0;
   visibility: hidden;
   pointer-events: none;
+}
+
+/* 頂部右側控制面板入口容器 */
+.header-top-right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 48px;
 }
 
 /* 標題「指令文檔」字樣：乾淨俐落的 Apple Presentation 純白排版 */

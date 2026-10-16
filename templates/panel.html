@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>炙彗JI器人 - 官方控制面板</title>
+  <link rel="icon" type="image/png"
+    href="https://www.dropbox.com/scl/fi/8mx3kit88y0ojmihwt034/IMG_6426.PNG?rlkey=9iud5rml003o9bzq4mq54uhib&dl=1" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/common.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/index.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/panel.css') }}" />
+</head>
+
+<body>
+  <!-- Apple Liquid Glass: 背景鮮活光暈漫射背板 -->
+  <div class="glass-ambient-backdrop" aria-hidden="true">
+    <div class="ambient-orb ambient-orb-1"></div>
+    <div class="ambient-orb ambient-orb-2"></div>
+    <div class="ambient-orb ambient-orb-3"></div>
+  </div>
+
+  <!-- Toast 訊息提示容器 -->
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+  <header class="panel-navbar">
+    <div class="nav-left">
+      <a href="/" class="brand-link">
+        <img class="brand-avatar"
+          src="https://www.dropbox.com/scl/fi/8mx3kit88y0ojmihwt034/IMG_6426.PNG?rlkey=9iud5rml003o9bzq4mq54uhib&dl=1"
+          alt="炙彗JI器人 Logo" />
+        <span class="brand-title">炙彗JI器人 控制面板</span>
+      </a>
+      <span class="tag panel-version-tag">Control Panel</span>
+    </div>
+
+    <div class="nav-right">
+      <a href="/" class="nav-link">官網首頁</a>
+      <a href="/docs" class="nav-link">指令文檔</a>
+      <a href="https://discord.gg/YjjdJMa8rm" target="_blank" rel="noreferrer" class="nav-link">支援群</a>
+
+      {% if user %}
+      <div class="user-profile-badge">
+        <img class="user-avatar" src="{{ user.avatar_url }}" alt="使用者頭像" />
+        <div class="user-meta">
+          <span class="user-name">{{ user.global_name or user.username }}</span>
+          {% if is_owner %}
+          <span class="owner-pill">👑 BOT OWNER</span>
+          {% else %}
+          <span class="admin-pill">🛡️ SERVER ADMIN</span>
+          {% endif %}
+        </div>
+        <a href="/logout" class="btn-logout" title="登出">登出</a>
+      </div>
+      {% else %}
+      <a href="/login" class="btn primary btn-login">
+        <span>🔑 透過 Discord 登入</span>
+      </a>
+      {% endif %}
+    </div>
+  </header>
+
+  <main class="panel-layout">
+    {% if not user %}
+    <!-- 未登入狀態提示卡片 -->
+    <section class="unauth-card">
+      <div class="unauth-icon">🛡️</div>
+      <h2>歡迎使用炙彗JI器人控制面板</h2>
+      <p class="subtitle">
+        透過 Discord 帳號安全登入，即可直接在瀏覽器中設定與管理伺服器的歡迎訊息、點歌文字頻道、關鍵字自動回覆與身分組！
+      </p>
+      <div class="cta-row" style="justify-content: center;">
+        <a class="btn primary" href="/login">
+          <span>🔑 透過 Discord 登入控制面板</span>
+        </a>
+        <a class="btn secondary" href="/">
+          <span>🏠 返回官網首頁</span>
+        </a>
+      </div>
+      <div class="auth-footnote">
+        註：登入授權 Redirect URL 為 <code>https://patricksu.nkhost.dev/api/auth</code>，僅讀取您的基礎身分與伺服器管理權限。
+      </div>
+    </section>
+
+    {% else %}
+    <!-- 已登入狀態：控制面板核心 -->
+
+    <!-- 頂部伺服器選擇與專區切換器 -->
+    <section class="server-selector-section">
+      <div class="section-header-row">
+        <div>
+          <h3 class="section-title">選擇管理伺服器或控制專區</h3>
+          <p class="section-desc">點擊伺服器圖示以切換設定；若伺服器尚未加入機器人，可一鍵完成邀請。</p>
+        </div>
+        {% if is_owner %}
+        <button id="btn-switch-owner" class="btn-owner-zone" type="button">
+          <span>👑 擁有者專屬控制面板 (@owner_guild_only)</span>
+        </button>
+        {% endif %}
+      </div>
+
+      <div class="server-cards-scroll">
+        {% for g in guilds %}
+        <div class="server-chip {% if loop.first %}active{% endif %}" data-guild-id="{{ g.id }}" data-guild-name="{{ g.name }}" data-bot-in="{{ 'true' if g.bot_in_guild else 'false' }}">
+          {% if g.icon_url %}
+          <img class="server-icon" src="{{ g.icon_url }}" alt="{{ g.name }}" />
+          {% else %}
+          <div class="server-icon-placeholder">{{ g.name[:2] }}</div>
+          {% endif %}
+          <div class="server-info">
+            <span class="server-name" title="{{ g.name }}">{{ g.name }}</span>
+            {% if g.bot_in_guild %}
+            <span class="server-status in-guild">🟢 機器人在線</span>
+            {% else %}
+            <span class="server-status not-in-guild">⚪ 尚未邀請</span>
+            {% endif %}
+          </div>
+        </div>
+        {% else %}
+        <div class="no-guilds-box">
+          <p>⚠️ 您目前沒有具備「管理伺服器」或「管理員」權限的伺服器。</p>
+          <a class="btn secondary" href="{{ invite_url }}" target="_blank" rel="noreferrer">
+            <span>邀請機器人加入新伺服器</span>
+          </a>
+        </div>
+        {% endfor %}
+      </div>
+    </section>
+
+    <!-- 伺服器未加入機器人提示卡 -->
+    <div id="bot-invite-banner" class="invite-banner" style="display: none;">
+      <div class="invite-banner-content">
+        <span class="invite-banner-icon">🤖</span>
+        <div>
+          <h4>機器人尚未加入此伺服器</h4>
+          <p>請先點擊右方按鈕邀請「炙彗JI器人」加入伺服器，以啟用所有自訂控制面板功能。</p>
+        </div>
+      </div>
+      <a id="btn-invite-to-guild" class="btn primary" href="{{ invite_url }}" target="_blank" rel="noreferrer">
+        <span>🚀 立即授權邀請加入</span>
+      </a>
+    </div>
+
+    <!-- 主要設定工作區 -->
+    <div class="panel-content-grid">
+      <!-- 側邊欄導航 (Tabs) -->
+      <aside class="panel-sidebar">
+        <div class="sidebar-header">
+          <span id="active-server-display" class="active-server-name">載入中...</span>
+          <span id="active-server-id-display" class="active-server-id">ID: --</span>
+        </div>
+
+        <nav class="sidebar-nav">
+          <button class="nav-tab active" data-tab="tab-welcome">
+            <span class="tab-icon">👋</span>
+            <span>歡迎訊息與身分組</span>
+          </button>
+          <button class="nav-tab" data-tab="tab-music">
+            <span class="tab-icon">🎵</span>
+            <span>音樂點歌文字頻道</span>
+          </button>
+          <button class="nav-tab" data-tab="tab-auto-reply">
+            <span class="tab-icon">💬</span>
+            <span>關鍵字自動回覆</span>
+          </button>
+          <button class="nav-tab" data-tab="tab-reaction-roles">
+            <span class="tab-icon">🎭</span>
+            <span>表符身分組配置</span>
+          </button>
+          <button class="nav-tab" data-tab="tab-commands">
+            <span class="tab-icon">📜</span>
+            <span>可用指令狀態</span>
+          </button>
+
+          {% if is_owner %}
+          <!-- 關鍵防護：擁有者專區標籤，僅在 is_owner 為 True 時由伺服器端渲染傳送 -->
+          <div class="owner-divider"></div>
+          <button class="nav-tab owner-tab" data-tab="tab-owner">
+            <span class="tab-icon">👑</span>
+            <span>擁有者專區 (Owner Only)</span>
+          </button>
+          {% endif %}
+        </nav>
+      </aside>
+
+      <!-- 主要內容分頁 (Tab Contents) -->
+      <section class="panel-main">
+
+        <!-- Tab 1: 歡迎訊息設定 -->
+        <div id="tab-welcome" class="tab-pane active">
+          <div class="pane-header">
+            <div class="tag">Welcome Module</div>
+            <h2>👋 歡迎訊息與新成員自動身分組</h2>
+            <p class="pane-desc">
+              當新成員加入伺服器時，機器人會自動於歡迎頻道發送內嵌招呼卡片，並可引導閱讀規則或領取身分組。
+            </p>
+          </div>
+
+          <form id="form-welcome" class="panel-form">
+            <div class="form-group">
+              <label for="select-welcome-channel">新成員歡迎頻道 (Welcome Channel)</label>
+              <select id="select-welcome-channel" class="form-control">
+                <option value="">-- 未設定（停用發送） --</option>
+              </select>
+              <small class="form-hint">機器人發送新進成員歡迎 Embed 訊息的文字頻道。</small>
+            </div>
+
+            <div class="form-group">
+              <label for="select-rules-channel">伺服器規則頻道 (Rules Channel，可選)</label>
+              <select id="select-rules-channel" class="form-control">
+                <option value="">-- 未指定（略過提及） --</option>
+              </select>
+              <small class="form-hint">歡迎卡片內將會標記此頻道，引導新成員前往閱讀規則。</small>
+            </div>
+
+            <div class="form-group">
+              <label for="select-role-channel">身分組領取頻道 (Roles Channel，可選)</label>
+              <select id="select-role-channel" class="form-control">
+                <option value="">-- 未指定（略過提及） --</option>
+              </select>
+              <small class="form-hint">歡迎卡片內將標記此頻道，引導新成員領取身分組。</small>
+            </div>
+
+            <div class="form-group">
+              <label for="select-auto-role">新成員自動身分組 (Auto Role，可選)</label>
+              <select id="select-auto-role" class="form-control">
+                <option value="">-- 未設定（不自動賦予） --</option>
+              </select>
+              <small class="form-hint">新成員一進伺服器即自動指派的身分組（機器人身分組階層需高於此身分組）。</small>
+            </div>
+
+            <div class="form-actions">
+              <button type="submit" class="btn primary">
+                <span>💾 儲存歡迎設定</span>
+              </button>
+              <button type="button" id="btn-clear-welcome" class="btn secondary btn-danger-action">
+                <span>🗑️ 清除並停用歡迎功能</span>
+              </button>
+            </div>
+          </form>
+        </div>
+
+        <!-- Tab 2: 音樂點歌頻道設定 -->
+        <div id="tab-music" class="tab-pane">
+          <div class="pane-header">
+            <div class="tag">Music Module</div>
+            <h2>🎵 專屬點歌與音樂文字頻道</h2>
+            <p class="pane-desc">
+              限制音樂相關指令（如 <code>/music_play</code>, <code>/music_skip</code>）僅能在特定文字頻道使用，保持其他頻道的整潔。
+            </p>
+          </div>
+
+          <form id="form-music" class="panel-form">
+            <div class="form-group">
+              <label for="select-music-channel">專屬點歌頻道 (Music Channel)</label>
+              <select id="select-music-channel" class="form-control">
+                <option value="">-- 未綁定（所有文字頻道皆可使用） --</option>
+              </select>
+              <small class="form-hint">設定後，若使用者在其他頻道使用點歌指令，機器人將引導至此頻道。</small>
+            </div>
+
+            <div class="form-actions">
+              <button type="submit" class="btn primary">
+                <span>💾 儲存點歌頻道設定</span>
+              </button>
+              <button type="button" id="btn-clear-music" class="btn secondary">
+                <span>🔓 解除頻道綁定</span>
+              </button>
+            </div>
+          </form>
+        </div>
+
+        <!-- Tab 3: 關鍵字自動回覆 -->
+        <div id="tab-auto-reply" class="tab-pane">
+          <div class="pane-header">
+            <div class="pane-header-flex">
+              <div>
+                <div class="tag">Auto Reply Module</div>
+                <h2>💬 關鍵字自動回覆規則管理</h2>
+                <p class="pane-desc">設定特定關鍵字，當成員訊息提及時機器人自動送出回覆（每伺服器上限 10 條）。</p>
+              </div>
+              <button id="btn-add-auto-reply" class="btn primary" type="button">
+                <span>＋ 新增回覆規則</span>
+              </button>
+            </div>
+          </div>
+
+          <div id="auto-reply-list-container" class="rule-cards-list">
+            <div class="empty-rules-hint">載入中...</div>
+          </div>
+        </div>
+
+        <!-- Tab 4: 表符身分組配置 -->
+        <div id="tab-reaction-roles" class="tab-pane">
+          <div class="pane-header">
+            <div class="tag">Reaction Roles Module</div>
+            <h2>🎭 表符身分組配置檢視</h2>
+            <p class="pane-desc">
+              檢視伺服器中已部署的表情符號身分組領取面板。可透過指令 <code>/reaction_roles_create</code> 於 Discord 中快速建立新面板。
+            </p>
+          </div>
+
+          <div id="reaction-roles-list-container" class="rr-cards-list">
+            <div class="empty-rules-hint">載入中...</div>
+          </div>
+        </div>
+
+        <!-- Tab 5: 可用指令清單 -->
+        <div id="tab-commands" class="tab-pane">
+          <div class="pane-header">
+            <div class="tag">Commands Status</div>
+            <h2>📜 機器人在該伺服器啟用的指令清單</h2>
+            <p class="pane-desc">
+              檢視此伺服器中所有已就緒的斜線指令。
+              {% if not is_owner %}
+              <span class="security-badge-note">🔒 安全機制啟用：已過濾並隱藏 owner_guild_only 擁有者指令。</span>
+              {% endif %}
+            </p>
+          </div>
+
+          <div class="commands-search-row">
+            <input type="text" id="command-search-input" class="form-control" placeholder="🔍 搜尋指令名稱或說明..." />
+          </div>
+
+          <div id="commands-table-container" class="commands-table-wrapper">
+            <!-- 動態渲染指令表格 -->
+          </div>
+        </div>
+
+        {% if is_owner %}
+        <!-- 關鍵防護：擁有者專屬控制面板 (@owner_guild_only 指令設定控制區) -->
+        <!-- 伺服器端 Python 模板引擎嚴格確認 is_owner 為 True 才輸出這整段 HTML，非擁有者完全不會取得此 DOM 與設定結構！ -->
+        <div id="tab-owner" class="tab-pane owner-zone-pane">
+          <div class="pane-header owner-header-accent">
+            <div class="tag tag-owner-gold">Owner Exclusive</div>
+            <h2>👑 炙彗JI器人 全域擁有者控制中心</h2>
+            <p class="pane-desc">
+              此區域對應機器人 <code>@owner_guild_only</code> 限制指令（包含 <code>/economy_admin</code> 與 <code>/reload_cogs</code>）。
+              僅機器人擁有者帳號可見並具備讀寫權限。
+            </p>
+          </div>
+
+          <!-- 擁有者子分頁選單 -->
+          <div class="owner-subtabs">
+            <button class="owner-subtab-btn active" data-subtab="owner-sub-economy">
+              <span>💰 經濟系統後台參數 (@owner_guild_only /economy_admin)</span>
+            </button>
+            <button class="owner-subtab-btn" data-subtab="owner-sub-users">
+              <span>💳 玩家金幣帳戶管理</span>
+            </button>
+            <button class="owner-subtab-btn" data-subtab="owner-sub-reload">
+              <span>🔄 模組熱重載與指令同步 (@owner_guild_only /reload_cogs)</span>
+            </button>
+            <button class="owner-subtab-btn" data-subtab="owner-sub-quota">
+              <span>📊 外部 API 每日配額狀態</span>
+            </button>
+          </div>
+
+          <!-- 子分頁 1: 經濟系統參數設定 -->
+          <div id="owner-sub-economy" class="owner-subpane active">
+            <form id="form-owner-economy" class="panel-form">
+              <h4 class="subpane-group-title">🪙 基礎貨幣與轉帳設定</h4>
+              <div class="form-row-2">
+                <div class="form-group">
+                  <label>貨幣名稱</label>
+                  <input type="text" id="econ-currency_name" class="form-control" required />
+                </div>
+                <div class="form-group">
+                  <label>貨幣圖示 (Emoji)</label>
+                  <input type="text" id="econ-currency_emoji" class="form-control" required />
+                </div>
+              </div>
+
+              <div class="form-row-3">
+                <div class="form-group">
+                  <label>初始金幣 (新帳戶)</label>
+                  <input type="number" id="econ-initial_balance" class="form-control" min="0" required />
+                </div>
+                <div class="form-group">
+                  <label>轉帳手續費率 (%)</label>
+                  <input type="number" id="econ-transfer_tax_percent" class="form-control" min="0" max="100" required />
+                </div>
+                <div class="form-group">
+                  <label>最低轉帳金額</label>
+                  <input type="number" id="econ-transfer_min" class="form-control" min="1" required />
+                </div>
+              </div>
+
+              <div class="form-group checkbox-group">
+                <label class="custom-checkbox-label">
+                  <input type="checkbox" id="econ-transfer_enabled" />
+                  <span>啟用玩家間金幣轉帳功能 (/economy_pay)</span>
+                </label>
+              </div>
+
+              <h4 class="subpane-group-title" style="margin-top: 24px;">📅 簽到獎勵設定 (UTC+8 00:00 / 整點刷新)</h4>
+              <div class="form-row-2">
+                <div class="form-group">
+                  <label>每日簽到金額下限</label>
+                  <input type="number" id="econ-daily_min" class="form-control" min="1" required />
+                </div>
+                <div class="form-group">
+                  <label>每日簽到金額上限</label>
+                  <input type="number" id="econ-daily_max" class="form-control" min="1" required />
+                </div>
+              </div>
+
+              <div class="form-row-2">
+                <div class="form-group">
+                  <label>連簽每日額外加乘</label>
+                  <input type="number" id="econ-daily_streak_bonus" class="form-control" min="0" required />
+                </div>
+                <div class="form-group">
+                  <label>連簽加乘最高上限</label>
+                  <input type="number" id="econ-daily_streak_max" class="form-control" min="0" required />
+                </div>
+              </div>
+
+              <div class="form-row-2">
+                <div class="form-group">
+                  <label>每小時簽到金額下限</label>
+                  <input type="number" id="econ-hourly_min" class="form-control" min="1" required />
+                </div>
+                <div class="form-group">
+                  <label>每小時簽到金額上限</label>
+                  <input type="number" id="econ-hourly_max" class="form-control" min="1" required />
+                </div>
+              </div>
+
+              <h4 class="subpane-group-title" style="margin-top: 24px;">🎰 小遊戲下注與倍率設定</h4>
+              <div class="form-row-2">
+                <div class="form-group">
+                  <label>最低下注限制</label>
+                  <input type="number" id="econ-bet_min" class="form-control" min="1" required />
+                </div>
+                <div class="form-group">
+                  <label>最高下注上限</label>
+                  <input type="number" id="econ-bet_max" class="form-control" min="1" required />
+                </div>
+              </div>
+
+              <div class="form-row-3">
+                <div class="form-group">
+                  <label>擲硬幣勝率倍率</label>
+                  <input type="number" step="0.1" id="econ-coinflip_multiplier" class="form-control" required />
+                </div>
+                <div class="form-group">
+                  <label>骰子比大小倍率</label>
+                  <input type="number" step="0.1" id="econ-dice_multiplier" class="form-control" required />
+                </div>
+                <div class="form-group">
+                  <label>21點普勝倍率</label>
+                  <input type="number" step="0.1" id="econ-blackjack_multiplier" class="form-control" required />
+                </div>
+              </div>
+
+              <div class="form-row-3">
+                <div class="form-group">
+                  <label>21點天生黑傑克倍率</label>
+                  <input type="number" step="0.1" id="econ-blackjack_natural_multiplier" class="form-control" required />
+                </div>
+                <div class="form-group">
+                  <label>拉霸機頭獎倍率 (777)</label>
+                  <input type="number" step="0.1" id="econ-slots_jackpot_multiplier" class="form-control" required />
+                </div>
+                <div class="form-group">
+                  <label>刮刮樂單張成本</label>
+                  <input type="number" id="econ-scratch_cost" class="form-control" required />
+                </div>
+              </div>
+
+              <div class="form-actions" style="margin-top: 24px;">
+                <button type="submit" class="btn primary">
+                  <span>💾 儲存並套用經濟系統參數</span>
+                </button>
+              </div>
+            </form>
+          </div>
+
+          <!-- 子分頁 2: 玩家金幣帳戶管理 -->
+          <div id="owner-sub-users" class="owner-subpane">
+            <div class="user-manage-box">
+              <h4 class="subpane-group-title">🔍 查詢 Discord 玩家金幣帳戶</h4>
+              <div class="search-user-row">
+                <input type="text" id="manage-user-id" class="form-control" placeholder="請輸入使用者的 Discord User ID (例如: 941935836189065236)" />
+                <button id="btn-fetch-user-balance" class="btn primary" type="button">
+                  <span>查詢帳戶</span>
+                </button>
+              </div>
+
+              <div id="user-details-card" class="user-detail-card" style="display: none;">
+                <div class="user-stat-grid">
+                  <div class="stat-item">
+                    <span class="stat-label">目前餘額</span>
+                    <strong id="stat-balance" class="stat-value">0</strong>
+                  </div>
+                  <div class="stat-item">
+                    <span class="stat-label">連續簽到天數</span>
+                    <strong id="stat-streak" class="stat-value">0 天</strong>
+                  </div>
+                  <div class="stat-item">
+                    <span class="stat-label">歷史累積獲利</span>
+                    <strong id="stat-earned" class="stat-value">0</strong>
+                  </div>
+                  <div class="stat-item">
+                    <span class="stat-label">歷史累計下注</span>
+                    <strong id="stat-wagered" class="stat-value">0</strong>
+                  </div>
+                </div>
+
+                <div class="user-modify-actions">
+                  <h5 style="margin: 16px 0 8px;">修改金幣餘額：</h5>
+                  <div class="modify-row">
+                    <input type="number" id="modify-amount-input" class="form-control" placeholder="輸入金幣金額" />
+                    <button id="btn-set-balance" class="btn secondary" type="button">
+                      <span>覆寫設定為此金額</span>
+                    </button>
+                    <button id="btn-add-balance" class="btn primary" type="button">
+                      <span>發放加額 (+)</span>
+                    </button>
+                    <button id="btn-deduct-balance" class="btn secondary btn-danger-action" type="button">
+                      <span>扣除扣額 (-)</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 子分頁 3: 模組熱重載與指令同步 -->
+          <div id="owner-sub-reload" class="owner-subpane">
+            <div class="reload-manage-box">
+              <div class="reload-header-flex">
+                <div>
+                  <h4 class="subpane-group-title">🔄 Cog 模組線上熱重載 (免重啟機器人)</h4>
+                  <p class="pane-desc">代碼更新後可點擊重載對應模組，系統會自動在重載後將最新指令樹同步到 Discord 官方伺服器。</p>
+                </div>
+                <div class="cta-row" style="margin-top: 0;">
+                  <button id="btn-reload-all-cogs" class="btn primary" type="button">
+                    <span>⚡ 全部模組一鍵重載</span>
+                  </button>
+                  <button id="btn-sync-all-commands" class="btn secondary" type="button">
+                    <span>📡 強制同步指令樹</span>
+                  </button>
+                </div>
+              </div>
+
+              <div id="cogs-grid-list" class="cogs-grid">
+                <!-- 動態注入 Cog 卡片 -->
+              </div>
+
+              <div class="sync-log-card">
+                <h5>📜 即時重載與同步日誌：</h5>
+                <pre id="reload-sync-output" class="sync-console">等待操作...</pre>
+              </div>
+            </div>
+          </div>
+
+          <!-- 子分頁 4: 外部 API 配額 -->
+          <div id="owner-sub-quota" class="owner-subpane">
+            <h4 class="subpane-group-title">📊 外部 API 每日調用配額監控</h4>
+            <div class="quota-grid">
+              <div class="quota-card">
+                <span class="quota-service-name">中央氣象署 CWA API (/weather)</span>
+                <span id="quota-weather-count" class="quota-number">--</span>
+                <span id="quota-weather-date" class="quota-date">統計日期: --</span>
+              </div>
+              <div class="quota-card">
+                <span class="quota-service-name">交通部 TDX 公車 API (/bus)</span>
+                <span id="quota-bus-count" class="quota-number">--</span>
+                <span id="quota-bus-date" class="quota-date">統計日期: --</span>
+              </div>
+              <div class="quota-card">
+                <span class="quota-service-name">Reurl 短網址 API (/shorten)</span>
+                <span id="quota-reurl-count" class="quota-number">--</span>
+                <span id="quota-reurl-date" class="quota-date">統計日期: --</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        {% endif %}
+
+      </section>
+    </div>
+    {% endif %}
+  </main>
+
+  <!-- 自動回覆規則 新增/編輯 Modal 彈出視窗 -->
+  <div id="modal-auto-reply" class="modal-backdrop" style="display: none;" aria-hidden="true">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 id="modal-auto-reply-title">新增自動回覆規則</h3>
+        <button id="modal-auto-reply-close" class="btn-close-modal" type="button">&times;</button>
+      </div>
+      <form id="form-modal-auto-reply" class="modal-body">
+        <input type="hidden" id="modal-rule-id" value="" />
+        <div class="form-group">
+          <label>規則名稱 (管理用)</label>
+          <input type="text" id="modal-rule-name" class="form-control" maxlength="40" placeholder="例如：打招呼、社群連結" required />
+        </div>
+        <div class="form-group">
+          <label>觸發關鍵字 (多個請用逗號隔開)</label>
+          <input type="text" id="modal-rule-keywords" class="form-control" placeholder="例如：你好, 早安, hello" required />
+          <small class="form-hint">訊息內容只要包含上述任一關鍵字即可觸發。</small>
+        </div>
+        <div class="form-group">
+          <label>回覆內容 (一行一則；多行時隨機挑選一則回覆)</label>
+          <textarea id="modal-rule-replies" class="form-control" rows="4" placeholder="例如：&#10;你好呀！祝你有美好的一天！&#10;哈囉！今天過得好嗎？" required></textarea>
+        </div>
+        <div class="form-group">
+          <label>限定生效文字頻道 (可選)</label>
+          <select id="modal-rule-channel" class="form-control">
+            <option value="">-- 全伺服器所有文字頻道生效 --</option>
+          </select>
+        </div>
+        <div class="form-group checkbox-group">
+          <label class="custom-checkbox-label">
+            <input type="checkbox" id="modal-rule-paused" />
+            <span>暫停此規則（不觸發回覆）</span>
+          </label>
+        </div>
+        <div class="modal-footer">
+          <button type="submit" class="btn primary">
+            <span>💾 儲存規則</span>
+          </button>
+          <button type="button" id="modal-auto-reply-cancel" class="btn secondary">
+            <span>取消</span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='js/panel.js') }}"></script>
+</body>
+
+</html>
+

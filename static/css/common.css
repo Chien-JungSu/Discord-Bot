@@ -343,3 +343,80 @@ code:hover {
   display: block;
 }
 
+/* ---------- 統一登入 / 控制面板入口膠囊按鈕 (Primary 表現，與 .status 相同高度規格與對齊) ---------- */
+.panel-entry-btn,
+.panel-entry-btn.primary,
+.btn.primary.panel-entry-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 18px !important; /* 確保與 .status 膠囊高度 37.5px 完美對齊 */
+  border-radius: 9999px; /* 膠囊形 */
+  background: linear-gradient(135deg, rgba(125, 211, 252, 0.22) 0%, rgba(56, 189, 248, 0.08) 100%);
+  border: 1px solid rgba(125, 211, 252, 0.45);
+  color: #ffffff !important;
+  font-size: 13.5px !important;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-decoration: none;
+  box-shadow: inset 0 1px 1.5px 0 rgba(255, 255, 255, 0.5),
+              inset 0 -1px 2px 0 rgba(0, 0, 0, 0.3),
+              0 6px 20px rgba(0, 0, 0, 0.32),
+              0 0 16px rgba(125, 211, 252, 0.16);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(18px) saturate(200%);
+  -webkit-backdrop-filter: blur(18px) saturate(200%);
+  overflow: hidden;
+  cursor: pointer;
+  transition: transform 0.24s var(--motion-spring),
+              background 0.25s ease,
+              border-color 0.25s ease,
+              box-shadow 0.25s ease;
+}
+
+.panel-entry-btn:visited,
+.panel-entry-btn.primary:visited,
+.btn.primary.panel-entry-btn:visited {
+  color: #ffffff !important;
+}
+
+.panel-entry-btn::before {
+  content: "";
+  position: absolute;
+  top: -50%;
+  left: -60%;
+  width: 45%;
+  height: 200%;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.35) 50%, rgba(255, 255, 255, 0) 100%);
+  transform: rotate(25deg);
+  pointer-events: none;
+  opacity: 0;
+  z-index: 1;
+}
+
+.panel-entry-btn:hover::before {
+  animation: liquidGleamSweep 0.85s var(--motion-smooth);
+}
+
+.panel-entry-btn:hover,
+.panel-entry-btn.primary:hover,
+.btn.primary.panel-entry-btn:hover {
+  transform: translateY(-1.5px) scale(1.03);
+  background: linear-gradient(135deg, rgba(125, 211, 252, 0.34) 0%, rgba(56, 189, 248, 0.15) 100%);
+  border-color: rgba(125, 211, 252, 0.75);
+  box-shadow: inset 0 1px 2px 0 rgba(255, 255, 255, 0.7),
+              0 12px 32px rgba(0, 0, 0, 0.42),
+              0 0 26px rgba(125, 211, 252, 0.32);
+  color: #ffffff !important;
+  text-decoration: none;
+}
+
+.panel-entry-btn:active,
+.panel-entry-btn.primary:active,
+.btn.primary.panel-entry-btn:active {
+  transform: scale(0.96);
+  box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.5),
+              0 4px 14px rgba(0, 0, 0, 0.3);
+}
+

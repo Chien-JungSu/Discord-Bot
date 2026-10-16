@@ -1,4 +1,5 @@
 import datetime
+import importlib
 import os
 import random
 import re
@@ -185,6 +186,8 @@ class ReloadCogSelect(discord.ui.Select):
         # defer 之後再重載 + 同步，最後用 followup 一次回報結果。
         await interaction.response.defer(ephemeral=True)
         try:
+            if 'cogs.database' in sys.modules:
+                importlib.reload(sys.modules['cogs.database'])
             await self.bot.reload_extension(module_name)
             timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             print(f"✅ [{timestamp}] 已重載模組: {module_name}")
@@ -318,6 +321,8 @@ class General(commands.Cog):
             # 先 defer 再做事，避免 sync 打 API 時超過 3 秒回應時限。
             await interaction.response.defer(ephemeral=True)
             try:
+                if 'cogs.database' in sys.modules:
+                    importlib.reload(sys.modules['cogs.database'])
                 await self.bot.reload_extension(normalized)
                 timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 print(f"✅ [{timestamp}] 已重載模組: {normalized}")

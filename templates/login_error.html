@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>炙彗JI器人 - 控制面板授權提示</title>
+  <link rel="icon" type="image/png"
+    href="https://www.dropbox.com/scl/fi/8mx3kit88y0ojmihwt034/IMG_6426.PNG?rlkey=9iud5rml003o9bzq4mq54uhib&dl=1" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/common.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/index.css') }}" />
+  <style>
+    .error-container {
+      max-width: 720px;
+      margin: 60px auto;
+      padding: 36px 32px;
+      background: linear-gradient(135deg, rgba(255, 255, 255, 0.05) 0%, rgba(15, 23, 42, 0.75) 100%);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 28px;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5), inset 0 1px 1px rgba(255, 255, 255, 0.2);
+      backdrop-filter: blur(28px) saturate(200%);
+      -webkit-backdrop-filter: blur(28px) saturate(200%);
+    }
+
+    .error-icon {
+      font-size: 3rem;
+      margin-bottom: 16px;
+      display: inline-block;
+    }
+
+    .error-box {
+      background: rgba(248, 113, 113, 0.12);
+      border: 1px solid rgba(248, 113, 113, 0.35);
+      padding: 16px 20px;
+      border-radius: 16px;
+      color: #fca5a5;
+      font-size: 0.95rem;
+      line-height: 1.6;
+      margin: 20px 0 24px;
+      word-break: break-all;
+    }
+
+    .info-card {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 16px;
+      padding: 20px;
+      margin: 20px 0;
+      color: var(--muted);
+      font-size: 0.92rem;
+      line-height: 1.7;
+    }
+
+    .info-card h4 {
+      margin: 0 0 10px;
+      color: var(--primary);
+      font-size: 1.05rem;
+    }
+
+    .info-card ol {
+      margin: 0;
+      padding-left: 20px;
+    }
+
+    .info-card li {
+      margin-bottom: 6px;
+    }
+
+    .dev-login-box {
+      background: linear-gradient(135deg, rgba(167, 139, 250, 0.12) 0%, rgba(125, 211, 252, 0.06) 100%);
+      border: 1px solid rgba(167, 139, 250, 0.3);
+      border-radius: 18px;
+      padding: 20px;
+      margin-top: 24px;
+    }
+
+    .dev-login-box h4 {
+      margin: 0 0 8px;
+      color: var(--accent);
+      font-size: 1.05rem;
+    }
+  </style>
+</head>
+
+<body>
+  <!-- Apple Liquid Glass: 背景鮮活光暈漫射背板 -->
+  <div class="glass-ambient-backdrop" aria-hidden="true">
+    <div class="ambient-orb ambient-orb-1"></div>
+    <div class="ambient-orb ambient-orb-2"></div>
+    <div class="ambient-orb ambient-orb-3"></div>
+  </div>
+
+  <main>
+    <div class="error-container">
+      <div class="error-icon">🔒</div>
+      <div class="tag">{{ title or 'OAuth2 授權狀態' }}</div>
+      <h2 style="margin: 8px 0 16px;">控制面板登入驗證提示</h2>
+
+      <div class="error-box">
+        {{ error }}
+      </div>
+
+      {% if secret_missing %}
+      <div class="info-card">
+        <h4>📋 如何配置 Discord OAuth2 Client Secret：</h4>
+        <ol>
+          <li>前往 <a href="https://discord.com/developers/applications" target="_blank" rel="noreferrer" style="color: var(--primary); text-decoration: underline;">Discord Developer Portal</a> 並進入您的應用。</li>
+          <li>左側點擊 <strong>OAuth2</strong> &gt; <strong>General</strong>。</li>
+          <li>在 <strong>Client Secret</strong> 點擊 <em>Reset Secret</em> 並複製密鑰。</li>
+          <li>在 <strong>Redirects</strong> 新增並儲存重定向網址：<code>{{ redirect_uri }}</code></li>
+          <li>將複製的 Client Secret 填入機器人的 <code>.env</code> 檔案中：<br>
+            <code>DISCORD_CLIENT_SECRET=您的Secret字串</code>
+          </li>
+          <li>完成後重啟機器人或網頁服務即可正式啟用 Discord 授權登入！</li>
+        </ol>
+      </div>
+
+      <div class="dev-login-box">
+        <h4>🧪 本地開發與權限驗證測試模式 (Dev Mode)：</h4>
+        <p style="font-size: 0.88rem; color: var(--muted); margin: 0 0 14px;">
+          在配置真實 Client Secret 之前，您可以使用模擬身分進入控制面板，驗證伺服器設定與「<strong>owner_guild_only 指令設定僅擁有者可見</strong>」之權限邏輯：
+        </p>
+        <div class="cta-row" style="margin-top: 0;">
+          <a class="btn primary" href="/api/auth/dev-login?role=owner">
+            <span>👑 以擁有者身分登入 (Owner)</span>
+          </a>
+          <a class="btn secondary" href="/api/auth/dev-login?role=admin">
+            <span>🛡️ 以一般管理員身分登入 (Admin)</span>
+          </a>
+        </div>
+      </div>
+      {% endif %}
+
+      <div class="cta-row" style="margin-top: 28px;">
+        <a class="btn secondary" href="/login">
+          <span>🔄 重新嘗試登入</span>
+        </a>
+        <a class="btn secondary" href="/">
+          <span>🏠 返回官網首頁</span>
+        </a>
+      </div>
+    </div>
+  </main>
+</body>
+
+</html>
+
