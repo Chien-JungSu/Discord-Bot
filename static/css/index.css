@@ -170,6 +170,7 @@ h1 {
   letter-spacing: 0.03em;
   background: linear-gradient(180deg, #ffffff 40%, rgba(225, 230, 248, 0.85) 100%);
   -webkit-background-clip: text;
+  background-clip: text;
   -webkit-text-fill-color: transparent;
   filter: drop-shadow(0 2px 14px rgba(0, 0, 0, 0.5));
 }
@@ -684,6 +685,7 @@ h1 {
   letter-spacing: -0.04em;
   background: linear-gradient(180deg, #ffffff 40%, #a78bfa 100%);
   -webkit-background-clip: text;
+  background-clip: text;
   -webkit-text-fill-color: transparent;
   margin: 0;
   white-space: pre-line;
@@ -716,6 +718,7 @@ h1 {
   text-transform: uppercase;
   background: linear-gradient(180deg, #ffffff 40%, rgba(225, 230, 248, 0.85) 100%);
   -webkit-background-clip: text;
+  background-clip: text;
   -webkit-text-fill-color: transparent;
   display: block;
   text-align: center;
