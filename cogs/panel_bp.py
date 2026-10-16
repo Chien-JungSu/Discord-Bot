@@ -98,10 +98,10 @@ def is_current_user_owner() -> bool:
 
 
 def can_manage_guild(guild_id: str) -> bool:
-    """檢查目前登入使用者對指定伺服器是否具備管理權限 (擁有者、Administrator、Manage Guild)。"""
-    if is_current_user_owner():
-        return True
+    """檢查目前登入使用者對指定伺服器是否具備管理權限 (伺服器擁有者、Administrator、Manage Guild)。
 
+    嚴格規定：即使是機器人擁有者，若在該伺服器沒有管理伺服器權限，也嚴禁查看或更改資料。
+    """
     user = session.get('user')
     if not user:
         return False
@@ -109,8 +109,11 @@ def can_manage_guild(guild_id: str) -> bool:
     guilds = session.get('guilds', [])
     for g in guilds:
         if str(g.get('id')) == str(guild_id):
-            perms = int(g.get('permissions', 0))
-            if g.get('owner') or (perms & 0x8 != 0) or (perms & 0x20 != 0):
+            try:
+                perms = int(g.get('permissions', 0))
+            except (ValueError, TypeError):
+                perms = 0
+            if bool(g.get('owner', False)) or (perms & 0x8 != 0) or (perms & 0x20 != 0):
                 return True
     return False
 
@@ -286,9 +289,14 @@ def oauth_callback():
     bot_guild_ids = {str(g.id) for g in bot.guilds} if bot else set()
 
     for g in guilds_data:
-        perms = int(g.get('permissions', 0))
+        try:
+            perms = int(g.get('permissions', 0))
+        except (ValueError, TypeError):
+            perms = 0
         is_g_owner = bool(g.get('owner', False))
-        can_manage = is_g_owner or (perms & 0x8 != 0) or (perms & 0x20 != 0) or is_owner
+        # 嚴格限制：僅有具備「伺服器擁有者」、「Administrator (0x8)」或「Manage Guild (0x20)」的伺服器才可出現在控制面板
+        # 嚴格禁止加入 or is_owner！即便是機器人擁有者，在自己沒有管理權限的伺服器同樣不可見、不可更改！
+        can_manage = is_g_owner or (perms & 0x8 != 0) or (perms & 0x20 != 0)
         if can_manage:
             icon_hash = g.get('icon')
             icon_url = f"https://cdn.discordapp.com/icons/{g['id']}/{icon_hash}.png" if icon_hash else None
@@ -336,40 +344,8 @@ def dev_login():
     注意：此端點僅在未設定 DISCORD_CLIENT_SECRET 或明確開啟 DEV_LOGIN 模式時可用。
     """
     mode = request.args.get('role', 'owner')
-    bot = get_bot()
-    bot_guilds = []
-    if bot:
-        for g in bot.guilds:
-            icon_url = str(g.icon.url) if g.icon else None
-            bot_guilds.append({
-                'id': str(g.id),
-                'name': g.name,
-                'icon_url': icon_url,
-                'owner': True,
-                'permissions': 8,
-                'bot_in_guild': True,
-            })
-
-    if not bot_guilds:
-        owner_gid = get_owner_guild_id() or '111111111111111111'
-        bot_guilds = [
-            {
-                'id': str(owner_gid),
-                'name': '開發者專屬伺服器 (Owner Guild)',
-                'icon_url': None,
-                'owner': True,
-                'permissions': 8,
-                'bot_in_guild': True,
-            },
-            {
-                'id': '222222222222222222',
-                'name': '示範管理伺服器 (Demo Guild)',
-                'icon_url': None,
-                'owner': False,
-                'permissions': 32,
-                'bot_in_guild': True,
-            },
-        ]
+    owner_gid = str(get_owner_guild_id() or '1477930950288478262')
+    admin_gid = '222222222222222222'
 
     if mode == 'owner':
         uid = str(get_owner_id() or '941935836189065236')
@@ -381,6 +357,17 @@ def dev_login():
             'avatar_url': 'https://www.dropbox.com/scl/fi/8mx3kit88y0ojmihwt034/IMG_6426.PNG?rlkey=9iud5rml003o9bzq4mq54uhib&dl=1',
             'is_owner': True,
         }
+        # 機器人擁有者只在自己具備權限的伺服器 (owner_gid) 具有管理伺服器權限
+        bot_guilds = [
+            {
+                'id': owner_gid,
+                'name': '開發者專屬伺服器 (Owner Guild)',
+                'icon_url': None,
+                'owner': True,
+                'permissions': 8,
+                'bot_in_guild': True,
+            }
+        ]
     else:
         session['user'] = {
             'id': '888888888888888888',
@@ -390,6 +377,17 @@ def dev_login():
             'avatar_url': 'https://cdn.discordapp.com/embed/avatars/1.png',
             'is_owner': False,
         }
+        # 一般管理員只在 admin_gid 具備 Manage Guild 權限
+        bot_guilds = [
+            {
+                'id': admin_gid,
+                'name': '示範管理伺服器 (Admin)',
+                'icon_url': None,
+                'owner': False,
+                'permissions': 32,
+                'bot_in_guild': True,
+            }
+        ]
 
     session['guilds'] = bot_guilds
     return redirect(url_for('panel.control_panel'))

@@ -44,7 +44,8 @@ def test_panel_unauthenticated():
     res = client.get('/panel')
     assert res.status_code == 200
     html = res.data.decode('utf-8')
-    assert '歡迎使用炙彗JI器人控制面板' in html
+    assert '登入控制面板' in html
+    assert '透過 Discord 登入' in html
     assert 'tab-owner' not in html
     assert '擁有者專屬控制面板' not in html
 
@@ -116,10 +117,14 @@ def test_panel_owner_access():
     assert res_quota.status_code == 200
     assert 'quotas' in res_quota.get_json()
 
-    # 3. 伺服器指令清單：擁有者可查看到 owner_guild_only 指令
+    # 3. 伺服器指令清單：擁有者可查看到授權伺服器的指令
     res_guild = client.get('/api/panel/guild/1477930950288478262/data')
     assert res_guild.status_code == 200
     commands = [c['name'] for c in res_guild.get_json().get('commands', [])]
     assert '/reload_cogs' in commands
     assert '/economy_admin' in commands
+
+    # 4. 嚴格權限隔離：即便是機器人擁有者，若在該伺服器沒有管理伺服器權限，也絕對不可查看或修改
+    res_unauth_guild = client.get('/api/panel/guild/222222222222222222/data')
+    assert res_unauth_guild.status_code == 403
 

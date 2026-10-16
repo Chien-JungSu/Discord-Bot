@@ -131,28 +131,94 @@
   font-size: 0.88rem;
 }
 
-/* ---------- 未登入引導卡片 ---------- */
+/* ---------- 極簡未登入登入卡片 ---------- */
 .unauth-card {
-  max-width: 720px;
-  margin: 60px auto;
+  max-width: 400px;
+  margin: 90px auto;
   text-align: center;
-  padding: 48px 36px;
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.05) 0%, rgba(15, 23, 42, 0.7) 100%);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  border-radius: 28px;
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45), inset 0 1px 1px rgba(255, 255, 255, 0.2);
-  backdrop-filter: blur(28px);
+  padding: 40px 32px;
+  background: rgba(15, 23, 42, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 20px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45), inset 0 1px 1px rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
 }
 
-.unauth-icon {
-  font-size: 3.5rem;
-  margin-bottom: 16px;
+.unauth-logo {
+  width: 52px;
+  height: 52px;
+  margin: 0 auto 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 14px;
+  background: #5865F2; /* Discord Blurple */
+  color: #ffffff;
+  box-shadow: 0 6px 20px rgba(88, 101, 242, 0.35);
 }
 
-.auth-footnote {
-  margin-top: 32px;
-  font-size: 0.82rem;
+.unauth-logo svg {
+  width: 28px;
+  height: 28px;
+  fill: currentColor;
+}
+
+.unauth-title {
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: #ffffff;
+  margin: 0 0 8px;
+}
+
+.unauth-desc {
+  font-size: 0.9rem;
+  color: #94a3b8;
+  line-height: 1.5;
+  margin: 0 0 24px;
+}
+
+.btn-discord-login {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 20px;
+  background: #5865F2;
+  color: #ffffff;
+  font-size: 0.95rem;
+  font-weight: 600;
+  border-radius: 10px;
+  text-decoration: none;
+  transition: background 0.2s ease, transform 0.15s ease;
+  box-shadow: 0 4px 14px rgba(88, 101, 242, 0.35);
+  border: none;
+}
+
+.btn-discord-login:hover {
+  background: #4752c4;
+  color: #ffffff;
+  transform: translateY(-1px);
+}
+
+.btn-discord-login svg {
+  width: 20px;
+  height: 20px;
+  fill: currentColor;
+}
+
+.unauth-back-link {
+  display: inline-block;
+  margin-top: 18px;
+  font-size: 0.85rem;
   color: #64748b;
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+
+.unauth-back-link:hover {
+  color: #cbd5e1;
 }
 
 /* ---------- 控制面板佈局容器 ---------- */
