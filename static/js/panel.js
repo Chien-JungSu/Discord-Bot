@@ -21,6 +21,64 @@
   const activeServerDisplay = document.getElementById('active-server-display');
   const activeServerIdDisplay = document.getElementById('active-server-id-display');
   const btnSwitchOwner = document.getElementById('btn-switch-owner');
+  const viewServerSelection = document.getElementById('view-server-selection');
+  const viewServerSettings = document.getElementById('view-server-settings');
+  const btnBackToServers = document.getElementById('btn-back-to-servers');
+  const btnSidebarBack = document.getElementById('btn-sidebar-back');
+  const btnDropdownOwner = document.getElementById('btn-dropdown-owner');
+
+  const modalConfirm = document.getElementById('modal-confirm-clear');
+  const modalConfirmTitle = document.getElementById('modal-confirm-title');
+  const modalConfirmMessage = document.getElementById('modal-confirm-message');
+  const modalConfirmOk = document.getElementById('modal-confirm-ok');
+  const modalConfirmCancel = document.getElementById('modal-confirm-cancel');
+  const modalConfirmClose = document.getElementById('modal-confirm-close');
+
+  // ---------- 清除設定確認 Modal (Confirm Modal) ----------
+  let currentConfirmCallback = null;
+
+  function closeConfirmModal() {
+    if (modalConfirm) modalConfirm.style.display = 'none';
+    currentConfirmCallback = null;
+  }
+
+  function showConfirmModal({ title, message, confirmText, cancelText, onConfirm }) {
+    if (!modalConfirm) {
+      if (window.confirm(message)) {
+        onConfirm();
+      }
+      return;
+    }
+    if (modalConfirmTitle && title) modalConfirmTitle.textContent = title;
+    if (modalConfirmMessage && message) modalConfirmMessage.textContent = message;
+    if (modalConfirmOk && confirmText) {
+      const span = modalConfirmOk.querySelector('span');
+      if (span) span.textContent = confirmText;
+    }
+    if (modalConfirmCancel && cancelText) {
+      const span = modalConfirmCancel.querySelector('span');
+      if (span) span.textContent = cancelText;
+    }
+    currentConfirmCallback = onConfirm;
+    modalConfirm.style.display = 'flex';
+  }
+
+  if (modalConfirmOk) {
+    modalConfirmOk.addEventListener('click', () => {
+      const cb = currentConfirmCallback;
+      closeConfirmModal();
+      if (typeof cb === 'function') {
+        cb();
+      }
+    });
+  }
+  if (modalConfirmCancel) modalConfirmCancel.addEventListener('click', closeConfirmModal);
+  if (modalConfirmClose) modalConfirmClose.addEventListener('click', closeConfirmModal);
+  if (modalConfirm) {
+    modalConfirm.addEventListener('click', (e) => {
+      if (e.target === modalConfirm) closeConfirmModal();
+    });
+  }
 
   // ---------- Toast 提示通知函式 ----------
   function showToast(message, type = 'success') {
@@ -37,6 +95,51 @@
       toast.style.transition = 'all 0.3s ease';
       setTimeout(() => toast.remove(), 300);
     }, 4000);
+  }
+
+  // ---------- 視圖切換與返回伺服器清單 ----------
+  function returnToServerSelection() {
+    if (viewServerSettings) viewServerSettings.style.display = 'none';
+    if (viewServerSelection) viewServerSelection.style.display = 'block';
+    currentGuildId = null;
+    currentGuildName = '';
+    serverChips.forEach((c) => c.classList.remove('active'));
+    if (window.location.hash) {
+      history.replaceState(null, '', window.location.pathname);
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  if (btnBackToServers) {
+    btnBackToServers.addEventListener('click', returnToServerSelection);
+  }
+  if (btnSidebarBack) {
+    btnSidebarBack.addEventListener('click', returnToServerSelection);
+  }
+
+  function openSettingsViewForOwner() {
+    if (viewServerSelection) viewServerSelection.style.display = 'none';
+    if (viewServerSettings) viewServerSettings.style.display = 'block';
+    if (botInviteBanner) botInviteBanner.style.display = 'none';
+
+    if (activeServerDisplay) activeServerDisplay.textContent = '👑 炙彗JI器人 (管理員設定)';
+    if (activeServerIdDisplay) activeServerIdDisplay.textContent = '系統管理專區';
+
+    switchTab('tab-owner');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  if (btnDropdownOwner) {
+    btnDropdownOwner.addEventListener('click', () => {
+      const userDropdown = document.getElementById('topbar-user-dropdown');
+      const userBtn = document.getElementById('topbar-user-btn');
+      if (userDropdown) userDropdown.classList.remove('is-open');
+      if (userBtn) {
+        userBtn.classList.remove('is-active');
+        userBtn.setAttribute('aria-expanded', 'false');
+      }
+      openSettingsViewForOwner();
+    });
   }
 
   // ---------- Tab 切換邏輯 ----------
@@ -74,7 +177,7 @@
 
   if (btnSwitchOwner) {
     btnSwitchOwner.addEventListener('click', () => {
-      switchTab('tab-owner');
+      openSettingsViewForOwner();
     });
   }
 
@@ -94,8 +197,14 @@
       botInviteBanner.style.display = botInGuild ? 'none' : 'flex';
     }
 
+    // 切換視圖至伺服器設定畫面
+    if (viewServerSelection) viewServerSelection.style.display = 'none';
+    if (viewServerSettings) viewServerSettings.style.display = 'block';
+
     // 載入該伺服器的即時設定與頻道清單
+    switchTab('tab-welcome');
     loadGuildData(currentGuildId);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
   serverChips.forEach((chip) => {
@@ -208,29 +317,35 @@
 
   const btnClearWelcome = document.getElementById('btn-clear-welcome');
   if (btnClearWelcome) {
-    btnClearWelcome.addEventListener('click', async () => {
+    btnClearWelcome.addEventListener('click', () => {
       if (!currentGuildId) return;
-      if (!confirm('確定要清除並停用此伺服器的歡迎訊息設定嗎？')) return;
-
-      try {
-        const res = await fetch(`/api/panel/guild/${currentGuildId}/welcome`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'clear' }),
-        });
-        const data = await res.json();
-        if (res.ok) {
-          showToast(data.message || '設定已清除');
-          document.getElementById('select-welcome-channel').value = '';
-          document.getElementById('select-rules-channel').value = '';
-          document.getElementById('select-role-channel').value = '';
-          document.getElementById('select-auto-role').value = '';
-        } else {
-          showToast(data.message || '清除失敗', 'error');
-        }
-      } catch (err) {
-        showToast('請求發生網路錯誤', 'error');
-      }
+      showConfirmModal({
+        title: '⚠️ 確認清除歡迎設定',
+        message: '確定要清除此伺服器的「歡迎訊息與身分組」設定嗎？清除後新進成員將不會收到歡迎訊息與自動身分組，此操作無法復原。',
+        confirmText: '確認清除',
+        cancelText: '取消',
+        onConfirm: async () => {
+          try {
+            const res = await fetch(`/api/panel/guild/${currentGuildId}/welcome`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'clear' }),
+            });
+            const data = await res.json();
+            if (res.ok) {
+              showToast(data.message || '設定已清除');
+              document.getElementById('select-welcome-channel').value = '';
+              document.getElementById('select-rules-channel').value = '';
+              document.getElementById('select-role-channel').value = '';
+              document.getElementById('select-auto-role').value = '';
+            } else {
+              showToast(data.message || '清除失敗', 'error');
+            }
+          } catch (err) {
+            showToast('請求發生網路錯誤', 'error');
+          }
+        },
+      });
     });
   }
 
@@ -262,24 +377,32 @@
 
   const btnClearMusic = document.getElementById('btn-clear-music');
   if (btnClearMusic) {
-    btnClearMusic.addEventListener('click', async () => {
+    btnClearMusic.addEventListener('click', () => {
       if (!currentGuildId) return;
-      try {
-        const res = await fetch(`/api/panel/guild/${currentGuildId}/music`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ music_channel_id: null }),
-        });
-        const data = await res.json();
-        if (res.ok) {
-          showToast(data.message || '已解除頻道綁定');
-          document.getElementById('select-music-channel').value = '';
-        } else {
-          showToast(data.message || '操作失敗', 'error');
-        }
-      } catch (err) {
-        showToast('請求發生網路錯誤', 'error');
-      }
+      showConfirmModal({
+        title: '⚠️ 確認清除音樂點歌設定',
+        message: '確定要解除此伺服器的「專屬點歌頻道」綁定嗎？清除後所有文字頻道皆可使用點歌指令。',
+        confirmText: '確認清除',
+        cancelText: '取消',
+        onConfirm: async () => {
+          try {
+            const res = await fetch(`/api/panel/guild/${currentGuildId}/music`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ music_channel_id: null }),
+            });
+            const data = await res.json();
+            if (res.ok) {
+              showToast(data.message || '已解除頻道綁定');
+              document.getElementById('select-music-channel').value = '';
+            } else {
+              showToast(data.message || '操作失敗', 'error');
+            }
+          } catch (err) {
+            showToast('請求發生網路錯誤', 'error');
+          }
+        },
+      });
     });
   }
 
@@ -865,11 +988,18 @@
 
   // ---------- 初始化動作 ----------
   document.addEventListener('DOMContentLoaded', () => {
-    // 預設選中第一個伺服器
-    const firstChip = document.querySelector('.server-chip');
-    if (firstChip) {
-      selectGuild(firstChip);
+    // 檢查網址 hash
+    const hash = window.location.hash;
+    if (hash === '#owner') {
+      openSettingsViewForOwner();
+    } else if (hash && hash.startsWith('#guild-')) {
+      const targetGid = hash.replace('#guild-', '');
+      const targetChip = document.querySelector(`.server-chip[data-guild-id="${targetGid}"]`);
+      if (targetChip) {
+        selectGuild(targetChip);
+      }
     }
+    // 預設留在伺服器選擇畫面，不自動跳轉
   });
 })();
 

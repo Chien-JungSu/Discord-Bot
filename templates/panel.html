@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>炙彗JI器人 - 官方控制面板</title>
+  <title>炙彗JI器人 - 控制面板</title>
   <link rel="icon" type="image/png"
     href="{{ url_for('static', filename='logo.png') }}" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -66,6 +66,15 @@
               </div>
             </div>
             <div class="dropdown-divider"></div>
+            {% if is_owner %}
+            <button class="dropdown-item dropdown-owner-btn" id="btn-dropdown-owner" type="button">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>
+              </svg>
+              <span>管理員設定</span>
+            </button>
+            <div class="dropdown-divider"></div>
+            {% endif %}
             <a class="dropdown-item dropdown-logout-btn" href="/logout">
               <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
                 <path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/>
@@ -167,70 +176,97 @@
     {% else %}
     <!-- 已登入且擁有可管理伺服器：控制面板核心 -->
 
-    <!-- 頂部伺服器選擇與專區切換器 -->
-    <section class="server-selector-section">
-      <div class="section-header-row">
-        <div>
-          <h3 class="section-title">選擇管理伺服器或控制專區</h3>
-          <p class="section-desc">點擊伺服器圖示以切換設定；若伺服器尚未加入機器人，可一鍵完成邀請。</p>
-        </div>
-        {% if is_owner %}
-        <button id="btn-switch-owner" class="btn-owner-zone" type="button">
-          <span>⚙️ 管理員設定</span>
-        </button>
-        {% endif %}
+    <!-- 1. 伺服器選擇畫面 (初始僅顯示此畫面) -->
+    <section id="view-server-selection" class="server-selector-section server-selection-view">
+      <div class="server-selection-header">
+        <h3 class="selection-title">選擇管理伺服器</h3>
+        <p class="selection-desc">請選擇您要進行設定的 Discord 伺服器；若機器人尚未加入，可點擊進行邀請。</p>
       </div>
 
-      <div class="server-cards-scroll">
+      <div class="server-cards-grid">
         {% for g in guilds %}
-        <div class="server-chip {% if loop.first %}active{% endif %}" data-guild-id="{{ g.id }}" data-guild-name="{{ g.name }}" data-bot-in="{{ 'true' if g.bot_in_guild else 'false' }}">
-          {% if g.icon_url %}
-          <img class="server-icon" src="{{ g.icon_url }}" alt="{{ g.name }}" />
-          {% else %}
-          <div class="server-icon-placeholder">{{ g.name[:2] }}</div>
-          {% endif %}
-          <div class="server-info">
-            <span class="server-name" title="{{ g.name }}">{{ g.name }}</span>
-            {% if g.bot_in_guild %}
-            <span class="server-status in-guild">🟢 機器人在線</span>
+        <div class="server-chip server-select-card" data-guild-id="{{ g.id }}" data-guild-name="{{ g.name }}" data-bot-in="{{ 'true' if g.bot_in_guild else 'false' }}">
+          <div class="card-server-icon-wrapper">
+            {% if g.icon_url %}
+            <img class="server-icon card-server-icon" src="{{ g.icon_url }}" alt="{{ g.name }}" />
             {% else %}
-            <span class="server-status not-in-guild">⚪ 尚未邀請</span>
+            <div class="server-icon-placeholder card-server-icon-placeholder">{{ g.name[:2] }}</div>
             {% endif %}
           </div>
-        </div>
-        {% else %}
-        <div class="no-guilds-box">
-          <p>⚠️ 您目前沒有具備「管理伺服器」或「管理員」權限的伺服器。</p>
-          <a class="btn secondary" href="{{ invite_url }}" target="_blank" rel="noreferrer">
-            <span>邀請機器人加入新伺服器</span>
-          </a>
+          <div class="card-server-details server-info">
+            <h4 class="server-name card-server-name" title="{{ g.name }}">{{ g.name }}</h4>
+            <div class="card-server-status">
+              {% if g.bot_in_guild %}
+              <span class="server-status in-guild status-badge">🟢 機器人在線</span>
+              {% else %}
+              <span class="server-status not-in-guild status-badge">⚪ 尚未邀請</span>
+              {% endif %}
+            </div>
+          </div>
+          <div class="card-server-action">
+            {% if g.bot_in_guild %}
+            <span class="btn-manage-guild">
+              <span>前往設定</span>
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                <path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41z"/>
+              </svg>
+            </span>
+            {% else %}
+            <span class="btn-invite-guild">
+              <span>邀請加入</span>
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+              </svg>
+            </span>
+            {% endif %}
+          </div>
         </div>
         {% endfor %}
       </div>
     </section>
 
-    <!-- 伺服器未加入機器人提示卡 -->
-    <div id="bot-invite-banner" class="invite-banner" style="display: none;">
-      <div class="invite-banner-content">
-        <span class="invite-banner-icon">🤖</span>
-        <div>
-          <h4>機器人尚未加入此伺服器</h4>
-          <p>請先點擊右方按鈕邀請「炙彗JI器人」加入伺服器，以啟用所有自訂控制面板功能。</p>
-        </div>
+    <!-- 2. 伺服器詳細設定畫面 (點選伺服器後顯示，初始隱藏) -->
+    <div id="view-server-settings" class="server-settings-view" style="display: none;">
+      <!-- 頂部左上角返回按鈕 -->
+      <div class="settings-nav-header">
+        <button id="btn-back-to-servers" class="btn-back-to-servers" type="button" title="回到選擇伺服器">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+            <path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/>
+          </svg>
+          <span>← 返回選擇伺服器</span>
+        </button>
       </div>
-      <a id="btn-invite-to-guild" class="btn primary" href="{{ invite_url }}" target="_blank" rel="noreferrer">
-        <span>🚀 立即授權邀請加入</span>
-      </a>
-    </div>
 
-    <!-- 主要設定工作區 -->
-    <div class="panel-content-grid">
-      <!-- 側邊欄導航 (Tabs) -->
-      <aside class="panel-sidebar">
-        <div class="sidebar-header">
-          <span id="active-server-display" class="active-server-name">載入中...</span>
-          <span id="active-server-id-display" class="active-server-id">ID: --</span>
+      <!-- 伺服器未加入機器人提示卡 -->
+      <div id="bot-invite-banner" class="invite-banner" style="display: none;">
+        <div class="invite-banner-content">
+          <span class="invite-banner-icon">🤖</span>
+          <div>
+            <h4>機器人尚未加入此伺服器</h4>
+            <p>請先點擊右方按鈕邀請「炙彗JI器人」加入伺服器，以啟用所有自訂控制面板功能。</p>
+          </div>
         </div>
+        <a id="btn-invite-to-guild" class="btn primary" href="{{ invite_url }}" target="_blank" rel="noreferrer">
+          <span>🚀 立即授權邀請加入</span>
+        </a>
+      </div>
+
+      <!-- 主要設定工作區 -->
+      <div class="panel-content-grid">
+        <!-- 側邊欄導航 (Tabs) -->
+        <aside class="panel-sidebar">
+          <div class="sidebar-header">
+            <button id="btn-sidebar-back" class="btn-sidebar-back" type="button" title="切換伺服器">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+                <path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/>
+              </svg>
+              <span>切換伺服器</span>
+            </button>
+            <div class="sidebar-server-meta">
+              <span id="active-server-display" class="active-server-name">載入中...</span>
+              <span id="active-server-id-display" class="active-server-id">ID: --</span>
+            </div>
+          </div>
 
         <nav class="sidebar-nav">
           <button class="nav-tab active" data-tab="tab-welcome">
@@ -752,6 +788,31 @@
         </form>
       </div>
     </div>
+
+    <!-- 清除設定確認 Modal 彈出視窗 -->
+    <div id="modal-confirm-clear" class="modal-backdrop" style="display: none;" aria-hidden="true">
+      <div class="modal-card modal-confirm-card">
+        <div class="modal-header">
+          <h3 id="modal-confirm-title">⚠️ 確認清除設定</h3>
+          <button id="modal-confirm-close" class="btn-close-modal" type="button">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p id="modal-confirm-message" class="confirm-message">
+            確定要清除此伺服器的設定嗎？清除後設定將被還原為預設值，且該功能將暫時停用。
+          </p>
+        </div>
+        <div class="modal-footer confirm-footer">
+          <button type="button" id="modal-confirm-cancel" class="btn secondary">
+            <span>取消</span>
+          </button>
+          <button type="button" id="modal-confirm-ok" class="btn btn-confirm-danger">
+            <span>確認清除</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    </div> <!-- /#view-server-settings -->
     {% endif %}
   </main>
 

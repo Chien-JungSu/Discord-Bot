@@ -329,120 +329,272 @@
   color: var(--muted);
 }
 
-.btn-owner-zone {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 18px;
-  border-radius: 9999px;
-  background: linear-gradient(135deg, rgba(251, 191, 36, 0.22) 0%, rgba(167, 139, 250, 0.22) 100%);
-  border: 1px solid rgba(251, 191, 36, 0.5);
-  color: #fde68a;
+/* ---------- 頂部下拉頭像中「管理員設定」按鈕 ---------- */
+button.dropdown-item.dropdown-owner-btn {
+  width: 100%;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  color: #38bdf8;
+}
+
+button.dropdown-item.dropdown-owner-btn:hover {
+  background: rgba(56, 189, 248, 0.14);
+  color: #ffffff;
+}
+
+/* ---------- 伺服器選擇獨立畫面 (Server Selection View) ---------- */
+.server-selection-view {
+  margin: 30px auto 60px;
+  max-width: 1040px;
+}
+
+.server-selection-header {
+  margin-bottom: 24px;
+}
+
+.selection-title {
+  font-size: 1.5rem;
   font-weight: 800;
-  font-size: 0.88rem;
-  cursor: pointer;
-  box-shadow: 0 4px 16px rgba(251, 191, 36, 0.25), inset 0 1px 1px rgba(255, 255, 255, 0.3);
-  transition: all 0.24s var(--motion-spring);
+  color: #ffffff;
+  margin: 0 0 6px;
+  letter-spacing: -0.02em;
 }
 
-.btn-owner-zone:hover {
-  transform: translateY(-2px) scale(1.03);
-  border-color: #fbbf24;
-  box-shadow: 0 6px 22px rgba(251, 191, 36, 0.4);
+.selection-desc {
+  font-size: 0.95rem;
+  color: #94a3b8;
+  margin: 0;
+  line-height: 1.5;
 }
 
-.server-cards-scroll {
-  display: flex;
-  gap: 14px;
-  overflow-x: auto;
-  padding: 6px 2px 14px;
+.server-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+  gap: 18px;
 }
 
-.server-cards-scroll::-webkit-scrollbar {
-  height: 6px;
-}
-
-.server-cards-scroll::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.2);
-  border-radius: 9999px;
-}
-
-.server-chip {
-  flex: 0 0 auto;
+.server-select-card {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 18px;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  gap: 16px;
+  padding: 16px 20px;
+  background: rgba(15, 23, 42, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 20px;
   cursor: pointer;
-  transition: all 0.24s var(--motion-spring);
-  min-width: 200px;
+  transition: all 0.25s var(--motion-spring);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3), inset 0 1px 1px rgba(255, 255, 255, 0.1);
+  position: relative;
+  overflow: hidden;
 }
 
-.server-chip:hover {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(125, 211, 252, 0.4);
-  transform: translateY(-2px);
+.server-select-card:hover {
+  background: rgba(30, 41, 59, 0.85);
+  border-color: rgba(125, 211, 252, 0.45);
+  transform: translateY(-3px);
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.45), 0 0 20px rgba(56, 189, 248, 0.2);
 }
 
-.server-chip.active {
-  background: linear-gradient(135deg, rgba(125, 211, 252, 0.18) 0%, rgba(56, 189, 248, 0.06) 100%);
-  border-color: rgba(125, 211, 252, 0.65);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3), 0 0 16px rgba(125, 211, 252, 0.25);
+.card-server-icon-wrapper {
+  flex-shrink: 0;
 }
 
-.server-icon, .server-icon-placeholder {
-  width: 40px;
-  height: 40px;
-  border-radius: 12px;
+.card-server-icon, .card-server-icon-placeholder {
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
   object-fit: cover;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
 }
 
-.server-icon-placeholder {
-  background: linear-gradient(135deg, #38bdf8 0%, #818cf8 100%);
+.card-server-icon-placeholder {
+  background: linear-gradient(135deg, #38bdf8 0%, #6366f1 100%);
   color: #ffffff;
   display: flex;
   align-items: center;
   justify-content: center;
   font-weight: 800;
-  font-size: 1rem;
+  font-size: 1.25rem;
 }
 
-.server-info {
+.card-server-details {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  gap: 4px;
 }
 
-.server-name {
-  font-size: 0.92rem;
+.card-server-name {
+  font-size: 1.05rem;
   font-weight: 700;
   color: #ffffff;
+  margin: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 140px;
 }
 
-.server-status {
-  font-size: 0.72rem;
+.card-server-status {
+  display: flex;
+  align-items: center;
+}
+
+.status-badge {
+  font-size: 0.78rem;
   font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
-.server-status.in-guild {
-  color: var(--secondary);
+.status-badge.in-guild {
+  color: #34d399;
 }
 
-.server-status.not-in-guild {
+.status-badge.not-in-guild {
   color: #94a3b8;
 }
 
-.no-guilds-box {
-  padding: 16px;
-  color: var(--muted);
+.card-server-action {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+.btn-manage-guild {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: #38bdf8;
+  padding: 6px 12px;
+  border-radius: 10px;
+  background: rgba(56, 189, 248, 0.1);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  transition: all 0.2s ease;
+}
+
+.server-select-card:hover .btn-manage-guild {
+  background: #38bdf8;
+  color: #0f172a;
+}
+
+.btn-invite-guild {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: #fbbf24;
+  padding: 6px 12px;
+  border-radius: 10px;
+  background: rgba(251, 191, 36, 0.1);
+  border: 1px solid rgba(251, 191, 36, 0.3);
+  transition: all 0.2s ease;
+}
+
+.server-select-card:hover .btn-invite-guild {
+  background: #fbbf24;
+  color: #0f172a;
+}
+
+/* ---------- 伺服器設定頂部導航 (Settings Top Nav) ---------- */
+.settings-nav-header {
+  margin-bottom: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.btn-back-to-servers {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 18px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #e2e8f0;
   font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  backdrop-filter: blur(12px);
+}
+
+.btn-back-to-servers:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(125, 211, 252, 0.5);
+  color: #38bdf8;
+  transform: translateX(-2px);
+}
+
+.btn-sidebar-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  padding: 5px 12px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #94a3b8;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-sidebar-back:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.sidebar-server-meta {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------- 清除設定確認 Modal ---------- */
+.modal-confirm-card {
+  max-width: 440px;
+}
+
+.confirm-message {
+  font-size: 0.95rem;
+  color: #cbd5e1;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.confirm-footer {
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.btn-confirm-danger {
+  background: #ef4444;
+  color: #ffffff;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  font-weight: 600;
+  border-radius: 12px;
+  padding: 10px 20px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-confirm-danger:hover {
+  background: #dc2626;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(239, 68, 68, 0.4);
 }
 
 /* ---------- 邀請橫幅 ---------- */

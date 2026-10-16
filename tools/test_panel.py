@@ -235,3 +235,34 @@ def test_panel_user_without_manageable_guilds():
     assert 'modal-auto-reply' not in html
 
 
+def test_panel_server_selection_navigation_and_confirm_modal():
+    client = app.test_client()
+
+    # 1. 一般管理員：擁有伺服器選擇畫面、設定畫面包含返回按鈕與清除設定確認 Modal，但沒有管理員設定入口
+    client.get('/api/auth/dev-login?role=admin')
+    res_admin = client.get('/panel')
+    assert res_admin.status_code == 200
+    admin_html = res_admin.data.decode('utf-8')
+    assert 'view-server-selection' in admin_html
+    assert 'server-cards-grid' in admin_html
+    assert 'view-server-settings' in admin_html
+    assert 'btn-back-to-servers' in admin_html
+    assert 'btn-sidebar-back' in admin_html
+    assert 'modal-confirm-clear' in admin_html
+    assert 'modal-confirm-ok' in admin_html
+    assert 'btn-confirm-danger' in admin_html
+    assert 'btn-dropdown-owner' not in admin_html
+
+    # 2. 機器人擁有者：頭像下拉選單中包含管理員設定入口 (btn-dropdown-owner)
+    client.get('/api/auth/dev-login?role=owner')
+    res_owner = client.get('/panel')
+    assert res_owner.status_code == 200
+    owner_html = res_owner.data.decode('utf-8')
+    assert 'btn-dropdown-owner' in owner_html
+    assert 'view-server-selection' in owner_html
+    assert 'view-server-settings' in owner_html
+    assert 'btn-back-to-servers' in owner_html
+    assert 'modal-confirm-clear' in owner_html
+
+
+
