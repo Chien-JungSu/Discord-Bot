@@ -894,40 +894,54 @@ select.form-control option {
   margin-top: 4px;
 }
 
-/* ---------- 👑 擁有者專屬控制面板專用樣式 ---------- */
-.owner-zone-pane {
-  border-color: rgba(251, 191, 36, 0.3) !important;
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5), 0 0 30px rgba(251, 191, 36, 0.08) !important;
+/* ---------- 管理員設定專用樣式（按類別劃分子類別） ---------- */
+.admin-categories-wrapper {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+  margin-bottom: 28px;
 }
 
-.tag-owner-gold {
-  background: linear-gradient(135deg, rgba(251, 191, 36, 0.25) 0%, rgba(251, 191, 36, 0.08) 100%) !important;
-  border-color: rgba(251, 191, 36, 0.6) !important;
-  color: #fbbf24 !important;
+.admin-category-card {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 18px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
-.owner-header-accent h2 {
-  background: linear-gradient(180deg, #fef08a 0%, #fbbf24 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
+.admin-category-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
-.owner-subtabs {
+.admin-cat-icon {
+  font-size: 1.1rem;
+}
+
+.admin-cat-title {
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: #e2e8f0;
+  letter-spacing: 0.02em;
+}
+
+.admin-subtabs-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
-  margin-bottom: 24px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  padding-bottom: 14px;
+  gap: 8px;
 }
 
 .owner-subtab-btn {
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.12);
   color: var(--muted);
-  padding: 10px 16px;
-  border-radius: 12px;
-  font-size: 0.88rem;
+  padding: 8px 14px;
+  border-radius: 10px;
+  font-size: 0.86rem;
   font-weight: 700;
   cursor: pointer;
   transition: all 0.2s ease;
@@ -935,14 +949,15 @@ select.form-control option {
 
 .owner-subtab-btn:hover {
   background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(125, 211, 252, 0.35);
   color: #ffffff;
 }
 
 .owner-subtab-btn.active {
-  background: linear-gradient(135deg, rgba(251, 191, 36, 0.2) 0%, rgba(167, 139, 250, 0.15) 100%);
-  border-color: #fbbf24;
-  color: #fde68a;
-  box-shadow: 0 4px 12px rgba(251, 191, 36, 0.2);
+  background: linear-gradient(135deg, rgba(125, 211, 252, 0.2) 0%, rgba(99, 102, 241, 0.15) 100%);
+  border-color: rgba(125, 211, 252, 0.5);
+  color: #ffffff;
+  box-shadow: 0 4px 14px rgba(125, 211, 252, 0.2);
 }
 
 .owner-subpane {

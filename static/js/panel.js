@@ -541,12 +541,12 @@
     commands.forEach((c) => {
       const isOwnerOnly = Boolean(c.owner_guild_only);
       const permBadge = isOwnerOnly
-        ? '<span class="tag tag-owner-gold">👑 擁有者專屬 (@owner_guild_only)</span>'
+        ? '<span class="tag">管理員專用</span>'
         : '<span class="tag">全體成員 / 管理員</span>';
 
       html += `
         <tr>
-          <td><span class="cmd-badge ${isOwnerOnly ? 'owner' : ''}">${escapeHtml(c.name)}</span></td>
+          <td><span class="cmd-badge">${escapeHtml(c.name)}</span></td>
           <td>${escapeHtml(c.category)}</td>
           <td>${escapeHtml(c.description)}</td>
           <td>${permBadge}</td>

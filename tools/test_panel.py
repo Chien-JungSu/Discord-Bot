@@ -61,6 +61,7 @@ def test_panel_non_owner_isolation():
     assert 'SERVER ADMIN' in html
     assert 'tab-owner' not in html
     assert '擁有者專屬控制面板' not in html
+    assert '管理員設定' not in html
     assert 'economy_admin' not in html
 
     # 2. 後端 API 防護：非擁有者調用所有 owner API 一律回傳 403 Forbidden
@@ -96,12 +97,15 @@ def test_panel_owner_access():
     res_login = client.get('/api/auth/dev-login?role=owner')
     assert res_login.status_code == 302
 
-    # 1. 前端頁面：擁有者正常載入擁有者專區
+    # 1. 前端頁面：擁有者正常載入管理員設定專區與分類子類別
     res_panel = client.get('/panel')
     html = res_panel.data.decode('utf-8')
     assert 'BOT OWNER' in html
     assert 'tab-owner' in html
-    assert '擁有者專屬控制面板' in html
+    assert '管理員設定' in html
+    assert '經濟系統設定' in html
+    assert '系統維護設定' in html
+    assert '擁有者專屬控制面板' not in html
 
     # 2. 後端 API：擁有者可正常存取經濟參數、Cog 清單與 API 配額
     res_econ = client.get('/api/panel/owner/economy-config')
