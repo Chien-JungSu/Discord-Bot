@@ -459,7 +459,7 @@ code:hover {
 .site-topbar {
   position: sticky;
   top: 12px;
-  z-index: 100;
+  z-index: 205;
   max-width: 1040px;
   margin: 0 auto 24px;
   padding: 10px 18px;
@@ -695,7 +695,7 @@ code:hover {
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.65), inset 0 1px 1px rgba(255, 255, 255, 0.15);
   backdrop-filter: blur(28px) saturate(200%);
   -webkit-backdrop-filter: blur(28px) saturate(200%);
-  z-index: 110;
+  z-index: 215;
   opacity: 0;
   visibility: hidden;
   transform: translateY(-8px) scale(0.96);
@@ -788,7 +788,7 @@ code:hover {
   background: rgba(0, 0, 0, 0.5);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
-  z-index: 98;
+  z-index: 200;
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.25s ease;
@@ -812,7 +812,7 @@ code:hover {
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6), inset 0 1px 1px rgba(255, 255, 255, 0.15);
   backdrop-filter: blur(28px) saturate(200%);
   -webkit-backdrop-filter: blur(28px) saturate(200%);
-  z-index: 105;
+  z-index: 210;
   opacity: 0;
   visibility: hidden;
   transform: translateY(-8px) scale(0.96);
@@ -823,6 +823,14 @@ code:hover {
   opacity: 1;
   visibility: visible;
   transform: translateY(0) scale(1);
+}
+
+/* 當全站導航選單展開時，完全隱藏頁面專屬的側邊欄觸發鈕與邊緣感應區，避免圖層衝突 */
+body.site-nav-open .docs-sidebar-trigger,
+body.site-nav-open .docs-edge-hotspot {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  visibility: hidden !important;
 }
 
 .drawer-header {

@@ -8,12 +8,23 @@
 (function () {
   'use strict';
 
+  let closeSidebarFn = null;
+
   // ==========================================================================
   // 1. 全站頂端 Bar 選單動畫與開關邏輯
   // ==========================================================================
   const menuBtn = document.getElementById('site-menu-btn');
   const navDrawer = document.getElementById('site-nav-drawer');
   const navBackdrop = document.getElementById('site-nav-backdrop');
+  const userBtn = document.getElementById('topbar-user-btn');
+  const userDropdown = document.getElementById('topbar-user-dropdown');
+
+  function isAnyGlobalMenuOpen() {
+    return !!(
+      (navDrawer && navDrawer.classList.contains('is-open')) ||
+      (userDropdown && userDropdown.classList.contains('is-open'))
+    );
+  }
 
   function toggleSiteNav(force) {
     if (!menuBtn || !navDrawer) return;
@@ -22,8 +33,16 @@
     menuBtn.classList.toggle('is-active', isOpen);
     menuBtn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
     navDrawer.classList.toggle('is-open', isOpen);
+    document.body.classList.toggle('site-nav-open', isOpen);
     if (navBackdrop) {
       navBackdrop.classList.toggle('is-open', isOpen);
+    }
+
+    if (isOpen) {
+      toggleUserDropdown(false);
+      if (typeof closeSidebarFn === 'function') {
+        closeSidebarFn();
+      }
     }
   }
 
@@ -56,15 +75,19 @@
   // ==========================================================================
   // 1-2. 頂部 Bar 使用者頭像點擊彈出下拉選單
   // ==========================================================================
-  const userBtn = document.getElementById('topbar-user-btn');
-  const userDropdown = document.getElementById('topbar-user-dropdown');
-
   function toggleUserDropdown(force) {
     if (!userBtn || !userDropdown) return;
     const isOpen = typeof force === 'boolean' ? force : !userDropdown.classList.contains('is-open');
     userDropdown.classList.toggle('is-open', isOpen);
     userBtn.classList.toggle('is-active', isOpen);
     userBtn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+
+    if (isOpen) {
+      toggleSiteNav(false);
+      if (typeof closeSidebarFn === 'function') {
+        closeSidebarFn();
+      }
+    }
   }
 
   if (userBtn && userDropdown) {
@@ -95,6 +118,9 @@
     let isPinned = false;
 
     function openSidebar(pinned = false) {
+      // 若全站導航選單或頭像選單為開啟狀態，禁止打開目錄
+      if (isAnyGlobalMenuOpen()) return;
+
       if (closeTimer) clearTimeout(closeTimer);
       if (pinned) isPinned = true;
       docsSidebar.classList.add('is-open');
@@ -128,9 +154,12 @@
       }
     }
 
+    closeSidebarFn = closeSidebar;
+
     // 觸發方式 A：點擊展開 / 收合 UI 標籤
     if (sidebarTrigger) {
       sidebarTrigger.addEventListener('mouseenter', () => {
+        if (isAnyGlobalMenuOpen()) return;
         if (closeTimer) clearTimeout(closeTimer);
       });
       sidebarTrigger.addEventListener('mouseleave', () => {
@@ -140,6 +169,7 @@
       });
       sidebarTrigger.addEventListener('click', (e) => {
         e.stopPropagation();
+        if (isAnyGlobalMenuOpen()) return;
         if (docsSidebar.classList.contains('is-open')) {
           closeSidebar();
         } else {
@@ -151,12 +181,14 @@
     // 觸發方式 B：滑鼠抵達螢幕最左側邊緣 (Edge Hotspot 或 window mousemove)
     if (edgeHotspot) {
       edgeHotspot.addEventListener('mouseenter', () => {
+        if (isAnyGlobalMenuOpen()) return;
         if (window.innerWidth > 768) openSidebar(false);
       });
     }
 
     // 全域左邊緣感知：當滑鼠游標 X 座標 <= 18px 時自動滑出側邊欄
     document.addEventListener('mousemove', (e) => {
+      if (isAnyGlobalMenuOpen()) return;
       if (window.innerWidth > 768 && !docsSidebar.classList.contains('is-open')) {
         if (e.clientX <= 18) {
           openSidebar(false);
