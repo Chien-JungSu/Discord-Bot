@@ -459,7 +459,7 @@ code:hover {
 .site-topbar {
   position: sticky;
   top: 12px;
-  z-index: 205;
+  z-index: 100;
   max-width: 1040px;
   margin: 0 auto 24px;
   padding: 10px 18px;
@@ -838,7 +838,11 @@ code:hover {
   transform: translateY(0) scale(1);
 }
 
-/* 當全站導航選單展開時，完全隱藏頁面專屬的側邊欄觸發鈕與邊緣感應區，避免圖層衝突 */
+/* 當全站導航選單展開時，將頂部導航列升至最高層級 (205)，並隱藏頁面專屬的側邊欄觸發鈕與邊緣感應區 */
+body.site-nav-open .site-topbar {
+  z-index: 205;
+}
+
 body.site-nav-open .docs-sidebar-trigger,
 body.site-nav-open .docs-edge-hotspot {
   opacity: 0 !important;
