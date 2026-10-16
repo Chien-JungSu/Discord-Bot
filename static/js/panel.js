@@ -99,7 +99,10 @@
 
   // ---------- 視圖切換與返回伺服器清單 ----------
   function returnToServerSelection() {
-    if (viewServerSettings) viewServerSettings.style.display = 'none';
+    if (viewServerSettings) {
+      viewServerSettings.style.display = 'none';
+      viewServerSettings.classList.remove('owner-mode');
+    }
     if (viewServerSelection) viewServerSelection.style.display = 'block';
     currentGuildId = null;
     currentGuildName = '';
@@ -119,7 +122,10 @@
 
   function openSettingsViewForOwner() {
     if (viewServerSelection) viewServerSelection.style.display = 'none';
-    if (viewServerSettings) viewServerSettings.style.display = 'block';
+    if (viewServerSettings) {
+      viewServerSettings.style.display = 'block';
+      viewServerSettings.classList.add('owner-mode');
+    }
     if (botInviteBanner) botInviteBanner.style.display = 'none';
 
     if (activeServerDisplay) activeServerDisplay.textContent = '👑 炙彗JI器人 (管理員設定)';
@@ -199,7 +205,10 @@
 
     // 切換視圖至伺服器設定畫面
     if (viewServerSelection) viewServerSelection.style.display = 'none';
-    if (viewServerSettings) viewServerSettings.style.display = 'block';
+    if (viewServerSettings) {
+      viewServerSettings.style.display = 'block';
+      viewServerSettings.classList.remove('owner-mode');
+    }
 
     // 載入該伺服器的即時設定與頻道清單
     switchTab('tab-welcome');

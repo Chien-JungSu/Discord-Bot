@@ -266,6 +266,11 @@
               <span id="active-server-display" class="active-server-name">載入中...</span>
               <span id="active-server-id-display" class="active-server-id">ID: --</span>
             </div>
+            {% if is_owner %}
+            <div class="owner-sidebar-info" id="owner-sidebar-info">
+              <p>目前處於全域系統管理專區。點擊上方「切換伺服器」即可回到伺服器清單。</p>
+            </div>
+            {% endif %}
           </div>
 
         <nav class="sidebar-nav">
@@ -289,14 +294,6 @@
             <span class="tab-icon">📜</span>
             <span>可用指令狀態</span>
           </button>
-
-          {% if is_owner %}
-          <div class="owner-divider"></div>
-          <button class="nav-tab owner-tab" data-tab="tab-owner">
-            <span class="tab-icon">⚙️</span>
-            <span>管理員設定</span>
-          </button>
-          {% endif %}
         </nav>
       </aside>
 

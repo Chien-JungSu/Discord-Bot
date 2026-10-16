@@ -726,6 +726,30 @@ button.dropdown-item.dropdown-owner-btn:hover {
   margin: 10px 0;
 }
 
+.owner-sidebar-info {
+  display: none;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(251, 191, 36, 0.08);
+  border: 1px solid rgba(251, 191, 36, 0.25);
+  color: #fde68a;
+  font-size: 0.84rem;
+  line-height: 1.6;
+}
+
+.owner-sidebar-info p {
+  margin: 0;
+}
+
+.owner-mode .owner-sidebar-info {
+  display: block !important;
+}
+
+.owner-mode .sidebar-nav {
+  display: none !important;
+}
+
 .nav-tab.owner-tab {
   background: linear-gradient(135deg, rgba(251, 191, 36, 0.1) 0%, rgba(167, 139, 250, 0.1) 100%);
   border-color: rgba(251, 191, 36, 0.3);

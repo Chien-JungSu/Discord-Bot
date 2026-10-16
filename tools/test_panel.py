@@ -110,6 +110,8 @@ def test_panel_owner_access():
     assert 'topbar-owner-crown' in html
     assert 'topbar-avatar-btn' in html
     assert 'topbar-user-dropdown' in html
+    assert 'dropdown-owner-btn' in html
+    assert 'owner-tab' not in html
     assert 'tab-owner' in html
     assert '管理員設定' in html
     assert '經濟系統設定' in html
