@@ -158,8 +158,8 @@ def test_panel_owner_access():
 def test_site_topbar_and_sidebar_ui():
     client = app.test_client()
 
-    # 1. 檢驗首頁、指令頁、控制面板、登入提示頁均具備 site-topbar 與漢堡符號動畫結構
-    for path in ['/', '/docs', '/panel']:
+    # 1. 檢驗首頁、指令頁、控制面板、服務條款、隱私權政策、登入提示頁均具備 site-topbar 與導覽選單
+    for path in ['/', '/docs', '/panel', '/terms', '/privacy', '/api/auth']:
         res = client.get(path)
         assert res.status_code == 200
         html = res.data.decode('utf-8')
@@ -169,17 +169,27 @@ def test_site_topbar_and_sidebar_ui():
         assert 'topbar-brand' in html
         assert '炙彗JI器人' in html
         assert 'site-nav.js' in html
+        assert 'href="/terms"' in html
+        assert '<span>服務條款</span>' in html
+        assert 'href="/privacy"' in html
+        assert '<span>隱私權政策</span>' in html
+        assert '<span>官方支援群</span>' not in html
+        assert '<span>GitHub 原始碼</span>' not in html
 
-    # 檢驗 login_error.html
-    res_err = client.get('/api/auth')
-    assert res_err.status_code == 200
-    err_html = res_err.data.decode('utf-8')
-    assert 'site-topbar' in err_html
-    assert 'site-menu-btn' in err_html
-    assert 'hamburger-bar' in err_html
-    assert 'site-nav.js' in err_html
+    # 2. 檢驗服務條款與隱私權政策頁面內容
+    res_terms = client.get('/terms')
+    assert '服務條款' in res_terms.data.decode('utf-8')
+    res_privacy = client.get('/privacy')
+    assert '隱私權政策' in res_privacy.data.decode('utf-8')
 
-    # 2. 檢驗 docs.html 專屬的側邊欄 UI 與邊緣熱區
+    # 3. 檢驗首頁介紹下方三個按鈕樣式統一為 btn secondary
+    res_home = client.get('/')
+    home_html = res_home.data.decode('utf-8')
+    assert 'btn primary cta-primary' not in home_html
+    cta_section = home_html.split('<div class="cta-row">')[1].split('</div>')[0]
+    assert cta_section.count('class="btn secondary"') == 3
+
+    # 4. 檢驗 docs.html 專屬的側邊欄 UI 與邊緣熱區
     res_docs = client.get('/docs')
     docs_html = res_docs.data.decode('utf-8')
     assert 'docs-edge-hotspot' in docs_html
@@ -199,7 +209,7 @@ def test_local_logo_asset():
     assert res_static.status_code == 200
 
     # 確保所有頁面皆使用本地 logo.png 且不包含 dropbox 外部連結
-    for path in ['/', '/docs', '/panel', '/api/auth']:
+    for path in ['/', '/docs', '/panel', '/terms', '/privacy', '/api/auth']:
         page_res = client.get(path)
         assert page_res.status_code == 200
         page_html = page_res.data.decode('utf-8')

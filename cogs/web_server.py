@@ -208,6 +208,16 @@ def docs_page():
     return render_template('docs.html')
 
 
+@app.route('/terms')
+def terms_page():
+    return render_template('terms.html')
+
+
+@app.route('/privacy')
+def privacy_page():
+    return render_template('privacy.html')
+
+
 @app.route('/logo.png')
 def root_logo():
     return app.send_static_file('logo.png')

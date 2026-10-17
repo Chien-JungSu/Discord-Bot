@@ -879,6 +879,7 @@ h1 {
     gap: 14px;
   }
 
+  .cta-row .btn,
   .cta-primary {
     width: 100%;
     text-align: center;
