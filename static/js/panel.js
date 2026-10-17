@@ -752,7 +752,7 @@
     }
     if (aiInstruction) aiInstruction.value = aiCfg.instruction || '';
     if (aiTemp) aiTemp.value = aiCfg.temperature !== undefined ? aiCfg.temperature : 0.7;
-    if (aiTokens) aiTokens.value = aiCfg.max_tokens !== undefined ? aiCfg.max_tokens : 1000;
+    if (aiTokens) aiTokens.value = aiCfg.max_tokens !== undefined ? aiCfg.max_tokens : 3000;
 
     refreshAllSearchableSelects();
     savedFormState.welcome = getFormState(document.getElementById('form-welcome'));
@@ -959,7 +959,7 @@
         payer_user_id: payerSelect && payerSelect.value ? payerSelect.value : null,
         instruction: document.getElementById('ai-instruction').value,
         temperature: parseFloat(document.getElementById('ai-temperature').value) || 0.7,
-        max_tokens: parseInt(document.getElementById('ai-max-tokens').value) || 1000,
+        max_tokens: parseInt(document.getElementById('ai-max-tokens').value) || 3000,
       };
 
       try {
@@ -1013,7 +1013,7 @@
               if (payerSel) payerSel.value = ai.payer_user_id || '';
               document.getElementById('ai-instruction').value = ai.instruction || '';
               document.getElementById('ai-temperature').value = ai.temperature !== undefined ? ai.temperature : 0.7;
-              document.getElementById('ai-max-tokens').value = ai.max_tokens !== undefined ? ai.max_tokens : 1000;
+              document.getElementById('ai-max-tokens').value = ai.max_tokens !== undefined ? ai.max_tokens : 3000;
               refreshAllSearchableSelects();
               savedFormState.ai = getFormState(formAi);
               checkUnsavedChanges();

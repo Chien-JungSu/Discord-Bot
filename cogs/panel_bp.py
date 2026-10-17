@@ -633,7 +633,7 @@ def get_guild_data(guild_id: str):
             'channel_id': str(ai_cfg.get('channel_id') or ''),
             'payer_user_id': str(ai_cfg.get('payer_user_id') or ''),
             'temperature': float(ai_cfg.get('temperature', 0.7)),
-            'max_tokens': int(ai_cfg.get('max_tokens', 1000)),
+            'max_tokens': int(ai_cfg.get('max_tokens', 3000)),
         },
         'ai_providers': ai_providers_status,
         'auto_reply_rules': auto_reply_rules,
@@ -669,7 +669,7 @@ def save_guild_ai(guild_id: str):
                 'channel_id': str(updated.get('channel_id') or ''),
                 'payer_user_id': str(updated.get('payer_user_id') or ''),
                 'temperature': float(updated.get('temperature', 0.7)),
-                'max_tokens': int(updated.get('max_tokens', 1000)),
+                'max_tokens': int(updated.get('max_tokens', 3000)),
             },
         })
 
@@ -707,7 +707,7 @@ def save_guild_ai(guild_id: str):
             'channel_id': str(updated.get('channel_id') or ''),
             'payer_user_id': str(updated.get('payer_user_id') or ''),
             'temperature': float(updated.get('temperature', 0.7)),
-            'max_tokens': int(updated.get('max_tokens', 1000)),
+            'max_tokens': int(updated.get('max_tokens', 3000)),
         },
     })
 

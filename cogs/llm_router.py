@@ -37,11 +37,45 @@ def safe_log(msg: str) -> None:
 
 
 def strip_thinking_tags(text: str) -> str:
-    """去除部分開源思考推理模型 (如 DeepSeek R1 / Qwen Reasoning) 輸出的 <think>...</think> 區塊。"""
+    """去除各類開源與專屬思考推理模型輸出的思考過程區塊 (<think>, <thought>, <thinking>, <reasoning> 等)。"""
     if not text:
         return ""
-    cleaned = re.sub(r'<think>[\s\S]*?</think>', '', text, flags=re.IGNORECASE).strip()
-    return cleaned if cleaned else text.strip()
+
+    cleaned = text
+
+    # 1. 移除已閉合的各類 thinking 標籤 (支援 think, thought, thinking, reasoning 及其屬性)
+    cleaned = re.sub(
+        r'<(think|thought|thinking|reasoning)(?:\s[^>]*)?>[\s\S]*?</\1>',
+        '',
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+
+    # 2. 移除 markdown code block 格式的思考區塊 (如 ```thought ... ```)
+    cleaned = re.sub(
+        r'```(?:thought|thinking|reasoning)[\s\S]*?```',
+        '',
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+
+    # 3. 處理未閉合的思考標籤 (例如因 Token 限制或逾時在思考途中中斷)
+    cleaned = re.sub(
+        r'<(think|thought|thinking|reasoning)(?:\s[^>]*)?>[\s\S]*$',
+        '',
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+
+    # 4. 移除殘留的獨立閉合標籤
+    cleaned = re.sub(
+        r'</(think|thought|thinking|reasoning)>',
+        '',
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+
+    return cleaned.strip()
 
 
 # 已停用或過期模型自動轉發對照表 (確保舊設定或資料庫殘留模型不致報 404/410)
@@ -288,7 +322,7 @@ class MultiProviderLLMRouter:
         preferred_provider_id: Optional[str] = None,
         preferred_model: Optional[str] = None,
         temperature: float = 0.7,
-        max_tokens: int = 1000,
+        max_tokens: int = 3000,
     ) -> Tuple[Optional[str], Optional[str], Dict[str, Any]]:
         """執行跨提供商智慧容錯對話請求。
 
@@ -367,14 +401,29 @@ class MultiProviderLLMRouter:
             provider_exhausted = False
             for model_attempt_idx, prov_model in enumerate(models_to_try):
                 try:
-                    # 嚴格 15.0 秒單次請求逾時
-                    async with asyncio.timeout(15.0):
-                        response = await client.chat.completions.create(
-                            model=prov_model,
-                            messages=formatted_messages,
-                            temperature=temperature,
-                            max_tokens=max_tokens,
-                        )
+                    call_kwargs: Dict[str, Any] = {
+                        "model": prov_model,
+                        "messages": formatted_messages,
+                        "temperature": temperature,
+                        "max_tokens": max_tokens,
+                    }
+                    # 若為 Gemini 且支援思考預算，嘗試禁用 thinking_budget 以免浪費 token 預算導致回覆被切斷
+                    if prov.id == "gemini":
+                        call_kwargs["extra_body"] = {"thinking_budget": 0}
+
+                    # 寬裕 35.0 秒單次請求逾時（給予充分的生成時間，避免回覆到一半中斷）
+                    try:
+                        async with asyncio.timeout(35.0):
+                            response = await client.chat.completions.create(**call_kwargs)
+                    except Exception as call_exc:
+                        # 若帶 extra_body 被 API 拒絕 (400 Bad Request)，去除 extra_body 自動降級重試
+                        if "extra_body" in call_kwargs and ("400" in str(call_exc) or "extra_body" in str(call_exc) or "thinking" in str(call_exc)):
+                            retry_kwargs = dict(call_kwargs)
+                            retry_kwargs.pop("extra_body", None)
+                            async with asyncio.timeout(35.0):
+                                response = await client.chat.completions.create(**retry_kwargs)
+                        else:
+                            raise call_exc
 
                     elapsed = time.perf_counter() - start_time
                     choice = response.choices[0] if response.choices else None
@@ -385,7 +434,7 @@ class MultiProviderLLMRouter:
                     clean_content = strip_thinking_tags(raw_content)
 
                     if not clean_content:
-                        raise ValueError("AI 回傳之有效文字為空")
+                        raise ValueError("AI 回傳之有效文字為空（可能在思考階段耗盡 Token）")
 
                     # 讀取 Token 統計
                     usage = getattr(response, "usage", None)
@@ -446,11 +495,11 @@ class MultiProviderLLMRouter:
                     break
 
                 except (APITimeoutError, asyncio.TimeoutError) as toe:
-                    err_str = f"請求逾時 (>15.0s: {toe})"
-                    failover_history.append(f"{prov.name} (逾時 15s)")
+                    err_str = f"請求逾時 (>35.0s: {toe})"
+                    failover_history.append(f"{prov.name} (逾時 35s)")
                     prov.mark_cooldown(45.0, err_str)
                     last_error_details = err_str
-                    safe_log(f"[LLM Router] {prov.name} 請求逾時，切換下一提供商...")
+                    safe_log(f"[LLM Router] {prov.name} 請求逾時 (>35s)，切換下一提供商...")
                     provider_exhausted = True
                     break
 

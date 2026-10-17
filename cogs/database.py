@@ -146,7 +146,7 @@ def init_db():
                 instruction TEXT,
                 channel_id INTEGER,
                 temperature REAL NOT NULL DEFAULT 0.7,
-                max_tokens INTEGER NOT NULL DEFAULT 1000,
+                max_tokens INTEGER NOT NULL DEFAULT 3000,
                 payer_user_id INTEGER
             );
             """)
@@ -429,7 +429,7 @@ DEFAULT_AI_INSTRUCTION = (
     "請使用親切、禮貌且帶有一點幽默感的繁體中文回答問題，排版清晰美觀，善用條列式或粗體突顯重點。"
 )
 DEFAULT_AI_TEMPERATURE = 0.7
-DEFAULT_AI_MAX_TOKENS = 1000
+DEFAULT_AI_MAX_TOKENS = 3000
 
 # 多供應商免費模型與容錯容災配置清單
 AI_PROVIDER_MODELS = [
@@ -528,7 +528,7 @@ def load_ai_settings() -> dict:
                     'instruction': row['instruction'] if row['instruction'] is not None else DEFAULT_AI_INSTRUCTION,
                     'channel_id': row['channel_id'],
                     'temperature': float(row['temperature']) if row['temperature'] is not None else DEFAULT_AI_TEMPERATURE,
-                    'max_tokens': int(row['max_tokens']) if row['max_tokens'] is not None else DEFAULT_AI_MAX_TOKENS,
+                    'max_tokens': DEFAULT_AI_MAX_TOKENS if (row['max_tokens'] is None or int(row['max_tokens']) <= 1000) else int(row['max_tokens']),
                     'payer_user_id': row['payer_user_id'],
                 }
             return res
@@ -584,7 +584,7 @@ def save_guild_ai_settings(guild_id: str, settings: dict) -> None:
 
             try:
                 max_tokens = int(settings.get('max_tokens', DEFAULT_AI_MAX_TOKENS))
-                max_tokens = max(100, min(2000, max_tokens))
+                max_tokens = max(100, min(4000, max_tokens))
             except (ValueError, TypeError):
                 max_tokens = DEFAULT_AI_MAX_TOKENS
 

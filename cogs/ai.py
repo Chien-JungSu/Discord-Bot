@@ -29,7 +29,7 @@ from cogs.database import (
     set_user_ai_points,
     update_user_ai_points,
 )
-from cogs.llm_router import router
+from cogs.llm_router import router, strip_thinking_tags
 from cogs.memory import memory_manager
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -204,7 +204,7 @@ class AI(commands.Cog):
 
         # 內容保護 (Embed description 上限 4096 字元，預留分隔線與 footer 空間)
         max_content_len = 4096 - len(footer_block)
-        clean_response = (response_text or "").rstrip()
+        clean_response = strip_thinking_tags(response_text or "").rstrip()
         if not clean_response:
             clean_response = "（無回覆內容）"
         elif len(clean_response) > max_content_len:
@@ -573,7 +573,7 @@ class AI(commands.Cog):
         channel="限定 AI 對話的專屬文字頻道 (留空則不限制頻道)",
         clear_channel="設為 True 則解除頻道限制（所有文字頻道皆可使用）",
         temperature="設定創意度 (0.0 ~ 1.0，預設 0.7)",
-        max_tokens="設定最大回覆 Token 限制 (100 ~ 2000，預設 1000)",
+        max_tokens="設定最大回覆 Token 限制 (100 ~ 4000，預設 3000)",
         enabled="是否啟用本伺服器的 AI 智慧問答功能",
     )
     @app_commands.default_permissions(manage_guild=True)
@@ -654,7 +654,7 @@ class AI(commands.Cog):
             updates.append(f"• **創意度**：`{cfg['temperature']}`")
 
         if max_tokens is not None:
-            cfg["max_tokens"] = max(100, min(2000, int(max_tokens)))
+            cfg["max_tokens"] = max(100, min(4000, int(max_tokens)))
             updates.append(f"• **最大長度**：`{cfg['max_tokens']}` Tokens")
 
         if enabled is not None:
