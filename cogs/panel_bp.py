@@ -31,6 +31,7 @@ from cogs.database import (
     get_daily_api_usage,
     get_economy_user,
     get_guild_ai_settings,
+    get_user_ai_points,
     init_db,
     load_auto_reply_settings,
     load_economy_config,
@@ -45,7 +46,9 @@ from cogs.database import (
     save_reaction_roles,
     save_welcome_settings,
     set_economy_balance,
+    set_user_ai_points,
     update_economy_balance,
+    update_user_ai_points,
 )
 from cogs.sanitize import redact_secrets
 
@@ -467,10 +470,11 @@ def get_guild_data(guild_id: str):
     bot = get_bot()
     guild_obj = bot.get_guild(int(guild_id)) if (bot and guild_id.isdigit()) else None
 
-    # 頻道清單、身分組清單與自訂表情符號清單
+    # 頻道清單、身分組清單、成員清單與自訂表情符號清單
     channels = []
     roles = []
     emojis = []
+    members = []
     if guild_obj:
         for ch in guild_obj.text_channels:
             channels.append({
@@ -497,6 +501,14 @@ def get_guild_data(guild_id: str):
                 'raw': str(em),
                 'url': f"https://cdn.discordapp.com/emojis/{em.id}.{ext}?size=48",
             })
+        for m in sorted(guild_obj.members, key=lambda x: (x.display_name or x.name).lower()):
+            if not m.bot:
+                members.append({
+                    'id': str(m.id),
+                    'name': m.display_name,
+                    'username': m.name,
+                    'avatar': m.display_avatar.url,
+                })
 
     # 讀取各模組資料庫設定
     welcome_all = load_welcome_settings()
@@ -571,6 +583,7 @@ def get_guild_data(guild_id: str):
         {"name": "/economy_scratch", "description": "九宮格刮刮樂小遊戲", "category": "Economy", "permission": "所有成員"},
         {"name": "/ai", "description": "向 OpenRouter 免費 AI 模型發問與智慧對話", "category": "AI", "permission": "所有成員"},
         {"name": "/ai_config", "description": "查看伺服器當前 AI 人設與模型配置", "category": "AI", "permission": "所有成員"},
+        {"name": "/ai_settings", "description": "設定伺服器預設 AI 模型、人設指令與指定贊助支付者", "category": "AI", "permission": "管理員"},
     ]
 
     # 關鍵防護：管理員專用指令 (owner_guild_only) 絕對不對一般使用者顯示，且僅在擁有者檢視專屬伺服器時附加
@@ -590,6 +603,7 @@ def get_guild_data(guild_id: str):
         'bot_in_guild': guild_obj is not None,
         'channels': channels,
         'roles': roles,
+        'members': members,
         'emojis': emojis,
         'welcome': {
             'welcome_channel_id': str(welcome_cfg.get('welcome_channel_id') or ''),
@@ -605,6 +619,7 @@ def get_guild_data(guild_id: str):
             'model': str(ai_cfg.get('model') or 'openrouter/auto'),
             'instruction': str(ai_cfg.get('instruction') or ''),
             'channel_id': str(ai_cfg.get('channel_id') or ''),
+            'payer_user_id': str(ai_cfg.get('payer_user_id') or ''),
             'temperature': float(ai_cfg.get('temperature', 0.7)),
             'max_tokens': int(ai_cfg.get('max_tokens', 1000)),
         },
@@ -635,6 +650,7 @@ def save_guild_ai(guild_id: str):
                 'model': str(updated.get('model') or 'openrouter/auto'),
                 'instruction': str(updated.get('instruction') or ''),
                 'channel_id': str(updated.get('channel_id') or ''),
+                'payer_user_id': str(updated.get('payer_user_id') or ''),
                 'temperature': float(updated.get('temperature', 0.7)),
                 'max_tokens': int(updated.get('max_tokens', 1000)),
             },
@@ -656,6 +672,10 @@ def save_guild_ai(guild_id: str):
         'max_tokens': max_tokens,
     }
 
+    if 'payer_user_id' in payload:
+        raw_payer = str(payload.get('payer_user_id') or '').strip()
+        settings['payer_user_id'] = raw_payer if (raw_payer and raw_payer != 'none') else None
+
     save_guild_ai_settings(str(guild_id), settings)
     _sync_cog_settings('AI')
     updated = get_guild_ai_settings(str(guild_id))
@@ -668,6 +688,7 @@ def save_guild_ai(guild_id: str):
             'model': str(updated.get('model') or 'openrouter/auto'),
             'instruction': str(updated.get('instruction') or ''),
             'channel_id': str(updated.get('channel_id') or ''),
+            'payer_user_id': str(updated.get('payer_user_id') or ''),
             'temperature': float(updated.get('temperature', 0.7)),
             'max_tokens': int(updated.get('max_tokens', 1000)),
         },
@@ -1296,20 +1317,27 @@ def owner_economy_config():
                 cur_config[k] = str(val).strip()
 
     # 防呆校驗
+    # 防呆校驗
     if cur_config['daily_max'] < cur_config['daily_min']:
         cur_config['daily_max'] = cur_config['daily_min']
     if cur_config['hourly_max'] < cur_config['hourly_min']:
         cur_config['hourly_max'] = cur_config['hourly_min']
     if cur_config['bet_max'] < cur_config['bet_min']:
         cur_config['bet_max'] = cur_config['bet_min']
+    if 'ai_cost_per_1k_tokens' in cur_config and cur_config['ai_cost_per_1k_tokens'] < 1:
+        cur_config['ai_cost_per_1k_tokens'] = 1
+    if 'ai_daily_streak_max' in cur_config and 'ai_daily_streak_bonus' in cur_config:
+        if cur_config['ai_daily_streak_max'] < cur_config['ai_daily_streak_bonus']:
+            cur_config['ai_daily_streak_max'] = cur_config['ai_daily_streak_bonus']
 
     save_economy_config(cur_config)
+    _sync_cog_settings('Economy')
     return jsonify({'status': 'ok', 'message': '經濟系統後台參數已成功更新！', 'config': cur_config})
 
 
 @panel_bp.route('/api/panel/owner/economy-user', methods=['GET', 'POST'])
 def owner_economy_user():
-    """對應 @owner_guild_only /economy_admin：查詢與手動調整使用者金幣帳戶。"""
+    """對應 @owner_guild_only /economy_admin：查詢與手動調整使用者金幣或 AI 貨幣帳戶。"""
     if request.method == 'GET':
         user_id_str = request.args.get('user_id', '').strip()
         if not user_id_str or not user_id_str.isdigit():
@@ -1321,6 +1349,7 @@ def owner_economy_user():
     user_id = payload.get('user_id')
     action = payload.get('action', 'set')  # 'set' 或 'add'
     amount = payload.get('amount')
+    currency = payload.get('currency', 'gold')  # 'gold' 或 'ai'
 
     if not user_id or str(user_id).isdigit() is False:
         return jsonify({'status': 'error', 'message': '使用者 ID 格式錯誤'}), 400
@@ -1330,14 +1359,25 @@ def owner_economy_user():
         return jsonify({'status': 'error', 'message': '金額必須為整數'}), 400
 
     uid = int(user_id)
+    if currency == 'ai':
+        if action == 'add':
+            _, new_pts = update_user_ai_points(uid, amount_int)
+        else:
+            new_pts = set_user_ai_points(uid, max(0, amount_int))
+        return jsonify({
+            'status': 'ok',
+            'message': f"使用者 {uid} 的 AI 貨幣已成功調整為 {new_pts:,} 點！",
+            'user': get_economy_user(uid),
+        })
+
     if action == 'add':
-        new_balance = update_economy_balance(uid, amount_int)
+        _, new_balance = update_economy_balance(uid, amount_int)
     else:
         new_balance = set_economy_balance(uid, max(0, amount_int))
 
     return jsonify({
         'status': 'ok',
-        'message': f"使用者 {uid} 的金幣已成功調整為 {new_balance} 金幣！",
+        'message': f"使用者 {uid} 的金幣已成功調整為 {new_balance:,} 金幣！",
         'user': get_economy_user(uid),
     })
 

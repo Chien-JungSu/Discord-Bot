@@ -31,11 +31,14 @@ from cogs.database import (
     claim_economy_hourly as _db_claim_economy_hourly,
     get_economy_leaderboard as _db_get_economy_leaderboard,
     get_economy_user,
+    get_user_ai_points,
     load_economy_config as _db_load_economy_config,
     save_economy_config,
     set_economy_balance,
+    set_user_ai_points,
     transfer_economy_balance,
     update_economy_balance,
+    update_user_ai_points,
     build_panel_link_button,
 )
 
@@ -99,9 +102,26 @@ def claim_economy_daily(
     streak_bonus_per_day: int,
     streak_bonus_max: int,
     initial_balance: int = 200,
+    ai_daily_reward: Optional[int] = None,
+    ai_streak_bonus_per_day: Optional[int] = None,
+    ai_streak_bonus_max: Optional[int] = None,
+    ai_initial_balance: Optional[int] = None,
 ) -> dict[str, Any]:
-    """相容新舊版 cogs.database.claim_economy_daily，確保每日 00:00 (UTC+8) 刷新、首次簽到初始資金與連簽上限防護。"""
+    """相容新舊版 cogs.database.claim_economy_daily，確保每日 00:00 (UTC+8) 刷新、首次簽到初始資金與 AI 專屬貨幣發放。"""
     sig = inspect.signature(_db_claim_economy_daily)
+    if "ai_daily_reward" in sig.parameters:
+        return _db_claim_economy_daily(
+            user_id=user_id,
+            now_ts=now_ts,
+            base_reward=base_reward,
+            streak_bonus_per_day=streak_bonus_per_day,
+            streak_bonus_max=streak_bonus_max,
+            initial_balance=initial_balance,
+            ai_daily_reward=ai_daily_reward,
+            ai_streak_bonus_per_day=ai_streak_bonus_per_day,
+            ai_streak_bonus_max=ai_streak_bonus_max,
+            ai_initial_balance=ai_initial_balance,
+        )
     if "initial_balance" in sig.parameters:
         return _db_claim_economy_daily(
             user_id=user_id,
@@ -121,7 +141,7 @@ def claim_economy_daily(
             cursor = conn.cursor()
             _db_mod._ensure_user_row(cursor, uid)
             cursor.execute(
-                "SELECT balance, last_daily_ts, daily_streak, last_hourly_ts FROM economy_users WHERE user_id = ?;",
+                "SELECT balance, last_daily_ts, daily_streak, last_hourly_ts, ai_points FROM economy_users WHERE user_id = ?;",
                 (uid,),
             )
             row = cursor.fetchone()
@@ -129,12 +149,14 @@ def claim_economy_daily(
             last_ts = float(row["last_daily_ts"])
             old_streak = int(row["daily_streak"])
             last_hourly_ts = float(row["last_hourly_ts"])
+            curr_ai_pts = int(row["ai_points"]) if "ai_points" in row.keys() else 0
             if last_ts >= today_start_ts:
                 return {
                     "ok": False,
                     "next_available_ts": next_midnight_ts,
                     "balance": balance,
                     "streak": old_streak,
+                    "ai_points": curr_ai_pts,
                 }
             is_first_checkin = (last_ts == 0.0 and last_hourly_ts == 0.0)
             init_bonus = max(0, int(initial_balance)) if is_first_checkin else 0
@@ -151,16 +173,27 @@ def claim_economy_daily(
             bonus = min(max(0, (new_streak - 1) * clean_per_day), clean_max)
             total_reward = max(0, int(base_reward) + bonus + init_bonus)
             new_balance = balance + total_reward
+
+            # AI 幣
+            ai_base = 1000 if ai_daily_reward is None else int(ai_daily_reward)
+            ai_s_bon = 100 if ai_streak_bonus_per_day is None else int(ai_streak_bonus_per_day)
+            ai_s_max = 1000 if ai_streak_bonus_max is None else int(ai_streak_bonus_max)
+            ai_init = (1000 if ai_initial_balance is None else int(ai_initial_balance)) if is_first_checkin else 0
+            ai_bon = min(max(0, (new_streak - 1) * ai_s_bon), ai_s_max)
+            tot_ai = ai_base + ai_bon + ai_init
+            new_ai = curr_ai_pts + tot_ai
+
             cursor.execute(
                 """
                 UPDATE economy_users
                 SET balance = ?,
+                    ai_points = ?,
                     last_daily_ts = ?,
                     daily_streak = ?,
                     total_earned = total_earned + ?
                 WHERE user_id = ?;
                 """,
-                (new_balance, float(now_ts), new_streak, total_reward, uid),
+                (new_balance, new_ai, float(now_ts), new_streak, total_reward, uid),
             )
             conn.commit()
             return {
@@ -174,6 +207,11 @@ def claim_economy_daily(
                 "streak_broken": streak_broken,
                 "old_streak": old_streak,
                 "next_available_ts": next_midnight_ts,
+                "ai_reward": ai_base,
+                "ai_streak_bonus": ai_bon,
+                "ai_initial_bonus": ai_init,
+                "total_ai_reward": tot_ai,
+                "new_ai_points": new_ai,
             }
         finally:
             conn.close()
@@ -2159,6 +2197,158 @@ class AdminUserBalanceModal(discord.ui.Modal, title="💰 管理指定使用者�
         await interaction.response.edit_message(embed=embed, view=self.panel_view)
 
 
+class AdminAiCurrencyModal(discord.ui.Modal, title="⚡ 設定 AI 專屬貨幣與費率"):
+    def __init__(self, panel_view: "EconomyAdminView"):
+        super().__init__()
+        self.panel_view = panel_view
+        cfg = panel_view.cog.config
+
+        self.ai_name = discord.ui.TextInput(
+            label="AI 貨幣名稱",
+            default=str(cfg.get("ai_currency_name", "AI 運算幣")),
+            required=True,
+            max_length=20,
+        )
+        self.ai_emoji = discord.ui.TextInput(
+            label="AI 貨幣圖示 (Emoji)",
+            default=str(cfg.get("ai_currency_emoji", "⚡")),
+            required=True,
+            max_length=10,
+        )
+        self.ai_daily_reward = discord.ui.TextInput(
+            label="每日簽到發放數量 (整數)",
+            default=str(cfg.get("ai_daily_reward", 1000)),
+            required=True,
+            max_length=10,
+        )
+        self.ai_daily_streak_bonus = discord.ui.TextInput(
+            label="連簽每日加成,上限 (格式: 加成,上限)",
+            default=f"{cfg.get('ai_daily_streak_bonus', 100)},{cfg.get('ai_daily_streak_max', 1000)}",
+            required=True,
+            max_length=20,
+        )
+        self.ai_cost_per_1k = discord.ui.TextInput(
+            label="每 1000 Tokens 計費點數 (整數)",
+            default=str(cfg.get("ai_cost_per_1k_tokens", 100)),
+            required=True,
+            max_length=10,
+        )
+        for item in (self.ai_name, self.ai_emoji, self.ai_daily_reward, self.ai_daily_streak_bonus, self.ai_cost_per_1k):
+            self.add_item(item)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        errors: list[str] = []
+        name = self.ai_name.value.strip() or "AI 運算幣"
+        emoji = self.ai_emoji.value.strip() or "⚡"
+        daily_reward, e1 = _parse_int_field(self.ai_daily_reward.value, "每日簽到發放數量", 0, 1_000_000)
+        cost_per_1k, e2 = _parse_int_field(self.ai_cost_per_1k.value, "每 1000 Tokens 計費點數", 1, 100_000)
+
+        streak_parts = [p.strip() for p in self.ai_daily_streak_bonus.value.split(",") if p.strip()]
+        streak_bon, streak_max = 100, 1000
+        if len(streak_parts) == 2:
+            s_b, err_b = _parse_int_field(streak_parts[0], "連簽每日加成", 0, 100_000)
+            s_m, err_m = _parse_int_field(streak_parts[1], "連簽上限", 0, 1_000_000)
+            if err_b:
+                errors.append(err_b)
+            else:
+                streak_bon = s_b
+            if err_m:
+                errors.append(err_m)
+            else:
+                streak_max = s_m
+        else:
+            errors.append("• **連簽每日加成與上限** 請以逗號分隔，例如 `100,1000`")
+
+        for err in (e1, e2):
+            if err:
+                errors.append(err)
+
+        if errors:
+            await interaction.response.send_message("❌ 參數驗證失敗：\n" + "\n".join(errors), ephemeral=True)
+            return
+
+        await self.panel_view.apply_config_updates(
+            interaction,
+            {
+                "ai_currency_name": name,
+                "ai_currency_emoji": emoji,
+                "ai_daily_reward": daily_reward,
+                "ai_daily_streak_bonus": streak_bon,
+                "ai_daily_streak_max": streak_max,
+                "ai_cost_per_1k_tokens": cost_per_1k,
+            },
+            "✅ 已更新「AI 專屬貨幣與費率」設定！",
+        )
+
+
+class AdminUserAiPointsModal(discord.ui.Modal, title="🤖 管理指定使用者 AI 貨幣餘額"):
+    def __init__(self, panel_view: "EconomyAdminView"):
+        super().__init__()
+        self.panel_view = panel_view
+
+        self.target_user = discord.ui.TextInput(
+            label="目標使用者 ID 或 @提及",
+            placeholder="例如：123456789012345678 或 <@123456789012345678>",
+            required=True,
+            max_length=40,
+        )
+        self.action = discord.ui.TextInput(
+            label="操作模式：add (發放) / sub (扣除) / set (直接設定)",
+            default="add",
+            required=True,
+            max_length=10,
+        )
+        self.amount = discord.ui.TextInput(
+            label="AI 幣數量 (正整數或 0)",
+            placeholder="例如：1000",
+            required=True,
+            max_length=12,
+        )
+        for item in (self.target_user, self.action, self.amount):
+            self.add_item(item)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        raw_user = self.target_user.value.strip()
+        m = re.search(r"(\d{15,22})", raw_user)
+        if not m:
+            await interaction.response.send_message(
+                "❌ 無法辨識使用者 ID，請輸入純數字 Discord User ID 或 `<@ID>`。",
+                ephemeral=True,
+            )
+            return
+        uid = int(m.group(1))
+
+        act = self.action.value.strip().lower()
+        if act not in ("add", "sub", "set"):
+            await interaction.response.send_message(
+                "❌ 操作模式請填寫 `add`（增加）、`sub`（扣除）或 `set`（直接設定餘額）。",
+                ephemeral=True,
+            )
+            return
+
+        amt, err = _parse_int_field(self.amount.value, "AI 幣數量", 0, 1_000_000_000)
+        if err or amt is None:
+            await interaction.response.send_message(f"❌ {err}", ephemeral=True)
+            return
+
+        before = get_user_ai_points(uid)
+        if act == "add":
+            _, after = update_user_ai_points(uid, amt)
+            act_label = f"發放 +{amt:,}"
+        elif act == "sub":
+            _, after = update_user_ai_points(uid, -amt, allow_negative=False)
+            act_label = f"扣除 -{amt:,}"
+        else:
+            after = set_user_ai_points(uid, amt)
+            act_label = f"設定為 {amt:,}"
+
+        ai_emoji = self.panel_view.cog.config.get("ai_currency_emoji", "⚡")
+        ai_name = self.panel_view.cog.config.get("ai_currency_name", "AI 運算幣")
+        status = f"🤖 已對 <@{uid}> (`{uid}`) 執行 **{act_label}** {ai_emoji} {ai_name}（變更前：`{before:,}` → 變更後：`{after:,}`）"
+        embed = self.panel_view.build_panel_embed(status_note=status)
+        await interaction.response.edit_message(embed=embed, view=self.panel_view)
+
+
 class EconomyAdminSelect(discord.ui.Select):
     """後台管理面板的下拉選單。"""
 
@@ -2176,6 +2366,12 @@ class EconomyAdminSelect(discord.ui.Select):
                 value="hourly",
                 emoji="⏰",
                 description="調整每小時簽到獎勵範圍（固定每小時整點 XX:00 刷新）",
+            ),
+            discord.SelectOption(
+                label="修改「AI 貨幣 & Token 計費」設定",
+                value="ai_currency",
+                emoji="⚡",
+                description="調整 AI 幣名稱、每日簽到發放數量、連簽加成與 Token 計費費率",
             ),
             discord.SelectOption(
                 label="修改「賭注上下限 & 擲硬幣/骰子」參數",
@@ -2207,6 +2403,12 @@ class EconomyAdminSelect(discord.ui.Select):
                 emoji="💰",
                 description="直接對指定使用者 ID 增加、扣除或設定金幣餘額",
             ),
+            discord.SelectOption(
+                label="發放 / 扣除 / 設定使用者 AI 幣",
+                value="user_ai_points",
+                emoji="🤖",
+                description="直接對指定使用者 ID 增加、扣除或設定 AI 專屬貨幣點數",
+            ),
         ]
         super().__init__(
             placeholder="🛠️ 選擇要修改的經濟系統參數類別或管理功能…",
@@ -2222,6 +2424,8 @@ class EconomyAdminSelect(discord.ui.Select):
             await interaction.response.send_modal(AdminDailyModal(self.panel_view))
         elif choice == "hourly":
             await interaction.response.send_modal(AdminHourlyModal(self.panel_view))
+        elif choice == "ai_currency":
+            await interaction.response.send_modal(AdminAiCurrencyModal(self.panel_view))
         elif choice == "gamble":
             await interaction.response.send_modal(AdminBetAndGambleModal(self.panel_view))
         elif choice == "bj_slots":
@@ -2232,6 +2436,8 @@ class EconomyAdminSelect(discord.ui.Select):
             await interaction.response.send_modal(AdminCurrencyAndTransferModal(self.panel_view))
         elif choice == "user_balance":
             await interaction.response.send_modal(AdminUserBalanceModal(self.panel_view))
+        elif choice == "user_ai_points":
+            await interaction.response.send_modal(AdminUserAiPointsModal(self.panel_view))
 
 
 class EconomyAdminView(BaseEconomyView):
@@ -2246,6 +2452,8 @@ class EconomyAdminView(BaseEconomyView):
         cfg = self.cog.config
         cur = self.cog.currency_str()
         transfer_state = "🟢 開放中" if cfg["transfer_enabled"] else "🔴 已關閉"
+        ai_name = cfg.get("ai_currency_name", "AI 運算幣")
+        ai_emoji = cfg.get("ai_currency_emoji", "⚡")
 
         embed = discord.Embed(
             title="🛠️ 經濟系統後台參數控制面板 (Owner Only)",
@@ -2272,6 +2480,16 @@ class EconomyAdminView(BaseEconomyView):
                 f"• **連簽加成**：`+{cfg['daily_streak_bonus']:,}`/日（上限 `{cfg['daily_streak_max']:,}`）\n"
                 f"• **每日刷新**：固定每日 `00:00 (UTC+8)`\n"
                 f"• **每小時獎勵**：`{cfg['hourly_min']:,}` ~ `{cfg['hourly_max']:,}`（整點 `XX:00` 刷新）"
+            ),
+            inline=True,
+        )
+        embed.add_field(
+            name=f"{ai_emoji} AI 專屬貨幣設定",
+            value=(
+                f"• **貨幣名稱**：{ai_emoji} {ai_name}\n"
+                f"• **每日簽到**：`+{cfg.get('ai_daily_reward', 1000):,}` 點\n"
+                f"• **連簽加成**：`+{cfg.get('ai_daily_streak_bonus', 100):,}`/日（上限 `{cfg.get('ai_daily_streak_max', 1000):,}`）\n"
+                f"• **Token 費率**：每 1k Tokens `{cfg.get('ai_cost_per_1k_tokens', 100):,}` 點"
             ),
             inline=True,
         )
@@ -2381,6 +2599,10 @@ class Economy(commands.Cog):
         if s_bon > 0 and s_max < s_bon:
             s_max = s_bon
         init_bal = max(0, int(cfg.get("initial_balance", 200)))
+        ai_daily = cfg.get("ai_daily_reward", 1000)
+        ai_s_bon = cfg.get("ai_daily_streak_bonus", 100)
+        ai_s_max = cfg.get("ai_daily_streak_max", 1000)
+        ai_init_bal = cfg.get("ai_initial_balance", 1000)
 
         res = claim_economy_daily(
             user_id=interaction.user.id,
@@ -2389,39 +2611,60 @@ class Economy(commands.Cog):
             streak_bonus_per_day=s_bon,
             streak_bonus_max=s_max,
             initial_balance=init_bal,
+            ai_daily_reward=ai_daily,
+            ai_streak_bonus_per_day=ai_s_bon,
+            ai_streak_bonus_max=ai_s_max,
+            ai_initial_balance=ai_init_bal,
         )
         cur = self.currency_str()
+        ai_name = cfg.get("ai_currency_name", "AI 運算幣")
+        ai_emoji = cfg.get("ai_currency_emoji", "⚡")
         next_dt_str = f"<t:{int(res['next_available_ts'])}:R>（明日 `00:00 UTC+8`）"
 
         if not res["ok"]:
+            ai_pts = res.get("ai_points", 0)
             embed = discord.Embed(
                 title="⏳ 今日已完成每日簽到",
                 description=(
                     f"你今天已經領取過每日簽到獎勵囉！\n"
                     f"• **下次刷新時間**：{next_dt_str}\n"
                     f"• **目前連簽天數**：🔥 **{res['streak']}** 天\n"
-                    f"• **目前餘額**：**{res['balance']:,}** {cur}"
+                    f"• **目前金幣餘額**：**{res['balance']:,}** {cur}\n"
+                    f"• **{ai_name}餘額**：**{ai_pts:,}** {ai_emoji}"
                 ),
                 color=discord.Color.orange(),
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
+        tot_ai = res.get("total_ai_reward", 0)
+        new_ai = res.get("new_ai_points", 0)
+
         desc_lines: list[str] = []
         if res.get("initial_bonus", 0) > 0:
-            desc_lines.append(f"🎉 **首次簽到初始資金**：`+{res['initial_bonus']:,}` {cur}")
-        desc_lines.append(f"🎁 **基礎獎勵**：`+{res['base_reward']:,}` {cur}")
+            desc_lines.append(f"🎉 **首次簽到初始金幣**：`+{res['initial_bonus']:,}` {cur}")
+        desc_lines.append(f"🎁 **金幣基礎獎勵**：`+{res['base_reward']:,}` {cur}")
         if res["streak_bonus"] > 0:
-            desc_lines.append(f"🔥 **連續簽到加成（第 {res['streak']} 天）**：`+{res['streak_bonus']:,}` {cur}")
+            desc_lines.append(f"🔥 **金幣連續簽到加成（第 {res['streak']} 天）**：`+{res['streak_bonus']:,}` {cur}")
         elif res.get("streak_broken"):
             desc_lines.append(f"⚠️ 昨日未簽到，連簽紀錄已重置為 **第 1 天**（原先 {res['old_streak']} 天）。")
         else:
             desc_lines.append("🔥 **連續簽到**：第 **1** 天（明天繼續簽到可領額外加成！）")
 
+        if tot_ai > 0:
+            desc_lines.append("")
+            ai_details = f"基礎 +{res.get('ai_reward', 0):,}"
+            if res.get('ai_streak_bonus', 0) > 0:
+                ai_details += f"，連簽加成 +{res.get('ai_streak_bonus', 0):,}"
+            if res.get('ai_initial_bonus', 0) > 0:
+                ai_details += f"，首簽贈送 +{res.get('ai_initial_bonus', 0):,}"
+            desc_lines.append(f"⚡ **獲得 {ai_name}**：`+{tot_ai:,}` {ai_emoji} ({ai_details})")
+
         desc_lines.extend([
             "",
-            f"💰 **本次共獲得**：**+{res['total_reward']:,}** {cur}",
-            f"🏦 **目前總餘額**：**{res['new_balance']:,}** {cur}",
+            f"💰 **本次獲得金幣**：**+{res['total_reward']:,}** {cur}",
+            f"🏦 **目前金幣總餘額**：**{res['new_balance']:,}** {cur}",
+            f"⚡ **{ai_name}總餘額**：**{new_ai:,}** {ai_emoji}",
             f"🕒 **下次刷新**：{next_dt_str}",
         ])
 
@@ -2491,7 +2734,7 @@ class Economy(commands.Cog):
     # 2. 餘額查詢 (/economy_balance)、富豪排行榜 (/economy_leaderboard) 與 轉帳 (/economy_pay)
     # --------------------------------------------------------------------------
 
-    @app_commands.command(name="economy_balance", description="查詢自己或指定成員的金幣餘額與全域富豪排名")
+    @app_commands.command(name="economy_balance", description="查詢自己或指定成員的金幣與 AI 貨幣餘額與全域富豪排名")
     @app_commands.checks.cooldown(1, ECONOMY_CMD_COOLDOWN_SECONDS, key=lambda i: i.user.id)
     @app_commands.describe(member="要查詢的對象（選填，不填則查詢自己）")
     async def economy_balance(self, interaction: discord.Interaction, member: Optional[discord.User] = None):
@@ -2506,13 +2749,18 @@ class Economy(commands.Cog):
             rank_str = f"第 **{rank_info['rank']}** 名" if rank_info and rank_info.get("rank") else "未上榜"
 
         cur = self.currency_str()
+        ai_name = self.config.get("ai_currency_name", "AI 運算幣")
+        ai_emoji = self.config.get("ai_currency_emoji", "⚡")
+        ai_pts = info.get("ai_points", 0)
+
         embed = discord.Embed(
             title=f"🏦 {target.display_name} 的個人帳戶",
             color=discord.Color.gold(),
             timestamp=discord.utils.utcnow(),
         )
         embed.set_thumbnail(url=target.display_avatar.url)
-        embed.add_field(name="💰 目前餘額", value=f"**{info['balance']:,}** {cur}", inline=True)
+        embed.add_field(name="💰 金幣餘額", value=f"**{info['balance']:,}** {cur}", inline=True)
+        embed.add_field(name=f"{ai_emoji} {ai_name}", value=f"**{ai_pts:,}** 點", inline=True)
         embed.add_field(name="🏆 全域富豪排名", value=rank_str, inline=True)
         await interaction.response.send_message(embed=embed)
 
