@@ -1,5 +1,22 @@
 [
   {
+    "full_hash": "63d9948cdbe0f5cfbab4a1a4d692742689265d79",
+    "short_hash": "63d9948",
+    "subject": "feat(ai,economy): integrate DeepSeek V4.1 Flash, token billing with AI currency, /ai_settings and panel controls",
+    "display_subject": "integrate DeepSeek V4.1 Flash, token billing with AI currency, /ai_settings and panel controls",
+    "author": "Chien-JungSu",
+    "date": "2026-10-17 21:57:33",
+    "iso_date": "2026-10-17T21:57:33+08:00",
+    "relative_time": "剛剛",
+    "body": "",
+    "type": "feat",
+    "scope": "ai,economy",
+    "badge_label": "新增功能",
+    "badge_tag": "FEAT",
+    "badge_cls": "badge-feat",
+    "github_url": "https://github.com/Chien-JungSu/Discord-Bot/commit/63d9948cdbe0f5cfbab4a1a4d692742689265d79"
+  },
+  {
     "full_hash": "75f9a3fbe0678d9b9ef462048f9c97edd6bddc7a",
     "short_hash": "75f9a3f",
     "subject": "fix(web): gracefully fallback to GitHub REST API and file cache when .git repository is missing",
@@ -7,7 +24,7 @@
     "author": "Chien-JungSu",
     "date": "2026-10-17 21:10:11",
     "iso_date": "2026-10-17T21:10:11+08:00",
-    "relative_time": "46 分鐘前",
+    "relative_time": "47 分鐘前",
     "body": "",
     "type": "fix",
     "scope": "web",
@@ -24,7 +41,7 @@
     "author": "Chien-JungSu",
     "date": "2026-10-17 21:06:03",
     "iso_date": "2026-10-17T21:06:03+08:00",
-    "relative_time": "50 分鐘前",
+    "relative_time": "51 分鐘前",
     "body": "",
     "type": "feat",
     "scope": "ai",
@@ -151,22 +168,5 @@
     "badge_tag": "FIX",
     "badge_cls": "badge-fix",
     "github_url": "https://github.com/Chien-JungSu/Discord-Bot/commit/e8349381e72a183e53b111c339da3989ffc74d35"
-  },
-  {
-    "full_hash": "20d65573edaa0ab8be41c93f78b13b8d0cb0728d",
-    "short_hash": "20d6557",
-    "subject": "feat(economy,docs): refine All In & custom bet UX and sync README.en.md",
-    "display_subject": "refine All In & custom bet UX and sync README.en.md",
-    "author": "Chien-JungSu",
-    "date": "2026-10-17 17:04:10",
-    "iso_date": "2026-10-17T17:04:10+08:00",
-    "relative_time": "4 小時前",
-    "body": "",
-    "type": "feat",
-    "scope": "economy,docs",
-    "badge_label": "新增功能",
-    "badge_tag": "FEAT",
-    "badge_cls": "badge-feat",
-    "github_url": "https://github.com/Chien-JungSu/Discord-Bot/commit/20d65573edaa0ab8be41c93f78b13b8d0cb0728d"
   }
 ]
