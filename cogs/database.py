@@ -468,6 +468,8 @@ MODEL_TOKEN_RATES = {
     "auto": 1.0,
     "gemini:gemini-flash-latest": 1.0,
     "gemini-flash-latest": 1.0,
+    "gemini:gemini-3.5-flash-lite": 1.0,
+    "gemini-3.5-flash-lite": 1.0,
     "gemini:gemma-4-31b-it": 1.0,
     "gemma-4-31b-it": 1.0,
     "gemini:gemini-2.5-flash-lite": 1.0,

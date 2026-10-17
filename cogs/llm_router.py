@@ -191,7 +191,7 @@ class MultiProviderLLMRouter:
                 env_keys=["GEMINI_API_KEY", "GOOGLE_API_KEY"],
                 default_text_model="gemini-flash-latest",
                 default_vision_model="gemini-flash-latest",
-                fallback_models=["gemini-2.5-flash", "gemini-2.0-flash-lite"],
+                fallback_models=["gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash-lite"],
                 supports_vision=True,
                 rpm_limit_desc="15 ~ 30 RPM",
                 quota_desc="1,500 RPD (百萬超長 Context & 視覺分析)",
@@ -322,6 +322,132 @@ class MultiProviderLLMRouter:
         # 若所有正常提供商皆在冷卻，容許嘗試冷卻名單以防全部斷線
         return active_list if active_list else fallback_cooldown_list
 
+    def _record_failure(
+        self,
+        prov: LLMProvider,
+        model: str,
+        exc: Exception,
+        failover_history: List[str],
+    ) -> str:
+        """記錄單一提供商或模型之執行失敗，設定合理冷卻時間並記錄歷程。"""
+        status_code = getattr(exc, 'status_code', None) or getattr(exc, 'code', None)
+        if isinstance(exc, (NotFoundError, APIStatusError)):
+            if status_code in (404, 410, 503):
+                safe_log(f"[LLM Router] {prov.name} 模型 {model} 暫不可用 (HTTP {status_code})")
+                err_str = f"HTTP {status_code}"
+                failover_history.append(f"{prov.name}:{model} (HTTP {status_code})")
+                return err_str
+            elif status_code == 429:
+                err_str = f"HTTP 429 Rate Limit ({exc})"
+                failover_history.append(f"{prov.name}:{model} (429 觸發冷卻 60s)")
+                prov.mark_cooldown(60.0, err_str)
+                safe_log(f"[LLM Router] {prov.name} 遇到 429 速率限制，標記冷卻並切換...")
+                return err_str
+            else:
+                err_str = f"連線或服務端錯誤 (HTTP {status_code}: {exc})"
+                failover_history.append(f"{prov.name}:{model} (HTTP {status_code})")
+                prov.mark_cooldown(45.0, err_str)
+                safe_log(f"[LLM Router] {prov.name} 調用失敗: {exc}")
+                return err_str
+        elif isinstance(exc, RateLimitError):
+            err_str = f"HTTP 429 Rate Limit ({exc})"
+            failover_history.append(f"{prov.name}:{model} (429 觸發冷卻 60s)")
+            prov.mark_cooldown(60.0, err_str)
+            safe_log(f"[LLM Router] {prov.name} 遇到 429 速率限制，標記冷卻並切換...")
+            return err_str
+        elif isinstance(exc, (APITimeoutError, asyncio.TimeoutError)):
+            err_str = f"請求逾時 (>35.0s: {exc})"
+            failover_history.append(f"{prov.name}:{model} (逾時 35s)")
+            prov.mark_cooldown(45.0, err_str)
+            safe_log(f"[LLM Router] {prov.name} 模型 {model} 請求逾時 (>35s)...")
+            return err_str
+        elif isinstance(exc, (AuthenticationError, PermissionDeniedError)):
+            err_str = f"金鑰無效或權限錯誤 ({exc})"
+            failover_history.append(f"{prov.name}:{model} (金鑰失效)")
+            prov.mark_cooldown(300.0, err_str)
+            safe_log(f"[LLM Router] {prov.name} 認證失敗，請檢查金鑰配置...")
+            return err_str
+        else:
+            err_str = f"連線或服務端錯誤 ({exc})"
+            failover_history.append(f"{prov.name}:{model} (錯誤: {type(exc).__name__})")
+            prov.mark_cooldown(45.0, err_str)
+            safe_log(f"[LLM Router] {prov.name} 調用失敗: {exc}")
+            return err_str
+
+    async def _execute_single_target(
+        self,
+        prov: LLMProvider,
+        model: str,
+        formatted_messages: List[Dict[str, Any]],
+        temperature: float,
+        max_tokens: int,
+        is_vision: bool,
+        timeout_seconds: float = 35.0,
+    ) -> Tuple[str, Dict[str, Any]]:
+        """執行單一提供商模型的對話生成請求。"""
+        client = prov.get_client()
+        call_start = time.perf_counter()
+        prov.total_calls += 1
+
+        call_kwargs: Dict[str, Any] = {
+            "model": model,
+            "messages": formatted_messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        # 若為 Gemini 且支援思考預算，嘗試禁用 thinking_budget 以免浪費 token 預算導致回覆被切斷
+        if prov.id == "gemini":
+            call_kwargs["extra_body"] = {"thinking_budget": 0}
+
+        try:
+            async with asyncio.timeout(timeout_seconds):
+                response = await client.chat.completions.create(**call_kwargs)
+        except Exception as call_exc:
+            # 若帶 extra_body 被 API 拒絕 (400 Bad Request)，去除 extra_body 自動降級重試
+            if "extra_body" in call_kwargs and (
+                "400" in str(call_exc) or "extra_body" in str(call_exc) or "thinking" in str(call_exc)
+            ):
+                retry_kwargs = dict(call_kwargs)
+                retry_kwargs.pop("extra_body", None)
+                async with asyncio.timeout(timeout_seconds):
+                    response = await client.chat.completions.create(**retry_kwargs)
+            else:
+                raise call_exc
+
+        elapsed = time.perf_counter() - call_start
+        choice = response.choices[0] if response.choices else None
+        if not choice or not choice.message:
+            raise ValueError(f"提供商 {prov.name} 未回傳有效 choices")
+
+        raw_content = choice.message.content or ""
+        clean_content = strip_roleplay_prefix(strip_thinking_tags(raw_content))
+
+        if not clean_content:
+            raise ValueError("AI 回傳之有效文字為空（可能在思考階段耗盡 Token）")
+
+        # 讀取 Token 統計
+        usage = getattr(response, "usage", None)
+        prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
+        completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+        total_tokens = getattr(usage, "total_tokens", 0) or (prompt_tokens + completion_tokens)
+
+        if total_tokens <= 0:
+            total_tokens = max(1, len(clean_content) // 2 + 50)
+
+        prov.clear_cooldown()
+
+        stats = {
+            "provider_id": prov.id,
+            "provider_name": prov.name,
+            "model": model,
+            "thinking_time": elapsed,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+            "is_multimodal": is_vision,
+        }
+        return clean_content, stats
+
     async def generate_chat_completion(
         self,
         messages: List[Dict[str, Any]],
@@ -334,8 +460,11 @@ class MultiProviderLLMRouter:
         max_tokens: int = 3000,
     ) -> Tuple[Optional[str], Optional[str], Dict[str, Any]]:
         """執行跨提供商智慧容錯對話請求。
-
-        回傳：(response_text, error_message, stats_meta)
+        
+        採用 15 秒預熱對沖並行備援機制 (Hedged Requests)：
+        - 主模型發起後等待 15 秒，若尚未產出回覆，在背景預先啟動備援模型請求。
+        - 若原模型在硬逾時 (35s) 內成功產出，優先輸出原模型回覆並取消備援請求。
+        - 若原模型真的 timeout 或失敗，才無縫輸出備援模型的回覆。
         """
         start_time = time.perf_counter()
         is_vision = bool(image_url)
@@ -380,7 +509,32 @@ class MultiProviderLLMRouter:
             preferred_provider_id=preferred_provider_id,
         )
 
-        if not candidate_providers:
+        # 4. 構建候選目標列表：[(prov, model), ...]
+        candidate_targets: List[Tuple[LLMProvider, str]] = []
+        for prov in candidate_providers:
+            base_model = prov.default_vision_model if (is_vision and prov.default_vision_model) else prov.default_text_model
+            if preferred_model and preferred_provider_id == prov.id:
+                base_model = preferred_model
+
+            models_to_try = [base_model]
+            for fb in prov.fallback_models:
+                if fb not in models_to_try:
+                    models_to_try.append(fb)
+
+            for prov_model in models_to_try:
+                candidate_targets.append((prov, prov_model))
+
+        # 去除重複目標保持唯一
+        unique_targets: List[Tuple[LLMProvider, str]] = []
+        seen = set()
+        for p, m in candidate_targets:
+            key = (p.id, m)
+            if key not in seen:
+                seen.add(key)
+                unique_targets.append((p, m))
+        candidate_targets = unique_targets
+
+        if not candidate_targets:
             return (
                 None,
                 "⚠️ **沒有可用的 AI 提供商**\n"
@@ -397,150 +551,149 @@ class MultiProviderLLMRouter:
 
         failover_history: List[str] = []
         last_error_details = ""
+        idx = 0
+        total_targets = len(candidate_targets)
 
-        # 4. 依序容錯嘗試
-        for prov in candidate_providers:
-            client = prov.get_client()
-            attempt_start = time.perf_counter()
-            prov.total_calls += 1
+        # 5. 執行 15 秒預熱對沖並行容錯嘗試
+        while idx < total_targets:
+            primary_prov, primary_model = candidate_targets[idx]
 
-            # 決定優先嘗試之模型與備用模型清單
-            base_model = prov.default_vision_model if (is_vision and prov.default_vision_model) else prov.default_text_model
-            if preferred_model and preferred_provider_id == prov.id:
-                base_model = preferred_model
-
-            models_to_try = [base_model]
-            for fb in prov.fallback_models:
-                if fb not in models_to_try:
-                    models_to_try.append(fb)
-
-            provider_exhausted = False
-            for model_attempt_idx, prov_model in enumerate(models_to_try):
-                try:
-                    call_kwargs: Dict[str, Any] = {
-                        "model": prov_model,
-                        "messages": formatted_messages,
-                        "temperature": temperature,
-                        "max_tokens": max_tokens,
-                    }
-                    # 若為 Gemini 且支援思考預算，嘗試禁用 thinking_budget 以免浪費 token 預算導致回覆被切斷
-                    if prov.id == "gemini":
-                        call_kwargs["extra_body"] = {"thinking_budget": 0}
-
-                    # 寬裕 35.0 秒單次請求逾時（給予充分的生成時間，避免回覆到一半中斷）
-                    try:
-                        async with asyncio.timeout(35.0):
-                            response = await client.chat.completions.create(**call_kwargs)
-                    except Exception as call_exc:
-                        # 若帶 extra_body 被 API 拒絕 (400 Bad Request)，去除 extra_body 自動降級重試
-                        if "extra_body" in call_kwargs and ("400" in str(call_exc) or "extra_body" in str(call_exc) or "thinking" in str(call_exc)):
-                            retry_kwargs = dict(call_kwargs)
-                            retry_kwargs.pop("extra_body", None)
-                            async with asyncio.timeout(35.0):
-                                response = await client.chat.completions.create(**retry_kwargs)
-                        else:
-                            raise call_exc
-
-                    elapsed = time.perf_counter() - start_time
-                    choice = response.choices[0] if response.choices else None
-                    if not choice or not choice.message:
-                        raise ValueError(f"提供商 {prov.name} 未回傳有效 choices")
-
-                    raw_content = choice.message.content or ""
-                    clean_content = strip_roleplay_prefix(strip_thinking_tags(raw_content))
-
-                    if not clean_content:
-                        raise ValueError("AI 回傳之有效文字為空（可能在思考階段耗盡 Token）")
-
-                    # 讀取 Token 統計
-                    usage = getattr(response, "usage", None)
-                    prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
-                    completion_tokens = getattr(usage, "completion_tokens", 0) or 0
-                    total_tokens = getattr(usage, "total_tokens", 0) or (prompt_tokens + completion_tokens)
-
-                    if total_tokens <= 0:
-                        total_tokens = max(1, len(clean_content) // 2 + 50)
-
-                    prov.clear_cooldown()
-
-                    stats = {
-                        "provider_id": prov.id,
-                        "provider_name": prov.name,
-                        "model": prov_model,
-                        "thinking_time": elapsed,
-                        "prompt_tokens": prompt_tokens,
-                        "completion_tokens": completion_tokens,
-                        "total_tokens": total_tokens,
-                        "failover_history": failover_history,
-                        "is_multimodal": is_vision,
-                    }
-                    return clean_content, None, stats
-
-                except (NotFoundError, APIStatusError) as status_err:
-                    status_code = getattr(status_err, 'status_code', None) or getattr(status_err, 'code', None)
-                    # 遇 404 (Model Not Found)、410 (Model Gone/Retired) 或 503 時，若仍有備用模型，嘗試下一模型
-                    if status_code in (404, 410, 503) and model_attempt_idx < len(models_to_try) - 1:
-                        safe_log(f"[LLM Router] {prov.name} 模型 {prov_model} 暫不可用 (HTTP {status_code})，嘗試備用模型...")
-                        continue
-
-                    # 若為 429 速率限制
-                    if status_code == 429:
-                        err_str = f"HTTP 429 Rate Limit ({status_err})"
-                        failover_history.append(f"{prov.name} (429 觸發冷卻 60s)")
-                        prov.mark_cooldown(60.0, err_str)
-                        last_error_details = err_str
-                        safe_log(f"[LLM Router] {prov.name} 遇到 429 速率限制，標記冷卻並切換下一提供商...")
-                        provider_exhausted = True
-                        break
-
-                    err_str = f"連線或服務端錯誤 (HTTP {status_code}: {status_err})"
-                    failover_history.append(f"{prov.name} (HTTP {status_code})")
-                    prov.mark_cooldown(45.0, err_str)
-                    last_error_details = str(status_err)
-                    safe_log(f"[LLM Router] {prov.name} 調用失敗: {status_err}")
-                    provider_exhausted = True
-                    break
-
-                except RateLimitError as rle:
-                    err_str = f"HTTP 429 Rate Limit ({rle})"
-                    failover_history.append(f"{prov.name} (429 觸發冷卻 60s)")
-                    prov.mark_cooldown(60.0, err_str)
-                    last_error_details = err_str
-                    safe_log(f"[LLM Router] {prov.name} 遇到 429 速率限制，標記冷卻並切換下一提供商...")
-                    provider_exhausted = True
-                    break
-
-                except (APITimeoutError, asyncio.TimeoutError) as toe:
-                    err_str = f"請求逾時 (>35.0s: {toe})"
-                    failover_history.append(f"{prov.name} (逾時 35s)")
-                    prov.mark_cooldown(45.0, err_str)
-                    last_error_details = err_str
-                    safe_log(f"[LLM Router] {prov.name} 請求逾時 (>35s)，切換下一提供商...")
-                    provider_exhausted = True
-                    break
-
-                except (AuthenticationError, PermissionDeniedError) as auth_err:
-                    err_str = f"金鑰無效或權限錯誤 ({auth_err})"
-                    failover_history.append(f"{prov.name} (金鑰失效)")
-                    prov.mark_cooldown(300.0, err_str)
-                    last_error_details = err_str
-                    safe_log(f"[LLM Router] {prov.name} 認證失敗，請檢查金鑰配置...")
-                    provider_exhausted = True
-                    break
-
-                except Exception as gen_err:
-                    err_str = f"連線或服務端錯誤 ({gen_err})"
-                    failover_history.append(f"{prov.name} (錯誤: {type(gen_err).__name__})")
-                    prov.mark_cooldown(45.0, err_str)
-                    last_error_details = str(gen_err)
-                    safe_log(f"[LLM Router] {prov.name} 調用失敗: {gen_err}")
-                    provider_exhausted = True
-                    break
-
-            if provider_exhausted:
+            # 若該提供商處於冷卻中，且後方仍有未冷卻之提供商，則跳過
+            if primary_prov.is_cooling_down() and any(not p.is_cooling_down() for p, _ in candidate_targets[idx + 1:]):
+                idx += 1
                 continue
 
-        # 5. 若所有提供商均嘗試失敗
+            primary_task = asyncio.create_task(
+                self._execute_single_target(
+                    primary_prov,
+                    primary_model,
+                    formatted_messages,
+                    temperature,
+                    max_tokens,
+                    is_vision,
+                    timeout_seconds=35.0,
+                )
+            )
+
+            # 階段一：等待主模型 15 秒
+            done, _ = await asyncio.wait([primary_task], timeout=15.0)
+
+            if primary_task in done:
+                # 主模型在 15 秒內完成或報錯
+                exc = primary_task.exception()
+                if exc is None:
+                    clean_content, stats = primary_task.result()
+                    stats["failover_history"] = failover_history
+                    stats["thinking_time"] = time.perf_counter() - start_time
+                    return clean_content, None, stats
+                else:
+                    # 主模型在 15 秒內即拋錯 (如 429、404、503 等)，立即嘗試下一候選
+                    last_error_details = self._record_failure(primary_prov, primary_model, exc, failover_history)
+                    idx += 1
+                    continue
+
+            # 階段二：主模型超過 15 秒尚未回覆！預先啟動備援模型進行對沖請求
+            fallback_task = None
+            fallback_idx = idx + 1
+            fallback_prov = None
+            fallback_model = None
+
+            # 尋找下一個可用的備援模型目標
+            while fallback_idx < total_targets:
+                fb_p, fb_m = candidate_targets[fallback_idx]
+                if not fb_p.is_cooling_down() or all(p.is_cooling_down() for p, _ in candidate_targets[fallback_idx:]):
+                    fallback_prov, fallback_model = fb_p, fb_m
+                    break
+                fallback_idx += 1
+
+            if fallback_prov and fallback_model:
+                safe_log(
+                    f"[LLM Router] 主模型 {primary_prov.name} ({primary_model}) 超過 15s 未回覆，"
+                    f"預先發送請求至備援模型 {fallback_prov.name} ({fallback_model})..."
+                )
+                fallback_task = asyncio.create_task(
+                    self._execute_single_target(
+                        fallback_prov,
+                        fallback_model,
+                        formatted_messages,
+                        temperature,
+                        max_tokens,
+                        is_vision,
+                        timeout_seconds=35.0,
+                    )
+                )
+
+            # 階段三：主模型繼續執行，直到達到硬逾時限制 (剩餘 20 秒，即總共 35 秒)
+            done, _ = await asyncio.wait([primary_task], timeout=20.0)
+
+            if primary_task in done:
+                exc = primary_task.exception()
+                if exc is None:
+                    # 原模型在 timeout 前產出回覆，優先輸出原模型！
+                    clean_content, stats = primary_task.result()
+                    safe_log(f"[LLM Router] 原模型 {primary_model} 於逾時前及時產出回覆，優先輸出並取消備援請求")
+                    if fallback_task and not fallback_task.done():
+                        fallback_task.cancel()
+                        try:
+                            await fallback_task
+                        except (asyncio.CancelledError, Exception):
+                            pass
+                    stats["failover_history"] = failover_history
+                    stats["thinking_time"] = time.perf_counter() - start_time
+                    return clean_content, None, stats
+                else:
+                    # 主模型在 15~35 秒之間失敗
+                    last_error_details = self._record_failure(primary_prov, primary_model, exc, failover_history)
+                    safe_log(f"[LLM Router] 主模型 {primary_model} 執行失敗: {exc}")
+            else:
+                # 原模型真的 timeout (>35.0s)！取消原模型
+                primary_task.cancel()
+                try:
+                    await primary_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+                err_str = "請求逾時 (>35.0s)"
+                failover_history.append(f"{primary_prov.name}:{primary_model} (逾時 35s，啟用對沖備援)")
+                primary_prov.mark_cooldown(45.0, err_str)
+                last_error_details = err_str
+                safe_log(f"[LLM Router] 原模型 {primary_model} 真正逾時 (>35s)，輸出備援模型之回覆")
+
+            # 階段四：原模型逾時或失敗，輸出備援模型的回覆
+            if fallback_task:
+                # 若備援模型仍在執行中，等待其完成 (此時備援已在背景跑了 20 秒，最多再等 15 秒)
+                if not fallback_task.done():
+                    safe_log(f"[LLM Router] 等待預先發送之備援模型 {fallback_model} 完成...")
+                    done_fb, _ = await asyncio.wait([fallback_task], timeout=15.0)
+
+                if fallback_task.done():
+                    fb_exc = fallback_task.exception()
+                    if fb_exc is None:
+                        clean_content, stats = fallback_task.result()
+                        stats["failover_history"] = failover_history
+                        stats["thinking_time"] = time.perf_counter() - start_time
+                        safe_log(f"[LLM Router] 成功採用備援模型 {fallback_model} 回覆 (總耗時: {stats['thinking_time']:.2f}s)")
+                        return clean_content, None, stats
+                    else:
+                        last_error_details = self._record_failure(fallback_prov, fallback_model, fb_exc, failover_history)
+                        safe_log(f"[LLM Router] 備援模型 {fallback_model} 亦執行失敗: {fb_exc}")
+                else:
+                    # 備援模型亦逾時
+                    fallback_task.cancel()
+                    try:
+                        await fallback_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                    err_str = f"備援模型 {fallback_model} 請求逾時"
+                    failover_history.append(f"{fallback_prov.name}:{fallback_model} (逾時)")
+                    fallback_prov.mark_cooldown(45.0, err_str)
+                    last_error_details = err_str
+
+                # 已嘗試過 primary 與 fallback，推進索引至 fallback_idx + 1
+                idx = fallback_idx + 1
+            else:
+                idx += 1
+
+        # 6. 若所有提供商與備援模型均嘗試失敗
         total_elapsed = time.perf_counter() - start_time
         is_timeout = (
             "逾時" in last_error_details
