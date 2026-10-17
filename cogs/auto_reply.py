@@ -57,6 +57,8 @@ BUTTON_IDLE_TIMEOUT = 120.0
 from cogs.database import (
     load_auto_reply_settings as _load_auto_reply_settings,
     save_auto_reply_settings as _save_auto_reply_settings,
+    build_panel_link_button,
+    build_panel_link_view,
 )
 
 
@@ -349,6 +351,7 @@ class AutoReplyRemoveView(discord.ui.View):
     def __init__(self, cog: 'AutoReply', guild: discord.Guild, rules: list):
         super().__init__(timeout=BUTTON_IDLE_TIMEOUT)
         self.add_item(AutoReplyRuleSelect(cog, guild, rules))
+        self.add_item(build_panel_link_button(guild.id if guild else None, row=1))
 
 
 class ConfirmDeleteView(discord.ui.View):
@@ -361,6 +364,7 @@ class ConfirmDeleteView(discord.ui.View):
         self.rule = rule
         self.initiator_id: Optional[int] = None
         self.message: Optional[discord.Message] = None
+        self.add_item(build_panel_link_button(guild.id if guild else None))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if self.initiator_id is not None and interaction.user.id != self.initiator_id:
@@ -370,7 +374,7 @@ class ConfirmDeleteView(discord.ui.View):
 
     def _disable_buttons(self):
         for item in self.children:
-            if isinstance(item, discord.ui.Button):
+            if isinstance(item, discord.ui.Button) and item.style != discord.ButtonStyle.link:
                 item.disabled = True
 
     async def on_timeout(self):
@@ -427,6 +431,7 @@ class AutoReplyListView(discord.ui.View):
         self.initiator_id: Optional[int] = None
         self.message: Optional[discord.Message] = None
         self._sync_buttons()  # 第一頁不能往前翻、最後一頁不能往後翻
+        self.add_item(build_panel_link_button(guild.id if guild else None))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if self.initiator_id is not None and interaction.user.id != self.initiator_id:
@@ -441,6 +446,8 @@ class AutoReplyListView(discord.ui.View):
 
     async def on_timeout(self):
         for item in self.children:
+            if getattr(item, 'style', None) == discord.ButtonStyle.link:
+                continue
             item.disabled = True
         if self.message is not None:
             try:
@@ -510,6 +517,7 @@ class AutoReplyEditView(discord.ui.View):
     def __init__(self, cog: 'AutoReply', guild: discord.Guild, rules: list):
         super().__init__(timeout=BUTTON_IDLE_TIMEOUT)
         self.add_item(AutoReplyEditSelect(cog, guild, rules))
+        self.add_item(build_panel_link_button(guild.id if guild else None, row=1))
 
 
 class AutoReplyEditActionView(discord.ui.View):
@@ -533,6 +541,7 @@ class AutoReplyEditActionView(discord.ui.View):
             link_button = discord.ui.Button(label=page_link[0], style=discord.ButtonStyle.secondary, emoji='📄')
             link_button.callback = self._open_page_link  # discord.ui.Button 的 callback 要另外指派
             self.add_item(link_button)
+        self.add_item(build_panel_link_button(guild.id if guild else None, row=2))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if self.initiator_id is not None and interaction.user.id != self.initiator_id:
@@ -542,7 +551,7 @@ class AutoReplyEditActionView(discord.ui.View):
 
     def _disable_all(self):
         for item in self.children:
-            if isinstance(item, discord.ui.Button):
+            if isinstance(item, discord.ui.Button) and item.style != discord.ButtonStyle.link:
                 item.disabled = True
 
     def _sync_toggle_label(self):
@@ -666,6 +675,7 @@ class AutoReplyScopeEditView(discord.ui.View):
         self.initiator_id: Optional[int] = None
         self.message: Optional[discord.Message] = None
         self.add_item(AutoReplyScopeChannelSelect(self))
+        self.add_item(build_panel_link_button(guild.id if guild else None, row=1))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if self.initiator_id is not None and interaction.user.id != self.initiator_id:
@@ -675,6 +685,8 @@ class AutoReplyScopeEditView(discord.ui.View):
 
     async def on_timeout(self):
         for item in self.children:
+            if getattr(item, 'style', None) == discord.ButtonStyle.link:
+                continue
             item.disabled = True
         if self.message is not None:
             try:
@@ -1192,7 +1204,7 @@ class AutoReply(commands.Cog):
                 description='請修正以下問題後再試一次：\n\n' + '\n'.join(errors),
                 color=discord.Color.red(),
             )
-            await interaction.followup.send(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, view=build_panel_link_view(guild.id), ephemeral=True)
             return
 
         # ---------- 3. 檢查規則數量上限 ----------
@@ -1206,7 +1218,7 @@ class AutoReply(commands.Cog):
                 ),
                 color=discord.Color.red(),
             )
-            await interaction.followup.send(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, view=build_panel_link_view(guild.id), ephemeral=True)
             return
 
         # ---------- 4. 權限預檢查（僅提醒，不阻擋：管理員之後仍可調整頻道權限） ----------
@@ -1246,7 +1258,7 @@ class AutoReply(commands.Cog):
         if warning:
             embed.add_field(name='⚠️ 權限提醒', value=warning, inline=False)
         embed.set_footer(text='訊息內容「包含」關鍵字即觸發（不分大小寫、忽略多餘空白）；同一人對同一條規則 3 秒內不重複回覆。之後可用 /auto_reply_edit 增修關鍵字與回覆內容，或暫停／恢復這條規則。')
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, view=build_panel_link_view(guild.id), ephemeral=True)
 
     @app_commands.command(name='auto_reply_edit', description='編輯自動回覆規則：編輯關鍵字／回覆內容／生效範圍，也能暫停或恢復整條規則（設定保留）')
     @app_commands.guild_only()
@@ -1266,7 +1278,7 @@ class AutoReply(commands.Cog):
                 description='此伺服器尚未新增任何自動回覆規則，先用 `/auto_reply_add` 新增吧！',
                 color=discord.Color.light_grey(),
             )
-            await interaction.followup.send(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, view=build_panel_link_view(guild.id), ephemeral=True)
             return
 
         view = AutoReplyEditView(self, guild, rules)
@@ -1302,7 +1314,7 @@ class AutoReply(commands.Cog):
                 description='此伺服器尚未新增任何自動回覆規則，先用 `/auto_reply_add` 新增吧！',
                 color=discord.Color.light_grey(),
             )
-            await interaction.followup.send(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, view=build_panel_link_view(guild.id), ephemeral=True)
             return
 
         view = AutoReplyListView(self, guild, rules)
@@ -1332,7 +1344,7 @@ class AutoReply(commands.Cog):
                 description='此伺服器尚未新增任何自動回覆規則，先用 `/auto_reply_add` 新增吧！',
                 color=discord.Color.light_grey(),
             )
-            await interaction.followup.send(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, view=build_panel_link_view(guild.id), ephemeral=True)
             return
 
         view = AutoReplyRemoveView(self, guild, rules)

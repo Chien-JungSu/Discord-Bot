@@ -62,6 +62,7 @@ LOOP_NEXT = {"off": "single", "single": "all", "all": "off"}
 from cogs.database import (
     load_music_settings as _load_music_settings,
     save_music_settings as _save_music_settings,
+    build_panel_link_view,
 )
 
 
@@ -1605,7 +1606,9 @@ class Music(commands.Cog):
             # 不帶參數 = 取消限制，音樂指令恢復所有頻道都能用
             if guild_id not in self.music_channel_settings:
                 await interaction.response.send_message(
-                    "ℹ️ 這個伺服器本來就沒有設定點歌頻道，音樂指令目前所有頻道都能使用。", ephemeral=True
+                    "ℹ️ 這個伺服器本來就沒有設定點歌頻道，音樂指令目前所有頻道都能使用。",
+                    view=build_panel_link_view(interaction.guild.id),
+                    ephemeral=True,
                 )
                 return
             del self.music_channel_settings[guild_id]
@@ -1637,7 +1640,11 @@ class Music(commands.Cog):
                 ),
                 color=discord.Color.green(),
             )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(
+            embed=embed,
+            view=build_panel_link_view(interaction.guild.id),
+            ephemeral=True,
+        )
 
     async def _run_pause_or_resume(self, interaction: discord.Interaction, player, want_pause: bool):
         """點歌者按了「允許」（或操作者本人有權）之後，實際執行暫停／續播。"""

@@ -2203,7 +2203,21 @@ html.modal-open {
   border-radius: 9999px;
 }
 
-/* ---------- Toast 提示通知 (右下角) ---------- */
+/* ---------- Toast 提示通知 (右下角) 與回到頂部按鈕位置協調 ---------- */
+.fab-back-to-top {
+  transition: opacity 0.28s var(--motion-spring),
+              transform 0.28s var(--motion-spring),
+              bottom 0.28s var(--motion-spring),
+              visibility 0.28s,
+              background 0.25s ease,
+              border-color 0.25s ease,
+              box-shadow 0.25s ease;
+}
+
+body.has-unsaved-changes .fab-back-to-top {
+  bottom: 96px;
+}
+
 .toast-container {
   position: fixed;
   bottom: 24px;
@@ -2217,8 +2231,16 @@ html.modal-open {
   transition: bottom 0.28s var(--motion-spring);
 }
 
+body.has-back-to-top .toast-container {
+  bottom: 92px;
+}
+
 body.has-unsaved-changes .toast-container {
   bottom: 96px;
+}
+
+body.has-unsaved-changes.has-back-to-top .toast-container {
+  bottom: 164px;
 }
 
 .toast {
@@ -2501,14 +2523,26 @@ body.has-unsaved-changes .server-settings-view {
     grid-template-columns: 1fr;
   }
 
+  body.has-unsaved-changes .fab-back-to-top {
+    bottom: 84px;
+  }
+
   .toast-container {
     bottom: 14px;
     right: 14px;
     left: 14px;
   }
 
+  body.has-back-to-top .toast-container {
+    bottom: 82px;
+  }
+
   body.has-unsaved-changes .toast-container {
     bottom: 84px;
+  }
+
+  body.has-unsaved-changes.has-back-to-top .toast-container {
+    bottom: 152px;
   }
 
   .unsaved-changes-bar {

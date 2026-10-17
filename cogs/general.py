@@ -16,6 +16,12 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from cogs.database import (
+    build_panel_link_button,
+    build_panel_link_view,
+    get_panel_url,
+)
+
 OWNER_GUILD_ID = os.getenv('DISCORD_OWNER_GUILD_ID') or os.getenv('OWNER_GUILD_ID')
 try:
     OWNER_GUILD_ID = int(OWNER_GUILD_ID) if OWNER_GUILD_ID else None
@@ -205,6 +211,7 @@ class ReloadCogSelect(discord.ui.Select):
         sync_summary = await sync_app_commands_after_reload(self.bot)
         await interaction.followup.send(
             f'✅ 已重載模組 `{module_name}`。\n🔄 指令同步完成（{sync_summary}）。',
+            view=build_panel_link_view(owner=True),
             ephemeral=True,
         )
 
@@ -213,6 +220,7 @@ class ReloadCogView(discord.ui.View):
     def __init__(self, bot: commands.Bot):
         super().__init__(timeout=180)
         self.add_item(ReloadCogSelect(bot))
+        self.add_item(build_panel_link_button(owner=True, row=1))
 
 
 class FunView(discord.ui.View):
@@ -303,6 +311,27 @@ class General(commands.Cog):
     async def ping(self, interaction: discord.Interaction):
         await interaction.response.send_message(f'延遲 `{round(self.bot.latency * 1000)}ms`')
 
+    @app_commands.command(name="panel", description="取得網頁控制面板連結（可透過瀏覽器管理伺服器設定）")
+    @app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
+    async def panel(self, interaction: discord.Interaction):
+        guild_id = interaction.guild.id if interaction.guild else None
+        embed = discord.Embed(
+            title="🌐 炙彗JI器人 — 網頁控制面板",
+            description=(
+                "點擊下方按鈕即可前往網頁控制面板，透過瀏覽器輕鬆管理伺服器各項設定：\n"
+                "• 🎉 **歡迎與自動身分組**\n"
+                "• 🎵 **音樂播放頻道限制**\n"
+                "• 💬 **關鍵字自動回覆**\n"
+                "• 🎭 **表符身分組配置**"
+            ),
+            color=discord.Color.blurple(),
+        )
+        await interaction.response.send_message(
+            embed=embed,
+            view=build_panel_link_view(guild_id),
+            ephemeral=True,
+        )
+
     @owner_guild_only
     @app_commands.command(name="reload_cogs", description="重載指定模組（僅擁有者可用）")
     @app_commands.describe(module_name="可選：直接輸入模組名稱，例如 cogs.general；不填則顯示選單")
@@ -314,6 +343,7 @@ class General(commands.Cog):
             if normalized not in self.bot.extensions:
                 await interaction.response.send_message(
                     f'❌ 模組 `{normalized}` 尚未載入，無法重載。',
+                    view=build_panel_link_view(owner=True),
                     ephemeral=True,
                 )
                 return
@@ -333,6 +363,7 @@ class General(commands.Cog):
                 await self.bot.notify_owner_error(exc, interaction, extra_info=f'General.reload_module target={normalized}')
                 await interaction.followup.send(
                     f'❌ 重載模組失敗：`{normalized}`\n```py\n{exc}\n```',
+                    view=build_panel_link_view(owner=True),
                     ephemeral=True,
                 )
                 return
@@ -340,13 +371,18 @@ class General(commands.Cog):
             sync_summary = await sync_app_commands_after_reload(self.bot)
             await interaction.followup.send(
                 f'✅ 已重載模組 `{normalized}`。\n🔄 指令同步完成（{sync_summary}）。',
+                view=build_panel_link_view(owner=True),
                 ephemeral=True,
             )
             return
 
         modules = get_available_cog_modules(self.bot)
         if not modules:
-            await interaction.response.send_message('目前沒有已載入的 cog 可重載。', ephemeral=True)
+            await interaction.response.send_message(
+                '目前沒有已載入的 cog 可重載。',
+                view=build_panel_link_view(owner=True),
+                ephemeral=True,
+            )
             return
 
         await interaction.response.send_message('請選擇要重載的模組：', view=ReloadCogView(self.bot), ephemeral=True)

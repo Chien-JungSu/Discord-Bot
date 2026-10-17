@@ -11,6 +11,8 @@ from discord.ext import commands
 from cogs.database import (
     load_welcome_settings as _load_welcome_settings,
     save_welcome_settings as _save_welcome_settings,
+    build_panel_link_button,
+    build_panel_link_view,
 )
 
 
@@ -92,6 +94,8 @@ class WelcomeSetupView(discord.ui.View):
 
     async def on_timeout(self):
         for item in self.children:
+            if getattr(item, 'style', None) == discord.ButtonStyle.link:
+                continue
             if hasattr(item, 'disabled'):
                 item.disabled = True
         if self.message is not None:
@@ -196,6 +200,8 @@ class WelcomeSetupView(discord.ui.View):
         cancel_btn.callback = self._on_cancel
         self.add_item(cancel_btn)
 
+        self.add_item(build_panel_link_button(self.guild.id, row=4))
+
     # ---------- 按鈕 ----------
     async def _on_save(self, interaction: discord.Interaction):
         errors: list[str] = []
@@ -238,12 +244,12 @@ class WelcomeSetupView(discord.ui.View):
             desc_lines.append(f"🏷️ 新成員自動身份組：{role.mention}")
         embed = discord.Embed(title='🎉 歡迎訊息設定完成', description='\n'.join(desc_lines), color=discord.Color.green())
         self.stop()
-        await interaction.response.edit_message(embed=embed, view=None)
+        await interaction.response.edit_message(embed=embed, view=build_panel_link_view(self.guild.id))
 
     async def _on_cancel(self, interaction: discord.Interaction):
         self.stop()
         embed = discord.Embed(title='已取消', description='歡迎訊息設定未變更。', color=discord.Color.light_grey())
-        await interaction.response.edit_message(embed=embed, view=None)
+        await interaction.response.edit_message(embed=embed, view=build_panel_link_view(self.guild.id))
 
 
 class Welcome(commands.Cog):
@@ -283,7 +289,7 @@ class Welcome(commands.Cog):
             embed = discord.Embed(title="🔕 歡迎訊息已關閉", description="此伺服器的歡迎訊息功能已停用。", color=discord.Color.red())
         else:
             embed = discord.Embed(title="ℹ️ 歡迎訊息未啟用", description="此伺服器目前沒有啟用歡迎訊息功能。", color=discord.Color.light_grey())
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, view=build_panel_link_view(interaction.guild.id), ephemeral=True)
 
     async def _give_auto_role(self, member: discord.Member, settings: dict):
         """把 /welcome_active 設定的自動身份組發給新成員（機器人帳號不發放）。"""

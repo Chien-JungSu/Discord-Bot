@@ -40,6 +40,8 @@ from cogs.database import (
     save_reaction_roles as _save_reaction_roles,
     load_reaction_cooldowns as _load_cooldowns,
     save_reaction_cooldowns as _save_cooldowns,
+    build_panel_link_button,
+    build_panel_link_view,
 )
 
 
@@ -256,7 +258,7 @@ class ReactionRoles(commands.Cog):
                 description="請修正以下問題後再試一次：\n\n" + "\n".join(errors),
                 color=discord.Color.red(),
             )
-            await interaction.followup.send(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, view=build_panel_link_view(guild.id), ephemeral=True)
             return
 
         # ---------- 6. 檢查訊息數量上限 ----------
@@ -271,7 +273,7 @@ class ReactionRoles(commands.Cog):
                 ),
                 color=discord.Color.red(),
             )
-            await interaction.followup.send(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, view=build_panel_link_view(guild.id), ephemeral=True)
             return
 
         # ---------- 7. 檢查權限、發送訊息、按下表符、儲存設定（與 edit 指令共用流程） ----------
@@ -313,7 +315,7 @@ class ReactionRoles(commands.Cog):
                 value="、".join(result['failed_emojis']) + "\n這幾個表符不會發放身份組。",
                 inline=False,
             )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, view=build_panel_link_view(guild.id), ephemeral=True)
 
     # ---------- /reaction_roles_edit 的共用邏輯（互動 UI 在檔案末尾） ----------
 
@@ -606,7 +608,7 @@ class ReactionRoles(commands.Cog):
                 description='此伺服器尚未發送任何表符身份組訊息，先用 `/reaction_roles_create` 發送一則吧！',
                 color=discord.Color.light_grey(),
             )
-            await interaction.followup.send(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, view=build_panel_link_view(guild.id), ephemeral=True)
             return
 
         view = ReactionRolesEditView(self, guild, messages)
@@ -683,7 +685,7 @@ class ReactionRoles(commands.Cog):
                 description=f"機器人在 {target_channel.mention} 缺少權限：**{'、'.join(missing_perms)}**。\n請調整頻道權限後再試。",
                 color=discord.Color.red(),
             )
-            await interaction.followup.send(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, view=build_panel_link_view(guild.id), ephemeral=True)
             return None
 
         # ---------- 發送訊息 ----------
@@ -695,7 +697,7 @@ class ReactionRoles(commands.Cog):
                 description=f"機器人沒有在 {target_channel.mention} 發言的權限。",
                 color=discord.Color.red(),
             )
-            await interaction.followup.send(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, view=build_panel_link_view(guild.id), ephemeral=True)
             return None
         except Exception as e:
             print(f"❌ reaction_roles：發送訊息失敗: {e}")
@@ -715,7 +717,7 @@ class ReactionRoles(commands.Cog):
                 ),
                 color=discord.Color.red(),
             )
-            await interaction.followup.send(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, view=build_panel_link_view(guild.id), ephemeral=True)
             return None
 
         # ---------- 儲存設定（每個伺服器可保留多則訊息；失敗時回滾記憶體狀態） ----------
@@ -1056,6 +1058,7 @@ class ReactionRolesEditView(discord.ui.View):
         self.initiator_id: Optional[int] = None
         self.message: Optional[discord.Message] = None
         self.add_item(ReactionRolesMessageSelect(cog, guild, messages))
+        self.add_item(build_panel_link_button(guild.id, row=2))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if self.initiator_id is not None and interaction.user.id != self.initiator_id:
@@ -1065,6 +1068,8 @@ class ReactionRolesEditView(discord.ui.View):
 
     async def on_timeout(self):
         for item in self.children:
+            if getattr(item, 'style', None) == discord.ButtonStyle.link:
+                continue
             if hasattr(item, 'disabled'):
                 item.disabled = True
         if self.message is not None:
@@ -1088,6 +1093,7 @@ class ReactionRolesEditActionView(discord.ui.View):
         self.initiator_id: Optional[int] = None
         self.message: Optional[discord.Message] = None
         self._sync_toggle_label()
+        self.add_item(build_panel_link_button(guild.id, row=1))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if self.initiator_id is not None and interaction.user.id != self.initiator_id:
@@ -1097,7 +1103,7 @@ class ReactionRolesEditActionView(discord.ui.View):
 
     def _disable_all(self):
         for item in self.children:
-            if isinstance(item, discord.ui.Button):
+            if isinstance(item, discord.ui.Button) and item.style != discord.ButtonStyle.link:
                 item.disabled = True
 
     def _sync_toggle_label(self):
@@ -1236,7 +1242,7 @@ class ReactionRolesDeleteConfirmView(discord.ui.View):
 
     def _disable_all(self):
         for item in self.children:
-            if isinstance(item, discord.ui.Button):
+            if isinstance(item, discord.ui.Button) and item.style != discord.ButtonStyle.link:
                 item.disabled = True
 
     async def on_timeout(self):
@@ -1333,7 +1339,7 @@ class ReactionRolesDeleteConfirmView(discord.ui.View):
             ),
             color=discord.Color.green(),
         )
-        await _respond_in_place(interaction, embed=embed, view=None)
+        await _respond_in_place(interaction, embed=embed, view=build_panel_link_view(self.guild.id))
 
     @discord.ui.button(label='取消返回', style=discord.ButtonStyle.secondary, emoji='↩️', row=0)
     async def cancel_delete_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1704,6 +1710,8 @@ class ReactionRolesPairsEditorView(discord.ui.View):
 
     async def on_timeout(self):
         for item in self.children:
+            if getattr(item, 'style', None) == discord.ButtonStyle.link:
+                continue
             if hasattr(item, 'disabled'):
                 item.disabled = True
         if self.message is not None:
@@ -1844,6 +1852,8 @@ class ReactionRolesPairsEditorView(discord.ui.View):
         )
         btn_text.callback = self._on_text_modal_button
         self.add_item(btn_text)
+
+        self.add_item(build_panel_link_button(self.guild.id, row=3))
 
     async def _on_add_button(self, interaction: discord.Interaction):
         if len(self.draft_pairs) >= MAX_PAIRS:

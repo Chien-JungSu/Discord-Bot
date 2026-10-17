@@ -533,6 +533,7 @@ def get_guild_data(guild_id: str):
     # 指令清單（區分「所有成員」與「管理員」，且擁有者專屬指令僅對擁有者於專屬伺服器顯示）
     commands_list = [
         {"name": "/ping", "description": "測試機器人的連線延遲", "category": "General", "permission": "所有成員"},
+        {"name": "/panel", "description": "取得網頁控制面板連結按鈕", "category": "General", "permission": "所有成員"},
         {"name": "/choice", "description": "隨機選擇輸入的選項", "category": "General", "permission": "所有成員"},
         {"name": "/quotes", "description": "隨機名言或笑話", "category": "General", "permission": "所有成員"},
         {"name": "/steal", "description": "偷取表情符號並新增至伺服器", "category": "General", "permission": "管理員"},
@@ -1268,21 +1269,23 @@ def owner_economy_user():
 
 @panel_bp.route('/api/panel/owner/cogs')
 def owner_cogs_list():
-    """對應 @owner_guild_only /reload_cogs：取得所有 Cog 模組清單與載入狀態。"""
+    """對應 @owner_guild_only /reload_cogs：僅列出目前已載入、可熱重載的 Cog 模組。
+
+    database / sanitize / tls / panel_bp / web_server 等輔助模組不是 discord.py extension，
+    無法透過 reload_extension 熱重載，因此不顯示於控制面板。
+    """
     bot = get_bot()
     loaded_extensions = set(bot.extensions.keys()) if bot else set()
 
-    cogs_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'cogs')
-    all_cogs = []
-    if os.path.isdir(cogs_dir):
-        for f in sorted(os.listdir(cogs_dir)):
-            if f.endswith('.py') and not f.startswith('__') and f != 'web_server.py':
-                mod_name = f"cogs.{os.path.splitext(f)[0]}"
-                all_cogs.append({
-                    'module': mod_name,
-                    'name': os.path.splitext(f)[0],
-                    'loaded': mod_name in loaded_extensions,
-                })
+    all_cogs = [
+        {
+            'module': mod_name,
+            'name': mod_name.split('.', 1)[-1],
+            'loaded': True,
+        }
+        for mod_name in sorted(loaded_extensions)
+        if mod_name.startswith('cogs.')
+    ]
 
     return jsonify({
         'status': 'ok',
@@ -1304,6 +1307,14 @@ def owner_reload_cog():
     if bot is None or getattr(bot, 'loop', None) is None or not bot.loop.is_running():
         return jsonify({'status': 'error', 'message': 'Discord 機器人尚未啟動或事件迴圈未在運行'}), 503
 
+    if module_name != 'all':
+        normalized = module_name if module_name.startswith('cogs.') else f"cogs.{module_name}"
+        if normalized not in set(bot.extensions.keys()):
+            return jsonify({
+                'status': 'error',
+                'message': f"模組 {normalized} 不是已載入的 Cog，無法熱重載",
+            }), 400
+
     async def _async_reload():
         if 'cogs.database' in sys.modules:
             importlib.reload(sys.modules['cogs.database'])
@@ -1312,15 +1323,13 @@ def owner_reload_cog():
         errors = []
 
         if module_name == 'all':
-            from cogs.general import get_available_cog_modules
-            for m in get_available_cog_modules(bot):
+            for m in sorted(k for k in bot.extensions.keys() if k.startswith('cogs.')):
                 try:
                     await bot.reload_extension(m)
                     reloaded.append(m)
                 except Exception as e:
                     errors.append(f"{m}: {e}")
         else:
-            normalized = module_name if module_name.startswith('cogs.') else f"cogs.{module_name}"
             await bot.reload_extension(normalized)
             reloaded.append(normalized)
 
@@ -1337,14 +1346,14 @@ def owner_reload_cog():
         res = run_coroutine_threadsafe(_async_reload(), timeout=25)
         return jsonify({
             'status': 'ok',
-            'message': f"✅ 成功重載模組：{', '.join(res['reloaded'])}",
+            'message': f"成功重載模組：{', '.join(res['reloaded'])}",
             'sync_summary': res['sync_summary'],
             'errors': res['errors'],
         })
     except Exception as exc:
         return jsonify({
             'status': 'error',
-            'message': f"❌ 重載模組失敗: {redact_secrets(str(exc))}",
+            'message': f"重載模組失敗：{redact_secrets(str(exc))}",
         }), 500
 
 
@@ -1361,9 +1370,9 @@ def owner_sync_commands():
 
     try:
         summary = run_coroutine_threadsafe(_async_sync(), timeout=25)
-        return jsonify({'status': 'ok', 'message': f"✅ 指令樹同步完成：{summary}"})
+        return jsonify({'status': 'ok', 'message': f"指令樹同步完成：{summary}"})
     except Exception as exc:
-        return jsonify({'status': 'error', 'message': f"❌ 指令同步失敗: {redact_secrets(str(exc))}"}), 500
+        return jsonify({'status': 'error', 'message': f"指令同步失敗：{redact_secrets(str(exc))}"}), 500
 
 
 @panel_bp.route('/api/panel/owner/api-quota')

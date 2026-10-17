@@ -1179,3 +1179,58 @@ def get_economy_leaderboard(
             conn.close()
 
 
+# ==============================================================================
+# 網頁控制面板連結按鈕共用工具 (供各 Cog 指令回覆附加按鈕使用)
+# ==============================================================================
+
+def get_panel_url(guild_id: Optional[Any] = None, *, owner: bool = False) -> str:
+    """取得網頁控制面板的完整網址（若提供 guild_id 則附上 #guild-<id>，若 owner=True 則附上 #owner）。"""
+    base = (os.getenv("PANEL_URL") or os.getenv("PUBLIC_BASE_URL") or "").strip()
+    if not base:
+        redirect_uri = os.getenv("DISCORD_REDIRECT_URI", "https://patricksu.nkhost.dev/api/auth").strip()
+        if "/api/auth" in redirect_uri:
+            base = redirect_uri.split("/api/auth")[0].rstrip("/") + "/panel"
+        else:
+            base = "https://patricksu.nkhost.dev/panel"
+    elif not base.rstrip("/").endswith("/panel"):
+        base = base.rstrip("/") + "/panel"
+
+    if owner:
+        return f"{base}#owner"
+    if guild_id is not None and str(guild_id).strip():
+        return f"{base}#guild-{guild_id}"
+    return base
+
+
+def build_panel_link_button(
+    guild_id: Optional[Any] = None,
+    *,
+    owner: bool = False,
+    label: str = "🌐 前往控制面板",
+    row: Optional[int] = None,
+):
+    """建立指向網頁控制面板的 Discord Link Button。"""
+    import discord
+
+    return discord.ui.Button(
+        label=label,
+        style=discord.ButtonStyle.link,
+        url=get_panel_url(guild_id, owner=owner),
+        row=row,
+    )
+
+
+def build_panel_link_view(
+    guild_id: Optional[Any] = None,
+    *,
+    owner: bool = False,
+    label: str = "🌐 前往控制面板",
+):
+    """建立僅包含一顆網頁控制面板連結按鈕的 Discord View。"""
+    import discord
+
+    view = discord.ui.View()
+    view.add_item(build_panel_link_button(guild_id, owner=owner, label=label))
+    return view
+
+

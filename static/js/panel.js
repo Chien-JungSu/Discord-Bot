@@ -112,13 +112,18 @@
     });
   }
 
+  // 移除訊息開頭既有的狀態 emoji（✅ / ❌ / ⚠️ 等），避免與 Toast 圖示重複
+  function stripStatusEmoji(message) {
+    return String(message ?? '').replace(/^\s*(?:[✅❌✔️✖️⚠️❎☑️]|\uFE0F)+\s*/u, '');
+  }
+
   // ---------- Toast 提示通知函式 ----------
   function showToast(message, type = 'success') {
     if (!toastContainer) return;
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
     const icon = type === 'success' ? '✅' : '❌';
-    toast.innerHTML = `<span>${icon}</span><span>${message}</span>`;
+    toast.innerHTML = `<span>${icon}</span><span>${stripStatusEmoji(message)}</span>`;
     toastContainer.appendChild(toast);
 
     setTimeout(() => {
@@ -1967,11 +1972,11 @@
       if (res.ok) {
         showToast(data.message);
         if (reloadOutput) {
-          reloadOutput.textContent = `${data.message}\n指令同步狀態：${data.sync_summary}`;
+          reloadOutput.textContent = `✅ ${stripStatusEmoji(data.message)}\n指令同步狀態：${data.sync_summary}`;
         }
       } else {
         showToast(data.message || '重載失敗', 'error');
-        if (reloadOutput) reloadOutput.textContent = `❌ 重載失敗：${data.message}`;
+        if (reloadOutput) reloadOutput.textContent = `❌ ${stripStatusEmoji(data.message || '重載失敗')}`;
       }
     } catch (err) {
       showToast('重載模組時發生連線錯誤', 'error');
@@ -1989,10 +1994,10 @@
         const data = await res.json();
         if (res.ok) {
           showToast(data.message);
-          if (reloadOutput) reloadOutput.textContent = data.message;
+          if (reloadOutput) reloadOutput.textContent = `✅ ${stripStatusEmoji(data.message)}`;
         } else {
           showToast(data.message || '同步失敗', 'error');
-          if (reloadOutput) reloadOutput.textContent = `❌ 同步失敗：${data.message}`;
+          if (reloadOutput) reloadOutput.textContent = `❌ ${stripStatusEmoji(data.message || '同步失敗')}`;
         }
       } catch (err) {
         showToast('指令同步請求失敗', 'error');
@@ -2035,6 +2040,31 @@
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#039;');
+  }
+
+  // ---------- 回到最頂端按鈕 ----------
+  const backToTopBtn = document.getElementById('back-to-top');
+  if (backToTopBtn) {
+    backToTopBtn.addEventListener('mousemove', (e) => {
+      const rect = backToTopBtn.getBoundingClientRect();
+      const x = ((e.clientX - rect.left) / rect.width) * 100;
+      const y = ((e.clientY - rect.top) / rect.height) * 100;
+      backToTopBtn.style.setProperty('--mouse-x', `${x.toFixed(1)}%`);
+      backToTopBtn.style.setProperty('--mouse-y', `${y.toFixed(1)}%`);
+    });
+
+    backToTopBtn.addEventListener('click', () => {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+
+    const syncBackToTopVisibility = () => {
+      const isVisible = window.scrollY > 120;
+      backToTopBtn.classList.toggle('is-visible', isVisible);
+      document.body.classList.toggle('has-back-to-top', isVisible);
+    };
+
+    window.addEventListener('scroll', syncBackToTopVisibility, { passive: true });
+    syncBackToTopVisibility();
   }
 
   // ---------- 初始化動作 ----------

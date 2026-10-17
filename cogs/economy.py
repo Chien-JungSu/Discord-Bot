@@ -36,6 +36,7 @@ from cogs.database import (
     set_economy_balance,
     transfer_economy_balance,
     update_economy_balance,
+    build_panel_link_button,
 )
 
 TZ_UTC8 = datetime.timezone(datetime.timedelta(hours=8))
@@ -552,6 +553,8 @@ class BaseEconomyView(discord.ui.View):
 
     def disable_all_items(self):
         for item in self.children:
+            if getattr(item, "style", None) == discord.ButtonStyle.link:
+                continue
             if hasattr(item, "disabled"):
                 item.disabled = True
 
@@ -2237,6 +2240,7 @@ class EconomyAdminView(BaseEconomyView):
     def __init__(self, cog: "Economy", user_id: int):
         super().__init__(cog, user_id, timeout=180.0)
         self.add_item(EconomyAdminSelect(self))
+        self.add_item(build_panel_link_button(owner=True, row=1))
 
     def build_panel_embed(self, status_note: Optional[str] = None) -> discord.Embed:
         cfg = self.cog.config
