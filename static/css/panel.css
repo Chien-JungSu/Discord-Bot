@@ -927,6 +927,7 @@ select.form-control option,
   z-index: 350;
   max-height: 220px;
   overflow-y: auto;
+  overscroll-behavior: contain;
   background: rgba(15, 23, 42, 0.98);
   border: 1px solid rgba(125, 211, 252, 0.38);
   border-radius: 12px;
@@ -1517,6 +1518,7 @@ select.form-control option,
   gap: 10px;
   max-height: 220px;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 2px;
 }
 
@@ -1572,6 +1574,7 @@ select.form-control option,
   gap: 8px;
   max-height: 180px;
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .rule-reply-item {
@@ -1631,6 +1634,7 @@ select.form-control option,
   gap: 8px;
   max-height: 200px;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 4px 2px;
 }
 
@@ -1725,6 +1729,7 @@ select.rr-draft-role-select {
   gap: 6px;
   max-height: 96px;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 6px;
   background: rgba(0, 0, 0, 0.28);
   border-radius: 10px;
@@ -2076,7 +2081,17 @@ select.rr-draft-role-select {
   color: #64748b;
 }
 
-/* ---------- Modal 彈出視窗 (嚴格限制於視窗高度範圍內，內部平滑捲動) ---------- */
+/* ---------- Modal 彈出視窗 (嚴格限制於視窗高度範圍內，鎖定背景捲動、內部平滑捲動) ---------- */
+html.modal-open,
+body.modal-open {
+  overflow: hidden !important;
+  overscroll-behavior: none !important;
+}
+
+html.modal-open {
+  scrollbar-gutter: stable;
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -2088,7 +2103,8 @@ select.rr-draft-role-select {
   align-items: center;
   justify-content: center;
   padding: 16px;
-  overflow-y: auto;
+  overflow: hidden;
+  overscroll-behavior: contain;
 }
 
 .modal-card {
@@ -2143,6 +2159,8 @@ select.rr-draft-role-select {
   flex-direction: column;
   gap: 12px;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   flex: 1;
   min-height: 0;
 }

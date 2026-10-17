@@ -35,12 +35,42 @@
   const modalConfirmCancel = document.getElementById('modal-confirm-cancel');
   const modalConfirmClose = document.getElementById('modal-confirm-close');
 
+  const modalBackdrops = [
+    document.getElementById('modal-auto-reply'),
+    document.getElementById('modal-reaction-role'),
+    modalConfirm,
+  ].filter(Boolean);
+
+  function syncModalScrollLock() {
+    const anyModalOpen = modalBackdrops.some((el) => el.style.display === 'flex');
+    document.documentElement.classList.toggle('modal-open', anyModalOpen);
+    document.body.classList.toggle('modal-open', anyModalOpen);
+    modalBackdrops.forEach((el) => {
+      el.setAttribute('aria-hidden', el.style.display === 'flex' ? 'false' : 'true');
+    });
+  }
+
+  // 防止在彈出視窗開啟時，於背景遮罩或非捲動區塊滑動導致捲動穿透到底層頁面
+  modalBackdrops.forEach((backdrop) => {
+    const blockBackdropScroll = (e) => {
+      const scrollable = e.target.closest(
+        '.modal-body, .searchable-select-menu, .reply-blocks-list, .rr-editor-pairs-list, .rr-emoji-picker-list, textarea'
+      );
+      if (!scrollable) {
+        e.preventDefault();
+      }
+    };
+    backdrop.addEventListener('wheel', blockBackdropScroll, { passive: false });
+    backdrop.addEventListener('touchmove', blockBackdropScroll, { passive: false });
+  });
+
   // ---------- 清除設定確認 Modal (Confirm Modal) ----------
   let currentConfirmCallback = null;
 
   function closeConfirmModal() {
     if (modalConfirm) modalConfirm.style.display = 'none';
     currentConfirmCallback = null;
+    syncModalScrollLock();
   }
 
   function showConfirmModal({ title, message, confirmText, cancelText, onConfirm }) {
@@ -62,6 +92,7 @@
     }
     currentConfirmCallback = onConfirm;
     modalConfirm.style.display = 'flex';
+    syncModalScrollLock();
   }
 
   if (modalConfirmOk) {
@@ -845,10 +876,13 @@
     renderRuleReplyBlocks();
     refreshAllSearchableSelects();
     modalAutoReply.style.display = 'flex';
+    if (formModalAutoReply) formModalAutoReply.scrollTop = 0;
+    syncModalScrollLock();
   }
 
   function closeModal() {
     if (modalAutoReply) modalAutoReply.style.display = 'none';
+    syncModalScrollLock();
   }
 
   if (btnAddAutoReply) btnAddAutoReply.addEventListener('click', () => openEditRuleModal(null));
@@ -1085,6 +1119,7 @@
   function closeRrModal() {
     if (modalReactionRole) modalReactionRole.style.display = 'none';
     rrDraftPairs = [];
+    syncModalScrollLock();
   }
 
   if (modalRrClose) modalRrClose.addEventListener('click', closeRrModal);
@@ -1094,6 +1129,18 @@
       if (e.target === modalReactionRole) closeRrModal();
     });
   }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (document.querySelector('.searchable-select-wrap.is-open')) return;
+    if (modalConfirm && modalConfirm.style.display === 'flex') {
+      closeConfirmModal();
+    } else if (modalReactionRole && modalReactionRole.style.display === 'flex') {
+      closeRrModal();
+    } else if (modalAutoReply && modalAutoReply.style.display === 'flex') {
+      closeModal();
+    }
+  });
 
   function renderRrDraftPairs() {
     if (!modalRrPairsList) return;
@@ -1269,6 +1316,8 @@
     populateRrModalRoleAndEmojis();
     renderRrDraftPairs();
     modalReactionRole.style.display = 'flex';
+    if (formModalRr) formModalRr.scrollTop = 0;
+    syncModalScrollLock();
   }
 
   if (btnAddReactionRole) {
@@ -1313,6 +1362,8 @@
     populateRrModalRoleAndEmojis();
     renderRrDraftPairs();
     modalReactionRole.style.display = 'flex';
+    if (formModalRr) formModalRr.scrollTop = 0;
+    syncModalScrollLock();
 
     // 非同步向後端拉取現有 Discord 訊息內文
     try {
