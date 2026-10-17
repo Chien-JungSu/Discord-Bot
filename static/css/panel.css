@@ -1110,6 +1110,66 @@ select.form-control option,
   border-color: #f87171 !important;
 }
 
+/* ---------- 貨幣管理：綠色「加值」按鈕 ---------- */
+.btn-currency-add,
+.btn-currency-add:visited {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.38) 0%, rgba(5, 150, 105, 0.24) 100%) !important;
+  border: 1px solid rgba(52, 211, 153, 0.65) !important;
+  color: #ffffff !important;
+  font-weight: 600;
+  box-shadow: inset 0 1px 1.5px 0 rgba(255, 255, 255, 0.45),
+              0 4px 14px rgba(16, 185, 129, 0.32),
+              0 0 12px rgba(52, 211, 153, 0.22) !important;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.btn-currency-add:hover {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.55) 0%, rgba(5, 150, 105, 0.38) 100%) !important;
+  border-color: rgba(52, 211, 153, 0.95) !important;
+  box-shadow: inset 0 1px 2px 0 rgba(255, 255, 255, 0.7),
+              0 8px 24px rgba(16, 185, 129, 0.45),
+              0 0 18px rgba(52, 211, 153, 0.35) !important;
+  color: #ffffff !important;
+  transform: translateY(-2px) scale(1.02);
+}
+
+.btn-currency-add:active {
+  transform: scale(0.96);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.4) !important;
+}
+
+/* ---------- 貨幣管理：紅色「扣款」按鈕 ---------- */
+.btn-currency-deduct,
+.btn-currency-deduct:visited {
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.38) 0%, rgba(220, 38, 38, 0.24) 100%) !important;
+  border: 1px solid rgba(248, 113, 113, 0.65) !important;
+  color: #ffffff !important;
+  font-weight: 600;
+  box-shadow: inset 0 1px 1.5px 0 rgba(255, 255, 255, 0.4),
+              0 4px 14px rgba(239, 68, 68, 0.32),
+              0 0 12px rgba(248, 113, 113, 0.22) !important;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.btn-currency-deduct:hover {
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.55) 0%, rgba(220, 38, 38, 0.38) 100%) !important;
+  border-color: rgba(248, 113, 113, 0.95) !important;
+  box-shadow: inset 0 1px 2px 0 rgba(255, 255, 255, 0.7),
+              0 8px 24px rgba(239, 68, 68, 0.45),
+              0 0 18px rgba(248, 113, 113, 0.35) !important;
+  color: #ffffff !important;
+  transform: translateY(-2px) scale(1.02);
+}
+
+.btn-currency-deduct:active {
+  transform: scale(0.96);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.4) !important;
+}
+
 /* ---------- 關鍵字自動回覆卡片清單 ---------- */
 .rule-cards-list {
   display: flex;

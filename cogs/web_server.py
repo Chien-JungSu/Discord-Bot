@@ -362,14 +362,25 @@ def _parse_github_api_commit(item: dict[str, Any]) -> Optional[dict[str, Any]]:
 
 def _is_cache_commit(commit: dict[str, Any]) -> bool:
     """判斷該 commit 是否為維護 commits_cache.json 的提交，以在網頁 /commit 頁面中自動忽略。"""
-    subject = str(commit.get('subject') or '').lower()
-    display_subject = str(commit.get('display_subject') or '').lower()
-    body = str(commit.get('body') or '').lower()
-    return (
-        'commits_cache' in subject
-        or 'commits_cache' in display_subject
-        or 'commits_cache' in body
-    )
+    subject = str(commit.get('subject') or '').strip().lower()
+    display_subject = str(commit.get('display_subject') or '').strip().lower()
+    body = str(commit.get('body') or '').strip().lower()
+    text = f"{subject} {display_subject} {body}"
+
+    # 1. 包含快取檔案名稱或特定命名
+    if 'commits_cache' in text or 'commits-cache' in text or 'commit_cache' in text:
+        return True
+
+    # 2. 匹配 "commits cache", "commit cache", "update cache", "sync cache" 等短語
+    if re.search(r'\bcommits?\s+cache\b', text, re.IGNORECASE) or re.search(r'\b(update|sync)\s+cache\b', text, re.IGNORECASE):
+        return True
+
+    # 3. 專門針對維護快取的 chore 提交（例如 "chore: update cache", "chore: 更新本機快取", "chore: 更新 commit 快取" 等）
+    if subject.startswith('chore:') or subject.startswith('chore(') or commit.get('type') == 'chore':
+        if '快取' in text or 'cache' in text:
+            return True
+
+    return False
 
 
 def _fetch_commits_from_local_git(limit: int = 10) -> list[dict[str, Any]]:
