@@ -436,37 +436,37 @@ AI_PROVIDER_MODELS = [
     {
         "id": "auto",
         "provider": "auto",
-        "name": "✨ auto (智慧自動容錯鏈：Groq → NVIDIA → Mistral → Gemini → Kilo)",
+        "name": "auto",
         "desc": "自動按優先級與速率限制智慧切換，遇 429 或故障 0 秒自動無縫容災",
     },
     {
         "id": "groq:openai/gpt-oss-120b",
         "provider": "groq",
-        "name": "⚡ Groq · GPT-OSS 120B (LPU 極速開源旗艦)",
+        "name": "Groq · GPT-OSS 120B (LPU 極速開源旗艦)",
         "desc": "LPU 超高速推理，開源 120B 旗艦大模型，群聊秒回",
     },
     {
         "id": "gemini:gemini-flash-latest",
         "provider": "gemini",
-        "name": "🔮 Google · Gemini Flash (圖文雙模態 & 最新穩定版)",
+        "name": "Google · Gemini Flash (圖文雙模態 & 最新穩定版)",
         "desc": "支援 Discord 圖片與長文本分析，百萬超長上下文與精準繁體中文",
     },
     {
         "id": "nvidia:meta/llama-3.2-11b-vision-instruct",
         "provider": "nvidia",
-        "name": "🚀 NVIDIA NIM · Llama 3.2 11B Vision Instruct",
+        "name": "NVIDIA NIM · Llama 3.2 11B Vision Instruct",
         "desc": "40 RPM，同時支援文字與圖片多模態理解之高併發備援通道",
     },
     {
         "id": "mistral:ministral-8b-latest",
         "provider": "mistral",
-        "name": "🌪️ Mistral AI · Ministral 8B (歐洲開源旗艦)",
+        "name": "Mistral AI · Ministral 8B (歐洲開源旗艦)",
         "desc": "60 RPM，歐洲頂級開源模型，繁體中文與邏輯理解優秀",
     },
     {
         "id": "kilo:kilo-auto/free",
         "provider": "kilo",
-        "name": "🛡️ Kilo Code Gateway · 備援通道",
+        "name": "Kilo Code Gateway · 備援通道",
         "desc": "需配置 KILO_API_KEY，作為額外備援通道",
     },
 ]

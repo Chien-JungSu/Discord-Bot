@@ -48,8 +48,8 @@ def strip_thinking_tags(text: str) -> str:
 DEPRECATED_MODEL_MAPPING = {
     "llama-3.3-70b-versatile": "openai/gpt-oss-120b",
     "meta/llama-3.3-70b-instruct": "meta/llama-3.2-11b-vision-instruct",
-    "gemini-2.0-flash": "gemini-flash-latest",
-    "gemini-2.0-flash-exp:free": "gemini-flash-latest",
+    "gemini-2.0-flash": "gemini-2.5-flash-lite",
+    "gemini-2.0-flash-exp:free": "gemini-2.5-flash-lite",
     "mistral-small-latest": "ministral-8b-latest",
     "openrouter/auto": "auto",
 }
@@ -131,7 +131,7 @@ class MultiProviderLLMRouter:
         self.providers: Dict[str, LLMProvider] = {
             "groq": LLMProvider(
                 id="groq",
-                name="⚡ Groq (LPU 極速引擎)",
+                name="Groq (LPU 極速引擎)",
                 base_url="https://api.groq.com/openai/v1",
                 env_keys=["GROQ_API_KEY"],
                 default_text_model="openai/gpt-oss-120b",
@@ -143,7 +143,7 @@ class MultiProviderLLMRouter:
             ),
             "nvidia": LLMProvider(
                 id="nvidia",
-                name="🚀 NVIDIA NIM (大容量備援 #1)",
+                name="NVIDIA NIM (大容量備援 #1)",
                 base_url="https://integrate.api.nvidia.com/v1",
                 env_keys=["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"],
                 default_text_model="meta/llama-3.2-11b-vision-instruct",
@@ -155,7 +155,7 @@ class MultiProviderLLMRouter:
             ),
             "mistral": LLMProvider(
                 id="mistral",
-                name="🌪️ Mistral AI (突發與視覺備援 #2)",
+                name="Mistral AI (突發與視覺備援 #2)",
                 base_url="https://api.mistral.ai/v1",
                 env_keys=["MISTRAL_API_KEY"],
                 default_text_model="ministral-8b-latest",
@@ -167,19 +167,19 @@ class MultiProviderLLMRouter:
             ),
             "gemini": LLMProvider(
                 id="gemini",
-                name="🔮 Google AI Studio (主要視覺/多模態)",
+                name="Google AI Studio (主要視覺/多模態)",
                 base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
                 env_keys=["GEMINI_API_KEY", "GOOGLE_API_KEY"],
                 default_text_model="gemini-flash-latest",
                 default_vision_model="gemini-flash-latest",
-                fallback_models=["gemini-2.5-flash", "gemini-3-flash-preview"],
+                fallback_models=["gemini-2.5-flash-lite", "gemini-3-flash-preview"],
                 supports_vision=True,
                 rpm_limit_desc="15 ~ 30 RPM",
                 quota_desc="1,500 RPD (百萬超長 Context & 視覺分析)",
             ),
             "kilo": LLMProvider(
                 id="kilo",
-                name="🛡️ Kilo Code Gateway (備援通道 #3)",
+                name="Kilo Code Gateway (備援通道 #3)",
                 base_url="https://api.kilo.ai/api/gateway",
                 env_keys=["KILO_API_KEY"],
                 default_text_model="kilo-auto/free",
@@ -236,11 +236,11 @@ class MultiProviderLLMRouter:
             is_cooldown = now < p.cooldown_until
             remaining_cooldown = max(0, int(p.cooldown_until - now)) if is_cooldown else 0
 
-            status_label = "🟢 正常在線"
+            status_label = "正常在線"
             if not is_configured:
-                status_label = "⚪ 未配置金鑰"
+                status_label = "未配置金鑰"
             elif is_cooldown:
-                status_label = f"⏳ 冷卻中 ({remaining_cooldown}s)"
+                status_label = f"冷卻中 ({remaining_cooldown}s)"
 
             result.append({
                 "id": p.id,
@@ -427,7 +427,7 @@ class MultiProviderLLMRouter:
                     status_code = getattr(status_err, 'status_code', None) or getattr(status_err, 'code', None)
                     # 遇 404 (Model Not Found)、410 (Model Gone/Retired) 或 503 時，若仍有備用模型，嘗試下一模型
                     if status_code in (404, 410, 503) and model_attempt_idx < len(models_to_try) - 1:
-                        safe_log(f"⚠️ [LLM Router] {prov.name} 模型 {prov_model} 暫不可用 (HTTP {status_code})，嘗試備用模型...")
+                        safe_log(f"[LLM Router] {prov.name} 模型 {prov_model} 暫不可用 (HTTP {status_code})，嘗試備用模型...")
                         continue
 
                     # 若為 429 速率限制
@@ -436,7 +436,7 @@ class MultiProviderLLMRouter:
                         failover_history.append(f"{prov.name} (429 觸發冷卻 60s)")
                         prov.mark_cooldown(60.0, err_str)
                         last_error_details = err_str
-                        safe_log(f"⚠️ [LLM Router] {prov.name} 遇到 429 速率限制，標記冷卻並切換下一提供商...")
+                        safe_log(f"[LLM Router] {prov.name} 遇到 429 速率限制，標記冷卻並切換下一提供商...")
                         provider_exhausted = True
                         break
 
@@ -444,7 +444,7 @@ class MultiProviderLLMRouter:
                     failover_history.append(f"{prov.name} (HTTP {status_code})")
                     prov.mark_cooldown(45.0, err_str)
                     last_error_details = str(status_err)
-                    safe_log(f"⚠️ [LLM Router] {prov.name} 調用失敗: {status_err}")
+                    safe_log(f"[LLM Router] {prov.name} 調用失敗: {status_err}")
                     provider_exhausted = True
                     break
 
@@ -453,7 +453,7 @@ class MultiProviderLLMRouter:
                     failover_history.append(f"{prov.name} (429 觸發冷卻 60s)")
                     prov.mark_cooldown(60.0, err_str)
                     last_error_details = err_str
-                    safe_log(f"⚠️ [LLM Router] {prov.name} 遇到 429 速率限制，標記冷卻並切換下一提供商...")
+                    safe_log(f"[LLM Router] {prov.name} 遇到 429 速率限制，標記冷卻並切換下一提供商...")
                     provider_exhausted = True
                     break
 
@@ -462,7 +462,7 @@ class MultiProviderLLMRouter:
                     failover_history.append(f"{prov.name} (逾時 15s)")
                     prov.mark_cooldown(45.0, err_str)
                     last_error_details = err_str
-                    safe_log(f"⚠️ [LLM Router] {prov.name} 請求逾時，切換下一提供商...")
+                    safe_log(f"[LLM Router] {prov.name} 請求逾時，切換下一提供商...")
                     provider_exhausted = True
                     break
 
@@ -471,7 +471,7 @@ class MultiProviderLLMRouter:
                     failover_history.append(f"{prov.name} (金鑰失效)")
                     prov.mark_cooldown(300.0, err_str)
                     last_error_details = err_str
-                    safe_log(f"⚠️ [LLM Router] {prov.name} 認證失敗，請檢查金鑰配置...")
+                    safe_log(f"[LLM Router] {prov.name} 認證失敗，請檢查金鑰配置...")
                     provider_exhausted = True
                     break
 
@@ -480,7 +480,7 @@ class MultiProviderLLMRouter:
                     failover_history.append(f"{prov.name} (錯誤: {type(gen_err).__name__})")
                     prov.mark_cooldown(45.0, err_str)
                     last_error_details = str(gen_err)
-                    safe_log(f"⚠️ [LLM Router] {prov.name} 調用失敗: {gen_err}")
+                    safe_log(f"[LLM Router] {prov.name} 調用失敗: {gen_err}")
                     provider_exhausted = True
                     break
 
@@ -490,7 +490,7 @@ class MultiProviderLLMRouter:
         # 5. 若所有提供商均嘗試失敗
         total_elapsed = time.perf_counter() - start_time
         err_msg = (
-            f"❌ **所有免費 AI 備援通道目前皆無法回應**\n"
+            f"**所有免費 AI 備援通道目前皆無法回應**\n"
             f"• **嘗試鏈條**：{' → '.join(failover_history) if failover_history else '無可用通道'}\n"
             f"• **最後錯誤訊息**：```{last_error_details[:250]}```\n"
             f"• **建議方式**：請確認主機 `.env` 中的各項免費 API Key 是否有效，或稍候 60 秒待提供商冷卻結束重試。"

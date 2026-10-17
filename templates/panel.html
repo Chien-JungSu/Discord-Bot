@@ -430,7 +430,7 @@
         <div id="tab-ai" class="tab-pane">
           <div class="pane-header">
             <div class="tag">AI Module</div>
-            <h2>🤖 AI 智慧助手與多供應商配置</h2>
+            <h2>AI 智慧助手與多供應商配置</h2>
             <p class="pane-desc">
               整合 Groq、Google AI Studio、NVIDIA NIM、Mistral AI 與 Kilo Code Gateway 等超高免費配額端點，具備動態容錯容災（Failover）與圖文雙模態解析能力。
             </p>
@@ -438,14 +438,13 @@
 
           <div id="ai-unauthorized-banner" class="ai-unauth-card" style="display: none;">
             <div class="ai-unauth-header">
-              <span class="ai-unauth-icon">🔒</span>
               <div class="ai-unauth-text">
                 <h4 class="ai-unauth-title">本伺服器尚未獲得 AI 智慧助手封測授權</h4>
                 <p class="ai-unauth-desc">目前為限量內部封測階段，預設僅開放擁有者伺服器使用。若需開通本伺服器的 AI 智慧對話功能，請聯繫機器人擁有者至後台控制面板發放封測授權。</p>
               </div>
             </div>
             <div class="ai-unauth-tip">
-              <span>💡 提示：獲取授權後即可使用 <code>/ai</code> 指令與 <code>@機器人</code> 提及對話，並在此自訂專屬人設與預設模型！</span>
+              <span>提示：獲取授權後即可使用 <code>/ai</code> 指令與 <code>@機器人</code> 提及對話，並在此自訂專屬人設與預設模型！</span>
             </div>
           </div>
 
@@ -458,15 +457,15 @@
             </div>
 
             <div class="form-group">
-              <label for="select-ai-model">🤖 預設免費 AI 引擎 (Multi-Provider LLM)</label>
+              <label for="select-ai-model">預設免費 AI 引擎 (Multi-Provider LLM)</label>
               <select id="select-ai-model" class="form-control">
                 <option value="auto">auto</option>
-                <option value="groq:openai/gpt-oss-120b">⚡ Groq · GPT-OSS 120B (LPU 極速開源旗艦)</option>
-                <option value="gemini:gemini-flash-latest">🔮 Google · Gemini Flash (圖文雙模態 & 最新穩定版)</option>
-                <option value="nvidia:meta/llama-3.2-11b-vision-instruct">🚀 NVIDIA NIM · Llama 3.2 11B Vision (大容量圖文兼備)</option>
-                <option value="mistral:ministral-8b-latest">🌪️ Mistral AI · Ministral 8B (歐洲開源旗艦)</option>
-                <option value="kilo:kilo-auto/free">🛡️ Kilo Code Gateway · 備援通道</option>
-                <option value="custom">✏️ 自訂模型名稱 (輸入 OpenAI 相容的模型 ID)</option>
+                <option value="groq:openai/gpt-oss-120b">Groq · GPT-OSS 120B (LPU 極速開源旗艦)</option>
+                <option value="gemini:gemini-flash-latest">Google · Gemini Flash (圖文雙模態 & 最新穩定版)</option>
+                <option value="nvidia:meta/llama-3.2-11b-vision-instruct">NVIDIA NIM · Llama 3.2 11B Vision (大容量圖文兼備)</option>
+                <option value="mistral:ministral-8b-latest">Mistral AI · Ministral 8B (歐洲開源旗艦)</option>
+                <option value="kilo:kilo-auto/free">Kilo Code Gateway · 備援通道</option>
+                <option value="custom">自訂模型名稱 (輸入 OpenAI 相容的模型 ID)</option>
               </select>
               <div id="ai-custom-model-wrap" style="display: none; margin-top: 8px;">
                 <input type="text" id="ai-custom-model-input" class="form-control" placeholder="輸入自訂模型 ID，例如：openai/gpt-oss-120b" />
@@ -475,7 +474,7 @@
             </div>
 
             <div class="form-group">
-              <label for="select-ai-channel">📢 專屬 AI 對話頻道 (AI Channel，可選)</label>
+              <label for="select-ai-channel">專屬 AI 對話頻道 (AI Channel，可選)</label>
               <select id="select-ai-channel" class="form-control">
                 <option value="">-- 未綁定（所有文字頻道皆可使用） --</option>
               </select>
@@ -483,7 +482,7 @@
             </div>
 
             <div class="form-group">
-              <label for="select-ai-payer">💳 指定 AI 費用支付者 (Sponsor Payer，選填)</label>
+              <label for="select-ai-payer">指定 AI 費用支付者 (Sponsor Payer，選填)</label>
               <select id="select-ai-payer" class="form-control">
                 <option value="">-- 由發問者自行支付各自的 AI 幣（預設） --</option>
               </select>
@@ -491,19 +490,19 @@
             </div>
 
             <div class="form-group">
-              <label for="ai-instruction">🎭 AI 人設指令 (System Instruction)</label>
+              <label for="ai-instruction">AI 人設指令 (System Instruction)</label>
               <textarea id="ai-instruction" class="form-control" rows="4" placeholder="設定 AI 的角色設定、說話語氣、知識背景或回答規範..."></textarea>
               <small class="form-hint">這段指令將作為 System Prompt 注入每次對話中，引導 AI 展現特定的性格與回答風格。</small>
             </div>
 
             <div class="form-row-2">
               <div class="form-group">
-                <label for="ai-temperature">🌡️ 創意度 / 隨機度 (Temperature: 0.0 ~ 1.0)</label>
+                <label for="ai-temperature">創意度 / 隨機度 (Temperature: 0.0 ~ 1.0)</label>
                 <input type="number" step="0.05" min="0" max="1" id="ai-temperature" class="form-control" value="0.7" />
                 <small class="form-hint">數值愈低回答愈嚴謹穩定，數值愈高回答愈生動豐富。預設 0.7。</small>
               </div>
               <div class="form-group">
-                <label for="ai-max-tokens">📏 最大回覆字數限制 (Max Tokens: 100 ~ 2000)</label>
+                <label for="ai-max-tokens">最大回覆字數限制 (Max Tokens: 100 ~ 2000)</label>
                 <input type="number" min="100" max="2000" id="ai-max-tokens" class="form-control" value="1000" />
                 <small class="form-hint">限制單次回答的最大生成長度，避免過長超出 Discord 訊息上限。預設 1000。</small>
               </div>
@@ -675,7 +674,7 @@
                 </div>
               </div>
 
-              <h4 class="subpane-group-title" style="margin-top: 24px;">⚡ AI 專屬貨幣與 Token 計費設定</h4>
+              <h4 class="subpane-group-title" style="margin-top: 24px;">AI 專屬貨幣與 Token 計費設定</h4>
               <div class="form-row-2">
                 <div class="form-group">
                   <label>AI 貨幣名稱</label>
@@ -790,7 +789,7 @@
                     <strong id="stat-balance" class="stat-value">0</strong>
                   </div>
                   <div class="stat-item">
-                    <span class="stat-label">⚡ AI 貨幣餘額</span>
+                    <span class="stat-label">AI 貨幣餘額</span>
                     <strong id="stat-ai-points" class="stat-value" style="color: #38bdf8;">0</strong>
                   </div>
                   <div class="stat-item">
@@ -808,7 +807,7 @@
                 </div>
 
                 <div class="user-modify-actions">
-                  <h5 style="margin: 16px 0 8px;">🪙 修改金幣餘額：</h5>
+                  <h5 style="margin: 16px 0 8px;">修改金幣餘額：</h5>
                   <div class="modify-row">
                     <input type="number" id="modify-amount-input" class="form-control" placeholder="輸入金幣金額" />
                     <button id="btn-set-balance" class="btn secondary" type="button">
@@ -822,7 +821,7 @@
                     </button>
                   </div>
 
-                  <h5 style="margin: 20px 0 8px;">⚡ 修改 AI 貨幣餘額：</h5>
+                  <h5 style="margin: 20px 0 8px;">修改 AI 貨幣餘額：</h5>
                   <div class="modify-row">
                     <input type="number" id="modify-ai-amount-input" class="form-control" placeholder="輸入 AI 幣數量" />
                     <button id="btn-set-ai-points" class="btn secondary" type="button">
@@ -909,19 +908,19 @@
           <div id="owner-sub-ai-guilds" class="owner-subpane">
             <div class="owner-ai-header-row">
               <div>
-                <h4 class="subpane-group-title">🤖 伺服器 AI 功能授權管理 (內部封測限定)</h4>
+                <h4 class="subpane-group-title">伺服器 AI 功能授權管理 (內部封測限定)</h4>
                 <p class="pane-desc" style="margin-top: 4px; font-size: 0.85rem;">
-                  因目前處於初階測試階段且 OpenRouter 免費模型有請求頻率限制，預設僅開放擁有者伺服器使用。<br>
+                  因目前處於初階測試階段且各免費 API 模型具備頻率上限，預設僅開放擁有者伺服器使用。<br>
                   您可以在此手動授權或撤銷其他伺服器的 AI 使用權限，開通後該伺服器即可在控制面板自訂 AI 人設與使用 <code>/ai</code> 指令。
                 </p>
               </div>
               <button type="button" id="btn-refresh-ai-guilds" class="btn secondary btn-refresh-ai-guilds">
-                <span>🔄 重新整理清單</span>
+                <span>重新整理清單</span>
               </button>
             </div>
 
             <div class="commands-search-row" style="margin-top: 16px;">
-              <input type="text" id="ai-guild-search-input" class="form-control" placeholder="🔍 搜尋伺服器名稱或 ID..." />
+              <input type="text" id="ai-guild-search-input" class="form-control" placeholder="搜尋伺服器名稱或 ID..." />
             </div>
 
             <div id="owner-ai-guilds-list" class="owner-ai-guilds-list" style="margin-top: 16px;">

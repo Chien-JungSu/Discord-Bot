@@ -87,9 +87,9 @@ class AIChannelActionView(discord.ui.View):
         self.guild_id = guild_id
         self.channel_id = channel_id
         if guild_id:
-            self.add_item(build_panel_link_button(guild_id, label="🌐 控制面板 AI 設定"))
+            self.add_item(build_panel_link_button(guild_id, label="控制面板 AI 設定"))
 
-    @discord.ui.button(label="🧹 清除頻道記憶", style=discord.ButtonStyle.secondary, emoji="🧹")
+    @discord.ui.button(label="清除頻道記憶", style=discord.ButtonStyle.secondary)
     async def clear_memory_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         count = memory_manager.clear_channel(self.channel_id)
         button.disabled = True
@@ -97,7 +97,7 @@ class AIChannelActionView(discord.ui.View):
         button.style = discord.ButtonStyle.danger
         await interaction.response.edit_message(view=self)
         await interaction.followup.send(
-            f"🧹 **已成功清除本頻道最近 {count} 則對話記憶！** 下一次對話將開啟全新上下文。",
+            f"已成功清除本頻道最近 {count} 則對話記憶！下一次對話將開啟全新上下文。",
             ephemeral=True,
         )
 
@@ -226,12 +226,12 @@ class AI(commands.Cog):
     )
     @app_commands.choices(
         provider=[
-            app_commands.Choice(name="✨ auto (自動智慧容錯鏈：Groq → NVIDIA → Mistral → Gemini → Kilo)", value="auto"),
-            app_commands.Choice(name="⚡ Groq (LPU 極速推理，支援 Llama 3.3 70B)", value="groq"),
-            app_commands.Choice(name="🔮 Google AI Studio (Gemini 2.0 Flash 視覺/長文本)", value="gemini"),
-            app_commands.Choice(name="🚀 NVIDIA NIM (Llama 3.3 70B 大容量併發)", value="nvidia"),
-            app_commands.Choice(name="🌪️ Mistral AI (Mistral Small / Pixtral 歐洲開源)", value="mistral"),
-            app_commands.Choice(name="🛡️ Kilo Code Gateway (免金鑰應急備援)", value="kilo"),
+            app_commands.Choice(name="auto", value="auto"),
+            app_commands.Choice(name="Groq (LPU 極速推理，支援 GPT-OSS 120B)", value="groq"),
+            app_commands.Choice(name="Google AI Studio (Gemini Flash 視覺/長文本)", value="gemini"),
+            app_commands.Choice(name="NVIDIA NIM (Llama 3.2 11B Vision 大容量併發)", value="nvidia"),
+            app_commands.Choice(name="Mistral AI (Ministral 8B 歐洲開源)", value="mistral"),
+            app_commands.Choice(name="Kilo Code Gateway (備援通道)", value="kilo"),
         ]
     )
     async def ai_command(
@@ -244,7 +244,7 @@ class AI(commands.Cog):
     ):
         clean_prompt = prompt.strip()
         if not clean_prompt and not image:
-            await interaction.response.send_message("❌ 請輸入提問內容或上傳圖片！", ephemeral=True)
+            await interaction.response.send_message("請輸入提問內容或上傳圖片！", ephemeral=True)
             return
 
         guild_id = interaction.guild_id
@@ -253,10 +253,10 @@ class AI(commands.Cog):
         if not is_guild_ai_authorized(guild_id):
             panel_view = build_panel_link_view(guild_id) if guild_id else None
             embed_unauth = discord.Embed(
-                title="🔒 AI 智慧助手內部封測中",
+                title="AI 智慧助手內部封測中",
                 description=(
-                    "⚠️ **本伺服器尚未獲得 AI 智慧問答功能的封測使用授權。**\n\n"
-                    "💡 **封測說明**：\n"
+                    "**本伺服器尚未獲得 AI 智慧問答功能的封測使用授權。**\n\n"
+                    "**封測說明**：\n"
                     "• 因目前處於初階測試階段且各免費 API 具備頻率上限，目前預設僅開放給機器人擁有者伺服器。\n"
                     "• 如需開通本伺服器權限，請聯繫機器人擁有者至後台控制面板發放封測授權！"
                 ),
@@ -272,7 +272,7 @@ class AI(commands.Cog):
         if not cfg.get("is_enabled", True):
             view = build_panel_link_view(guild_id) if guild_id else None
             await interaction.response.send_message(
-                "⚠️ **本伺服器目前已由管理員停用 AI 智慧問答功能。**\n若需啟用，請伺服器管理員前往網頁控制面板開啟。",
+                "**本伺服器目前已由管理員停用 AI 智慧問答功能。**\n若需啟用，請伺服器管理員前往網頁控制面板開啟。",
                 ephemeral=True,
                 view=view,
             )
@@ -282,7 +282,7 @@ class AI(commands.Cog):
         allowed_channel_id = cfg.get("channel_id")
         if allowed_channel_id and interaction.channel_id != allowed_channel_id:
             await interaction.response.send_message(
-                f"🔒 本伺服器已設定 AI 專屬點歌/對話頻道，請至 <#{allowed_channel_id}> 使用 `/ai` 指令！",
+                f"本伺服器已設定 AI 專屬點歌/對話頻道，請至 <#{allowed_channel_id}> 使用 `/ai` 指令！",
                 ephemeral=True,
             )
             return
@@ -294,12 +294,12 @@ class AI(commands.Cog):
 
         if current_points <= 0:
             payer_mention = f"伺服器指定贊助者 (<@{payer_id}>)" if is_guild_sponsored else f"你 (<@{payer_id}>)"
-            panel_view = build_panel_link_view(guild_id, label="🌐 查看 AI 設定") if guild_id else None
+            panel_view = build_panel_link_view(guild_id, label="查看 AI 設定") if guild_id else None
             embed_no_balance = discord.Embed(
-                title="⚡ AI 專屬貨幣餘額不足",
+                title="AI 專屬貨幣餘額不足",
                 description=(
-                    f"⚠️ **{payer_mention} 目前的 AI 專屬貨幣餘額不足（目前餘額：`0` 點）。**\n\n"
-                    f"💡 **如何獲取 AI 貨幣？**\n"
+                    f"**{payer_mention} 目前的 AI 專屬貨幣餘額不足（目前餘額：`0` 點）。**\n\n"
+                    f"**如何獲取 AI 貨幣？**\n"
                     f"• 每日使用 `/economy_daily` 簽到免費領取 **1,000+** 點 AI 貨幣（連續簽到享額外加成！）。\n"
                     f"• 聯繫伺服器擁有者或管理員從後台發放 AI 點數。"
                 ),
@@ -406,17 +406,17 @@ class AI(commands.Cog):
     # /reset 與 /ai_reset: 清除頻道對話記憶
     # ==========================================================================
 
-    @app_commands.command(name="ai_reset", description="🧹 清除當前文字頻道或討論串的最近 15 則對話上下文記憶")
+    @app_commands.command(name="ai_reset", description="清除當前文字頻道或討論串的最近 15 則對話上下文記憶")
     async def ai_reset_command(self, interaction: discord.Interaction):
         count = memory_manager.clear_channel(interaction.channel_id)
         embed = discord.Embed(
-            title="🧹 頻道記憶已清除",
+            title="頻道記憶已清除",
             description=f"已成功清除本頻道最近 **{count}** 則對話記憶！下次發問將作為全新對話起始。",
             color=0x38bdf8,
         )
         await interaction.response.send_message(embed=embed)
 
-    @app_commands.command(name="reset", description="🧹 [快捷] 清除當前頻道的 AI 對話記憶")
+    @app_commands.command(name="reset", description="[快捷] 清除當前頻道的 AI 對話記憶")
     async def reset_shortcut_command(self, interaction: discord.Interaction):
         await self.ai_reset_command(interaction)
 
@@ -424,16 +424,16 @@ class AI(commands.Cog):
     # /provider 與 /ai_provider: 檢視提供商在線狀態與容災鏈
     # ==========================================================================
 
-    @app_commands.command(name="ai_provider", description="📊 查看多供應商免費 AI 狀態、容錯容災鏈與即時冷卻倒數")
+    @app_commands.command(name="ai_provider", description="查看多供應商免費 AI 狀態、容錯容災鏈與即時冷卻倒數")
     async def ai_provider_command(self, interaction: discord.Interaction):
         statuses = router.get_providers_status()
         embed = discord.Embed(
-            title="🌐 多供應商免費 AI 網關狀態監控",
+            title="多供應商免費 AI 網關狀態監控",
             description=(
                 "本系統採用動態多供應商容錯容災架構（Failover Gateway），調用時遇 `429 速率限制` 或服務端錯誤時，"
                 "**0 秒自動無縫切換**至下一順位提供商！\n\n"
-                "**🔁 文字請求鏈**：Groq ➔ NVIDIA NIM ➔ Mistral AI ➔ Google AI Studio ➔ Kilo Code\n"
-                "**🖼️ 圖片視覺鏈**：Google AI Studio ➔ Mistral AI ➔ Groq (Vision)"
+                "**文字請求鏈**：Groq ➔ NVIDIA NIM ➔ Mistral AI ➔ Google AI Studio ➔ Kilo Code\n"
+                "**圖片視覺鏈**：Google AI Studio ➔ Mistral AI ➔ Groq (Vision)"
             ),
             color=0x818cf8,
         )
@@ -452,10 +452,10 @@ class AI(commands.Cog):
             embed.add_field(name=s['name'], value="\n".join(lines), inline=False)
 
         embed.set_footer(text="動態容災智慧輪詢架構 · 炙彗JI器人")
-        view = build_panel_link_view(interaction.guild_id, label="🌐 前往後台檢視 AI 配置") if interaction.guild_id else None
+        view = build_panel_link_view(interaction.guild_id, label="前往後台檢視 AI 配置") if interaction.guild_id else None
         await interaction.response.send_message(embed=embed, view=view)
 
-    @app_commands.command(name="provider", description="📊 [快捷] 查看多供應商免費 AI 狀態與冷卻資訊")
+    @app_commands.command(name="provider", description="[快捷] 查看多供應商免費 AI 狀態與冷卻資訊")
     async def provider_shortcut_command(self, interaction: discord.Interaction):
         await self.ai_provider_command(interaction)
 
@@ -463,7 +463,7 @@ class AI(commands.Cog):
     # /persona 與 /ai_persona: 設定或清除頻道自訂人設
     # ==========================================================================
 
-    @app_commands.command(name="ai_persona", description="🎭 設定或重設當前頻道的專屬 AI 人設指令 (System Instruction)")
+    @app_commands.command(name="ai_persona", description="設定或重設當前頻道的專屬 AI 人設指令 (System Instruction)")
     @app_commands.describe(
         instruction="為當前頻道自訂的人設指令 (留空且 clear=True 則還原為伺服器預設)",
         clear="設為 True 則清除頻道專屬人設，恢復使用本伺服器控制面板預設人設",
@@ -477,13 +477,13 @@ class AI(commands.Cog):
         channel_id = interaction.channel_id
         if clear:
             memory_manager.reset_channel_persona(channel_id)
-            await interaction.response.send_message("✅ 已清除本頻道的專屬人設，恢復套用伺服器預設人設！")
+            await interaction.response.send_message("已清除本頻道的專屬人設，恢復套用伺服器預設人設！")
             return
 
         if instruction and instruction.strip():
             memory_manager.set_channel_persona(channel_id, instruction.strip())
             embed = discord.Embed(
-                title="🎭 頻道專屬人設已更新",
+                title="頻道專屬人設已更新",
                 description=f"本頻道後續對話將使用以下自訂人設：\n```\n{instruction.strip()}\n```",
                 color=0xa855f7,
             )
@@ -491,9 +491,9 @@ class AI(commands.Cog):
             await interaction.response.send_message(embed=embed)
         else:
             cur_persona = memory_manager.get_channel_persona(channel_id, fallback_default="（未設定，套用伺服器預設）")
-            await interaction.response.send_message(f"ℹ️ **當前頻道自訂人設**：\n```{cur_persona}```")
+            await interaction.response.send_message(f"**當前頻道自訂人設**：\n```{cur_persona}```")
 
-    @app_commands.command(name="persona", description="🎭 [快捷] 查看或設定當前頻道 AI 人設")
+    @app_commands.command(name="persona", description="[快捷] 查看或設定當前頻道 AI 人設")
     @app_commands.describe(instruction="為當前頻道自訂的人設指令", clear="設為 True 則清除頻道專屬人設")
     async def persona_shortcut_command(self, interaction: discord.Interaction, instruction: Optional[str] = None, clear: Optional[bool] = False):
         await self.ai_persona_command(interaction, instruction, clear)
@@ -507,7 +507,7 @@ class AI(commands.Cog):
         guild_id = interaction.guild_id
         cfg = self._get_guild_cfg(guild_id)
 
-        status_text = "🟢 啟用中" if cfg.get("is_enabled", True) else "🔴 已停用"
+        status_text = "啟用中" if cfg.get("is_enabled", True) else "已停用"
         model_name = cfg.get("model", DEFAULT_AI_MODEL)
         inst_preview = cfg.get("instruction", DEFAULT_AI_INSTRUCTION)
         if len(inst_preview) > 120:
@@ -520,15 +520,15 @@ class AI(commands.Cog):
         payer_id = cfg.get("payer_user_id")
         if payer_id:
             pts = get_user_ai_points(payer_id)
-            payer_text = f"<@{payer_id}> (餘額: `{pts:,}` ⚡AI幣)"
+            payer_text = f"<@{payer_id}> (餘額: `{pts:,}` AI幣)"
         else:
             payer_text = "未指定（由每位提問者自行支付）"
 
         is_auth = is_guild_ai_authorized(guild_id)
-        auth_text = "🟢 已開通封測授權" if is_auth else "🔒 未授權 (內部封測中)"
+        auth_text = "已開通封測授權" if is_auth else "未授權 (內部封測中)"
 
         embed = discord.Embed(
-            title="⚙️ 伺服器 AI 智慧助手配置狀態",
+            title="伺服器 AI 智慧助手配置狀態",
             description="管理員可隨時透過 `/ai_settings` 指令或點擊下方按鈕前往「網頁控制面板」即時自訂 AI 人設、預設模式與指定支付者！",
             color=0xa78bfa,
         )
@@ -536,13 +536,13 @@ class AI(commands.Cog):
         embed.add_field(name="功能狀態", value=status_text, inline=True)
         embed.add_field(name="預設引擎", value=f"`{model_name}`", inline=True)
         embed.add_field(name="限定頻道", value=channel_text, inline=True)
-        embed.add_field(name="💳 指定支付者", value=payer_text, inline=True)
+        embed.add_field(name="指定支付者", value=payer_text, inline=True)
         embed.add_field(name="創意度 (Temperature)", value=f"`{temp}`", inline=True)
         embed.add_field(name="最大長度 (Max Tokens)", value=f"`{tokens}`", inline=True)
         embed.add_field(name="目前人設指令 (Instruction)", value=f"```\n{inst_preview}\n```", inline=False)
         embed.set_footer(text="Multi-Provider Failover Gateway · 炙彗JI器人")
 
-        view = build_panel_link_view(guild_id, label="🌐 前往控制面板自訂 AI 人設") if guild_id else None
+        view = build_panel_link_view(guild_id, label="前往控制面板自訂 AI 人設") if guild_id else None
         await interaction.response.send_message(embed=embed, view=view)
 
     # ==========================================================================
@@ -551,7 +551,7 @@ class AI(commands.Cog):
 
     @app_commands.command(
         name="ai_settings",
-        description="⚙️ [管理員] 設定本伺服器的預設 AI 提供商/模型、人設指令與指定 AI 貨幣支付者",
+        description="[管理員] 設定本伺服器的預設 AI 提供商/模型、人設指令與指定 AI 貨幣支付者",
     )
     @app_commands.describe(
         model="選擇本伺服器預設使用的 AI 提供商與模型",
@@ -567,12 +567,12 @@ class AI(commands.Cog):
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.choices(
         model=[
-            app_commands.Choice(name="✨ auto (自動智慧容錯鏈：Groq → NVIDIA → Mistral → Gemini → Kilo)", value="auto"),
-            app_commands.Choice(name="⚡ Groq · Llama 3.3 70B (極速引擎)", value="groq:llama-3.3-70b-versatile"),
-            app_commands.Choice(name="🔮 Google · Gemini 2.0 Flash (圖文雙模態)", value="gemini:gemini-2.0-flash"),
-            app_commands.Choice(name="🚀 NVIDIA NIM · Llama 3.3 70B (大容量併發)", value="nvidia:meta/llama-3.3-70b-instruct"),
-            app_commands.Choice(name="🌪️ Mistral AI · Mistral Small (歐洲開源)", value="mistral:mistral-small-latest"),
-            app_commands.Choice(name="🛡️ Kilo Code Gateway · 免金鑰應急備援", value="kilo:kilo-auto/free"),
+            app_commands.Choice(name="auto", value="auto"),
+            app_commands.Choice(name="Groq · GPT-OSS 120B (LPU 極速開源旗艦)", value="groq:openai/gpt-oss-120b"),
+            app_commands.Choice(name="Google · Gemini Flash (圖文雙模態 & 最新穩定版)", value="gemini:gemini-flash-latest"),
+            app_commands.Choice(name="NVIDIA NIM · Llama 3.2 11B Vision (大容量圖文兼備)", value="nvidia:meta/llama-3.2-11b-vision-instruct"),
+            app_commands.Choice(name="Mistral AI · Ministral 8B (歐洲開源旗艦)", value="mistral:mistral-8b-latest"),
+            app_commands.Choice(name="Kilo Code Gateway · 備援通道", value="kilo:kilo-auto/free"),
         ]
     )
     async def ai_settings_command(
@@ -598,9 +598,9 @@ class AI(commands.Cog):
         if not is_guild_ai_authorized(guild_id):
             panel_view = build_panel_link_view(guild_id) if guild_id else None
             embed_unauth = discord.Embed(
-                title="🔒 AI 智慧助手內部封測中",
+                title="AI 智慧助手內部封測中",
                 description=(
-                    "⚠️ **本伺服器尚未獲得 AI 智慧助手封測授權，無法修改相關設定。**\n\n"
+                    "**本伺服器尚未獲得 AI 智慧助手封測授權，無法修改相關設定。**\n\n"
                     "請聯繫機器人擁有者/管理員在後台控制面板發放本伺服器的 AI 封測授權後再進行設定！"
                 ),
                 color=0xf59e0b,
@@ -609,7 +609,7 @@ class AI(commands.Cog):
             return
 
         if not interaction.user.guild_permissions.manage_guild and not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ 你需要具備「管理伺服器」權限才能使用此設定指令！", ephemeral=True)
+            await interaction.response.send_message("你需要具備「管理伺服器」權限才能使用此設定指令！", ephemeral=True)
             return
 
         cfg = dict(self._get_guild_cfg(guild_id))
@@ -629,7 +629,7 @@ class AI(commands.Cog):
         elif payer is not None:
             cfg["payer_user_id"] = payer.id
             pts = get_user_ai_points(payer.id)
-            updates.append(f"• **指定支付者**：{payer.mention}（目前餘額 `{pts:,}` ⚡AI幣）")
+            updates.append(f"• **指定支付者**：{payer.mention}（目前餘額 `{pts:,}` AI幣）")
 
         if clear_channel:
             cfg["channel_id"] = None
@@ -648,11 +648,11 @@ class AI(commands.Cog):
 
         if enabled is not None:
             cfg["is_enabled"] = bool(enabled)
-            updates.append(f"• **AI 功能**：{'🟢 已啟用' if cfg['is_enabled'] else '🔴 已停用'}")
+            updates.append(f"• **AI 功能**：{'已啟用' if cfg['is_enabled'] else '已停用'}")
 
         if not updates:
             await interaction.response.send_message(
-                "ℹ️ 未提供任何需要變更的設定參數。可使用 `/ai_config` 檢視當前設定狀態。",
+                "未提供任何需要變更的設定參數。可使用 `/ai_config` 檢視當前設定狀態。",
                 ephemeral=True,
             )
             return
@@ -661,12 +661,12 @@ class AI(commands.Cog):
         self.reload_settings()
 
         embed = discord.Embed(
-            title="✅ 伺服器 AI 設定已成功更新！",
+            title="伺服器 AI 設定已成功更新！",
             description="\n".join(updates),
             color=discord.Color.green(),
         )
         embed.set_footer(text="設定已即時同步至資料庫與網頁控制面板")
-        view = build_panel_link_view(guild_id, label="🌐 前往控制面板查看")
+        view = build_panel_link_view(guild_id, label="前往控制面板查看")
         await interaction.response.send_message(embed=embed, view=view)
 
     # ==========================================================================
@@ -729,9 +729,9 @@ class AI(commands.Cog):
         # 若僅標註卻無文字亦無圖片，發送親切引導問候
         if not clean_content and not img_url:
             greeting = (
-                f"嗨 {message.author.mention}！有什麼我可以幫忙的嗎？✨\n"
+                f"嗨 {message.author.mention}！有什麼我可以幫忙的嗎？\n"
                 "你可以直接在訊息中提及我並輸入問題、上傳圖片，或使用 `/ai` 指令開始智慧對話！\n"
-                "💡 提示：使用 `/ai_provider` 可即時檢視 Groq、Gemini、NVIDIA、Mistral 等免費 AI 引擎的在線狀態。"
+                "提示：使用 `/ai_provider` 可即時檢視 Groq、Gemini、NVIDIA、Mistral 等免費 AI 引擎的在線狀態。"
             )
             try:
                 await message.reply(greeting, mention_author=False)
@@ -748,10 +748,10 @@ class AI(commands.Cog):
             payer_mention = f"伺服器指定贊助者 (<@{payer_id}>)" if is_guild_sponsored else f"{message.author.mention}"
             panel_view = build_panel_link_view(guild_id) if guild_id else None
             embed_no_balance = discord.Embed(
-                title="⚡ AI 專屬貨幣餘額不足",
+                title="AI 專屬貨幣餘額不足",
                 description=(
-                    f"⚠️ **{payer_mention} 目前的 AI 專屬貨幣餘額不足（目前餘額：`0` 點）。**\n\n"
-                    f"💡 **如何獲取 AI 貨幣？**\n"
+                    f"**{payer_mention} 目前的 AI 專屬貨幣餘額不足（目前餘額：`0` 點）。**\n\n"
+                    f"**如何獲取 AI 貨幣？**\n"
                     f"• 每日使用 `/economy_daily` 簽到免費領取 **1,000+** 點 AI 貨幣（連續簽到享額外加成！）。\n"
                     f"• 聯繫伺服器擁有者或管理員從後台發放 AI 點數。"
                 ),

@@ -738,14 +738,14 @@
       (currentMembers || []).forEach((m) => {
         const opt = document.createElement('option');
         opt.value = m.id;
-        opt.textContent = `👤 ${m.name} (@${m.username || m.name})`;
+        opt.textContent = `${m.name} (@${m.username || m.name})`;
         if (String(m.id) === String(aiCfg.payer_user_id)) opt.selected = true;
         aiPayerSelect.appendChild(opt);
       });
       if (aiCfg.payer_user_id && !Array.from(aiPayerSelect.options).some((o) => o.value === String(aiCfg.payer_user_id))) {
         const opt = document.createElement('option');
         opt.value = aiCfg.payer_user_id;
-        opt.textContent = `👤 指定使用者 (ID: ${aiCfg.payer_user_id})`;
+        opt.textContent = `指定使用者 (ID: ${aiCfg.payer_user_id})`;
         opt.selected = true;
         aiPayerSelect.appendChild(opt);
       }
