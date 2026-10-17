@@ -1012,7 +1012,7 @@
     }
     if (btnModalRrSubmit) {
       const span = btnModalRrSubmit.querySelector('span');
-      if (span) span.textContent = '🚀 發送訊息並建立配置';
+      if (span) span.textContent = '儲存設定';
     }
 
     rrDraftPairs = [];
@@ -1052,7 +1052,7 @@
     }
     if (btnModalRrSubmit) {
       const span = btnModalRrSubmit.querySelector('span');
-      if (span) span.textContent = '💾 儲存配置並同步';
+      if (span) span.textContent = '儲存設定';
     }
 
     rrDraftPairs = (msg.pairs || []).map((p) => ({
