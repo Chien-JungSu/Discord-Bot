@@ -29,7 +29,7 @@ from cogs.database import (
     set_user_ai_points,
     update_user_ai_points,
 )
-from cogs.llm_router import router, strip_thinking_tags
+from cogs.llm_router import router, strip_thinking_tags, strip_roleplay_prefix
 from cogs.memory import memory_manager
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -204,7 +204,7 @@ class AI(commands.Cog):
 
         # 內容保護 (Embed description 上限 4096 字元，預留分隔線與 footer 空間)
         max_content_len = 4096 - len(footer_block)
-        clean_response = strip_thinking_tags(response_text or "").rstrip()
+        clean_response = strip_roleplay_prefix(strip_thinking_tags(response_text or "")).rstrip()
         if not clean_response:
             clean_response = "（無回覆內容）"
         elif len(clean_response) > max_content_len:

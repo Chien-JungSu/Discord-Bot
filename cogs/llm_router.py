@@ -78,6 +78,23 @@ def strip_thinking_tags(text: str) -> str:
     return cleaned.strip()
 
 
+def strip_roleplay_prefix(text: str) -> str:
+    """去除 LLaMA 等開源模型在對話開頭產生的「xxx的我」、「*xxx的我*」等角色扮演狀態前綴。"""
+    if not text:
+        return ""
+    # 支援兩類：
+    # 1. 有括號/星號包裹的: *xxx的我*, [xxx的我], （xxx的我）, 【xxx的我】
+    # 2. 無括號但後方接空白或標點符號的: xxx的我 , xxx的我：, xxx的我,
+    pattern = r'^(?:(?:[*(\[（【]([^\n\r*()\[\]）】]{1,20}的我)[*)\x5d）】]\s*[:：、，,]?\s*)|(?:([^\s\n\r*()\[\]）】]{1,15}的我)(?:\s+|[:：、，,]\s*)))'
+    cleaned = text.strip()
+    for _ in range(3):
+        new_cleaned = re.sub(pattern, '', cleaned, count=1).strip()
+        if new_cleaned == cleaned:
+            break
+        cleaned = new_cleaned
+    return cleaned
+
+
 # 已停用或過期模型自動轉發對照表 (確保舊設定或資料庫殘留模型不致報 404/410)
 DEPRECATED_MODEL_MAPPING = {
     "llama-3.3-70b-versatile": "meta/llama-3.2-11b-vision-instruct",
@@ -332,8 +349,15 @@ class MultiProviderLLMRouter:
 
         # 2. 構建請求訊息列表
         formatted_messages: List[Dict[str, Any]] = []
-        if system_instruction and system_instruction.strip():
-            formatted_messages.append({"role": "system", "content": system_instruction.strip()})
+        anti_roleplay_rule = (
+            "\n\n【格式約束】\n"
+            "- 請直接針對使用者訊息進行自然對話回答。\n"
+            "- 絕對嚴禁在回覆開頭添加動作、心理狀態或狀態描述前綴（例如嚴禁出現「xxx的我」、「*xxx的我*」、「[xxx的我]」等標籤）。\n"
+            "- 嚴禁主動覆誦、確認或列出自己的系統人設與身份設定。"
+        )
+        base_instruction = (system_instruction or "").strip()
+        full_system_instruction = (base_instruction + anti_roleplay_rule).strip() if base_instruction else anti_roleplay_rule.strip()
+        formatted_messages.append({"role": "system", "content": full_system_instruction})
 
         for msg in messages:
             formatted_messages.append(msg)
@@ -421,7 +445,7 @@ class MultiProviderLLMRouter:
                         raise ValueError(f"提供商 {prov.name} 未回傳有效 choices")
 
                     raw_content = choice.message.content or ""
-                    clean_content = strip_thinking_tags(raw_content)
+                    clean_content = strip_roleplay_prefix(strip_thinking_tags(raw_content))
 
                     if not clean_content:
                         raise ValueError("AI 回傳之有效文字為空（可能在思考階段耗盡 Token）")
