@@ -8,7 +8,7 @@ import traceback
 from typing import Any, Dict, List, Optional
 
 import discord
-from discord import app_commands
+from discord import app_commands, ui
 from discord.ext import commands
 from dotenv import load_dotenv
 
@@ -222,7 +222,35 @@ class AI(commands.Cog):
         if image_url:
             embed.set_thumbnail(url=image_url)
 
-        return embed
+        return embed, footer_text, clean_response
+
+    def _build_ai_components_v2_view(
+        self,
+        clean_response: str,
+        footer_text: str,
+        image_url: Optional[str] = None,
+        color: int = 0x5865F2,
+    ) -> ui.LayoutView:
+        """依照圖二風格使用 Discord Components V2 建構容器、真實不可選取實體橫線與 Footer：
+        [AI 回覆內容]
+        ──────────────────────────── (Discord 原生 Separator 元件，實體水平分隔線，滑鼠無法選取)
+        -# 0.00/C | I 33C/0.00 | O 120C/0.00 | TC 0.00 | Pay Nicko | deepseek-v4.1-flash | 4.91s
+        """
+        view = ui.LayoutView()
+        safe_response = clean_response[:3850] if len(clean_response) > 3850 else (clean_response or "（無回覆內容）")
+        top_text = ui.TextDisplay(safe_response)
+        separator = ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small)
+        bottom_text = ui.TextDisplay(f"-# {footer_text}")
+
+        if image_url:
+            thumbnail = ui.Thumbnail(image_url)
+            content_section = ui.Section(top_text, accessory=thumbnail)
+            container = ui.Container(content_section, separator, bottom_text, accent_color=color)
+        else:
+            container = ui.Container(top_text, separator, bottom_text, accent_color=color)
+
+        view.add_item(container)
+        return view
 
     # ==========================================================================
     # /ai 斜線指令 (支援文字與圖片附件)
@@ -391,11 +419,11 @@ class AI(commands.Cog):
         payer_member = interaction.guild.get_member(payer_id) if interaction.guild else None
         payer_name = payer_member.display_name if payer_member else (interaction.user.display_name or interaction.user.name)
 
-        # 10. 組裝簡約 Embed (如圖二排版)
+        # 10. 組裝 Components V2 / 簡約 Embed (完全對齊圖二原生不可選取實體橫線排版)
         chunks = split_message_chunks(response_text, max_chars=3800)
         first_chunk = chunks[0] if chunks else response_text
 
-        embed = self._build_ai_embed(
+        embed, footer_text, clean_first_chunk = self._build_ai_embed(
             response_text=first_chunk,
             prompt=clean_prompt,
             stats=stats,
@@ -407,7 +435,20 @@ class AI(commands.Cog):
             image_url=img_url,
         )
 
-        await interaction.followup.send(embed=embed)
+        sent_v2 = False
+        try:
+            layout_view = self._build_ai_components_v2_view(
+                clean_response=clean_first_chunk,
+                footer_text=footer_text,
+                image_url=img_url,
+            )
+            await interaction.followup.send(view=layout_view)
+            sent_v2 = True
+        except Exception as v2_err:
+            print(f"⚠️ Components V2 渲染例外，降級為傳統 Embed 發送: {v2_err}")
+
+        if not sent_v2:
+            await interaction.followup.send(embed=embed)
         if len(chunks) > 1:
             for extra_chunk in chunks[1:]:
                 sub_chunks = split_message_chunks(extra_chunk, max_chars=1900)
@@ -833,7 +874,7 @@ class AI(commands.Cog):
                 chunks = split_message_chunks(response_text, max_chars=3800)
                 first_chunk = chunks[0] if chunks else response_text
 
-                embed = self._build_ai_embed(
+                embed, footer_text, clean_first_chunk = self._build_ai_embed(
                     response_text=first_chunk,
                     prompt=clean_content,
                     stats=stats,
@@ -845,7 +886,20 @@ class AI(commands.Cog):
                     image_url=img_url,
                 )
 
-                await message.reply(embed=embed, mention_author=False)
+                sent_v2 = False
+                try:
+                    layout_view = self._build_ai_components_v2_view(
+                        clean_response=clean_first_chunk,
+                        footer_text=footer_text,
+                        image_url=img_url,
+                    )
+                    await message.reply(view=layout_view, mention_author=False)
+                    sent_v2 = True
+                except Exception as v2_err:
+                    print(f"⚠️ Components V2 渲染例外，降級為傳統 Embed 發送: {v2_err}")
+
+                if not sent_v2:
+                    await message.reply(embed=embed, mention_author=False)
                 if len(chunks) > 1:
                     for extra_chunk in chunks[1:]:
                         sub_chunks = split_message_chunks(extra_chunk, max_chars=1900)
