@@ -597,8 +597,7 @@ class CustomBetModal(discord.ui.Modal, title="✏️ 自訂下注金額"):
 
         self.bet_input = discord.ui.TextInput(
             label=f"下注金額 ({b_min:,} ~ {b_max:,}，或輸入 all 全押)",
-            placeholder="請輸入整數金額，或輸入 all 代表 All In",
-            default="all" if panel_view.is_all_in else str(panel_view.bet),
+            placeholder=f"最低 {b_min:,} ~ 最高 {b_max:,}（高於自身餘額將自動改為全押）",
             required=True,
             max_length=15,
         )
@@ -638,22 +637,44 @@ class CustomBetModal(discord.ui.Modal, title="✏️ 自訂下注金額"):
                 ephemeral=True,
             )
             return
+
+        if bal < b_min:
+            fresh_view.sync_bet_buttons(balance=bal)
+            await interaction.response.edit_message(embed=fresh_view.build_lobby_embed(balance=bal), view=fresh_view)
+            await interaction.followup.send(
+                f"❌ 餘額不足！最低下注需要 **{b_min:,}** {cur}，你目前只有 **{bal:,}** {cur}。",
+                ephemeral=True,
+            )
+            return
+
         if val < b_min:
             await interaction.response.send_message(
                 f"❌ 下注金額不能低於最低限制 **{b_min:,}** {cur}！",
                 ephemeral=True,
             )
             return
+
+        # 數字高於自身所有金額時，自動修改成自身擁有的所有金額
+        if val > bal:
+            val = bal
+
+        # 當偵測到賭注 = 自身所有金額時，一樣跳出 All In 確認
+        if val == bal:
+            fresh_view.bet = min(bal, b_max)
+            await fresh_view.prompt_all_in_confirm(interaction)
+            return
+
         if val > b_max:
             await interaction.response.send_message(
                 f"❌ 下注金額不能超過單局上限 **{b_max:,}** {cur}！",
                 ephemeral=True,
             )
             return
+
         fresh_view.bet = val
         fresh_view.is_all_in = False
         fresh_view.confirming_all_in = False
-        fresh_view.sync_bet_buttons()
+        fresh_view.sync_bet_buttons(balance=bal)
         embed = fresh_view.build_lobby_embed(balance=bal)
         await interaction.response.edit_message(embed=embed, view=fresh_view)
 
@@ -677,14 +698,19 @@ class BaseBettingPanelView(BaseEconomyView):
         self.confirming_all_in = False
         b_min = int(cog.config.get("bet_min", 10))
         b_max = int(cog.config.get("bet_max", 50000))
-        if initial_bet is not None:
-            self.bet = max(b_min, min(b_max, int(initial_bet)))
+        bal = get_economy_user(user.id)["balance"]
+        if bal < b_min:
+            self.is_all_in = False
+            self.bet = max(0, bal)
+        elif self.is_all_in:
+            self.bet = min(bal, b_max)
+        elif initial_bet is not None:
+            self.bet = max(b_min, min(b_max, bal, int(initial_bet)))
         else:
-            bal = get_economy_user(user.id)["balance"]
             default_target = min(max(b_min, 100), b_max)
-            self.bet = max(b_min, min(bal, default_target)) if bal >= b_min else default_target
+            self.bet = max(b_min, min(bal, default_target))
 
-    def sync_bet_buttons(self):
+    def sync_bet_buttons(self, balance: Optional[int] = None):
         """由子類別覆寫以動態更新按鈕上的下注金額文字與 All In 確認狀態。"""
         pass
 
@@ -696,40 +722,86 @@ class BaseBettingPanelView(BaseEconomyView):
         """顯示 All In 二次確認訊息並透過編輯原訊息切換為「確認 All In / 取消」按鈕。"""
         bal = get_economy_user(interaction.user.id)["balance"]
         b_min = int(self.cog.config.get("bet_min", 10))
+        b_max = int(self.cog.config.get("bet_max", 50000))
         cur = self.cog.currency_str()
         if bal < b_min:
-            await interaction.response.send_message(
+            self.confirming_all_in = False
+            self.is_all_in = False
+            self.bet = max(0, bal)
+            self.sync_bet_buttons(balance=bal)
+            await interaction.response.edit_message(embed=self.build_lobby_embed(balance=bal), view=self)
+            await interaction.followup.send(
                 f"❌ 餘額不足以 All In！最低下注需要 **{b_min:,}** {cur}，你目前只有 **{bal:,}** {cur}。",
                 ephemeral=True,
             )
             return
+        self.bet = min(bal, b_max)
         self.confirming_all_in = True
-        self.sync_bet_buttons()
+        self.sync_bet_buttons(balance=bal)
         await interaction.response.edit_message(embed=self.build_lobby_embed(balance=bal), view=self)
 
     async def _adjust_bet_min(self, interaction: discord.Interaction):
+        bal = get_economy_user(interaction.user.id)["balance"]
         b_min = int(self.cog.config.get("bet_min", 10))
+        if bal < b_min:
+            self.confirming_all_in = False
+            self.is_all_in = False
+            self.bet = max(0, bal)
+            self.sync_bet_buttons(balance=bal)
+            await interaction.response.edit_message(embed=self.build_lobby_embed(balance=bal), view=self)
+            return
         self.bet = b_min
+        if self.bet == bal:
+            await self.prompt_all_in_confirm(interaction)
+            return
         self.is_all_in = False
         self.confirming_all_in = False
-        self.sync_bet_buttons()
-        await interaction.response.edit_message(embed=self.build_lobby_embed(), view=self)
+        self.sync_bet_buttons(balance=bal)
+        await interaction.response.edit_message(embed=self.build_lobby_embed(balance=bal), view=self)
 
     async def _adjust_bet_half(self, interaction: discord.Interaction):
+        bal = get_economy_user(interaction.user.id)["balance"]
         b_min = int(self.cog.config.get("bet_min", 10))
-        self.bet = max(b_min, self.bet // 2)
+        if bal < b_min:
+            self.confirming_all_in = False
+            self.is_all_in = False
+            self.bet = max(0, bal)
+            self.sync_bet_buttons(balance=bal)
+            await interaction.response.edit_message(embed=self.build_lobby_embed(balance=bal), view=self)
+            return
+        self.bet = max(b_min, min(bal, self.bet // 2))
+        if self.bet == bal:
+            await self.prompt_all_in_confirm(interaction)
+            return
         self.is_all_in = False
         self.confirming_all_in = False
-        self.sync_bet_buttons()
-        await interaction.response.edit_message(embed=self.build_lobby_embed(), view=self)
+        self.sync_bet_buttons(balance=bal)
+        await interaction.response.edit_message(embed=self.build_lobby_embed(balance=bal), view=self)
 
     async def _adjust_bet_double(self, interaction: discord.Interaction):
+        bal = get_economy_user(interaction.user.id)["balance"]
+        b_min = int(self.cog.config.get("bet_min", 10))
         b_max = int(self.cog.config.get("bet_max", 50000))
-        self.bet = min(b_max, self.bet * 2)
+        if bal < b_min:
+            self.confirming_all_in = False
+            self.is_all_in = False
+            self.bet = max(0, bal)
+            self.sync_bet_buttons(balance=bal)
+            await interaction.response.edit_message(embed=self.build_lobby_embed(balance=bal), view=self)
+            return
+        # 若加倍後高於自身所有金額，自動修改成自身擁有的所有金額
+        new_bet = self.bet * 2
+        if new_bet > bal:
+            new_bet = bal
+        if new_bet == bal:
+            self.bet = min(bal, b_max)
+            await self.prompt_all_in_confirm(interaction)
+            return
+        self.bet = max(b_min, min(b_max, new_bet))
         self.is_all_in = False
         self.confirming_all_in = False
-        self.sync_bet_buttons()
-        await interaction.response.edit_message(embed=self.build_lobby_embed(), view=self)
+        self.sync_bet_buttons(balance=bal)
+        await interaction.response.edit_message(embed=self.build_lobby_embed(balance=bal), view=self)
 
 
 class SlotsPanelView(BaseBettingPanelView):
@@ -747,17 +819,36 @@ class SlotsPanelView(BaseBettingPanelView):
         super().__init__(cog, user, initial_bet, is_all_in=is_all_in, played_once=played_once)
         self.sync_bet_buttons()
 
-    def sync_bet_buttons(self):
+    def sync_bet_buttons(self, balance: Optional[int] = None):
         b_min = int(self.cog.config.get("bet_min", 10))
         b_max = int(self.cog.config.get("bet_max", 50000))
+        bal = balance if balance is not None else get_economy_user(self.user_id)["balance"]
         self.min_btn.label = f"💵 最低 ({b_min:,})"
+
+        # 若沒錢（低於最低下注額），直接將按鈕 disable
+        if bal < b_min:
+            self.confirming_all_in = False
+            self.is_all_in = False
+            self.bet = max(0, bal)
+            action_prefix = "🔄 再轉一次" if self.played_once else "🎰 開始旋轉"
+            self.spin_btn.label = f"{action_prefix} (下注: {self.bet:,})"
+            self.spin_btn.style = discord.ButtonStyle.success
+            self.all_in_spin_btn.label = "🔥 All In"
+            self.all_in_spin_btn.style = discord.ButtonStyle.danger
+            self.disable_all_items()
+            return
+
+        if self.is_all_in or self.bet > bal:
+            self.bet = min(bal, b_max)
+
         if self.confirming_all_in:
-            bal = get_economy_user(self.user_id)["balance"]
-            all_in_amt = min(bal, b_max) if bal >= b_min else b_min
-            self.spin_btn.label = f"⚠️ 確認 All In 旋轉 ({all_in_amt:,})"
+            all_in_amt = min(bal, b_max)
+            self.spin_btn.label = f"⚠️ 確認 All In ({all_in_amt:,})"
             self.spin_btn.style = discord.ButtonStyle.danger
+            self.spin_btn.disabled = False
             self.all_in_spin_btn.label = "↩️ 取消 All In"
             self.all_in_spin_btn.style = discord.ButtonStyle.secondary
+            self.all_in_spin_btn.disabled = False
             self.min_btn.disabled = True
             self.half_btn.disabled = True
             self.double_btn.disabled = True
@@ -766,8 +857,10 @@ class SlotsPanelView(BaseBettingPanelView):
             action_prefix = "🔄 再轉一次" if self.played_once else "🎰 開始旋轉"
             self.spin_btn.label = f"{action_prefix} (下注: {self.bet:,})"
             self.spin_btn.style = discord.ButtonStyle.success
-            self.all_in_spin_btn.label = "🔥 All In 全押旋轉"
+            self.spin_btn.disabled = False
+            self.all_in_spin_btn.label = "🔥 All In"
             self.all_in_spin_btn.style = discord.ButtonStyle.danger
+            self.all_in_spin_btn.disabled = False
             self.min_btn.disabled = False
             self.half_btn.disabled = False
             self.double_btn.disabled = False
@@ -791,7 +884,7 @@ class SlotsPanelView(BaseBettingPanelView):
                     f"**玩家**：{self.user.mention} ｜ **目前餘額**：**{bal:,}** {cur}\n"
                     f"**即將全押投入**：🔥 **{all_in_amt:,}** {cur}（單局上限：`{b_max:,}`）\n\n"
                     "> ⚠️ **注意：All In 全押一旦未中獎將損失全部投入賭注！**\n"
-                    "> 請點擊下方 **「⚠️ 確認 All In 旋轉」** 立即啟動，或點擊 **「↩️ 取消 All In」** 返回。"
+                    "> 請點擊下方 **「⚠️ 確認 All In」** 立即啟動，或點擊 **「↩️ 取消 All In」** 返回。"
                 ),
                 color=discord.Color.orange(),
             )
@@ -811,39 +904,52 @@ class SlotsPanelView(BaseBettingPanelView):
             ),
             color=discord.Color.gold(),
         )
-        embed.set_footer(text="可使用下方按鈕調整賭注、自訂金額，或點擊「🔥 All In 全押旋轉」梭哈！")
+        embed.set_footer(text="可使用下方按鈕調整賭注、自訂金額，或點擊「🔥 All In」梭哈！")
         return embed
 
     @discord.ui.button(label="🎰 開始旋轉", style=discord.ButtonStyle.success, row=0)
     async def spin_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        bal = get_economy_user(interaction.user.id)["balance"]
+        b_min = int(self.cog.config.get("bet_min", 10))
+        b_max = int(self.cog.config.get("bet_max", 50000))
+        cur = self.cog.currency_str()
+        if bal < b_min:
+            self.confirming_all_in = False
+            self.is_all_in = False
+            self.bet = max(0, bal)
+            self.sync_bet_buttons(balance=bal)
+            await interaction.response.edit_message(embed=self.build_lobby_embed(balance=bal), view=self)
+            await interaction.followup.send(
+                f"❌ 餘額不足！最低下注需要 **{b_min:,}** {cur}，你目前只有 **{bal:,}** {cur}。",
+                ephemeral=True,
+            )
+            return
+
         if self.confirming_all_in:
             self.confirming_all_in = False
-            bal = get_economy_user(interaction.user.id)["balance"]
-            b_min = int(self.cog.config.get("bet_min", 10))
-            b_max = int(self.cog.config.get("bet_max", 50000))
-            cur = self.cog.currency_str()
-            if bal < b_min:
-                self.sync_bet_buttons()
-                await interaction.response.edit_message(embed=self.build_lobby_embed(balance=bal), view=self)
-                await interaction.followup.send(
-                    f"❌ 餘額不足以 All In！最低下注需要 **{b_min:,}** {cur}，你目前只有 **{bal:,}** {cur}。",
-                    ephemeral=True,
-                )
-                return
             all_in_bet = min(bal, b_max)
             self.bet = all_in_bet
             self.is_all_in = True
-            self.sync_bet_buttons()
+            self.sync_bet_buttons(balance=bal)
             await self.cog._execute_slots(interaction, all_in_bet, panel_view=self, is_all_in=True)
+            return
+
+        if self.bet > bal:
+            self.bet = min(bal, b_max)
+
+        # 當偵測到賭注 = 自身所有金額時，一樣跳出 All In 確認
+        if self.bet == bal:
+            await self.prompt_all_in_confirm(interaction)
             return
 
         self.is_all_in = False
         await self.cog._execute_slots(interaction, self.bet, panel_view=self, is_all_in=False)
 
-    @discord.ui.button(label="🔥 All In 全押旋轉", style=discord.ButtonStyle.danger, row=0)
+    @discord.ui.button(label="🔥 All In", style=discord.ButtonStyle.danger, row=0)
     async def all_in_spin_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.confirming_all_in:
             self.confirming_all_in = False
+            self.is_all_in = False
             self.sync_bet_buttons()
             await interaction.response.edit_message(embed=self.build_lobby_embed(), view=self)
             return
@@ -878,21 +984,38 @@ class GamblePanelView(BaseBettingPanelView):
         is_all_in: bool = False,
         played_once: bool = False,
     ):
+        self._pending_gamble: Optional[tuple[str, str]] = None
         super().__init__(cog, user, initial_bet, is_all_in=is_all_in, played_once=played_once)
         self.sync_bet_buttons()
 
-    def sync_bet_buttons(self):
+    def sync_bet_buttons(self, balance: Optional[int] = None):
         b_min = int(self.cog.config.get("bet_min", 10))
         b_max = int(self.cog.config.get("bet_max", 50000))
+        bal = balance if balance is not None else get_economy_user(self.user_id)["balance"]
         choice_btns = (self.coin_heads, self.coin_tails, self.dice_big, self.dice_small, self.dice_odd, self.dice_even)
 
+        # 若沒錢（低於最低下注額），直接將所有按鈕 disable
+        if bal < b_min:
+            self.confirming_all_in = False
+            self.is_all_in = False
+            self.bet = max(0, bal)
+            self.min_btn.label = f"💵 最低 ({b_min:,})"
+            self.min_btn.style = discord.ButtonStyle.secondary
+            self.all_in_btn.label = "🔥 All In"
+            self.all_in_btn.style = discord.ButtonStyle.danger
+            self.disable_all_items()
+            return
+
+        if self.is_all_in or self.bet > bal:
+            self.bet = min(bal, b_max)
+
         if self.confirming_all_in:
-            bal = get_economy_user(self.user_id)["balance"]
-            all_in_amt = min(bal, b_max) if bal >= b_min else b_min
+            all_in_amt = min(bal, b_max)
             for btn in choice_btns:
                 btn.disabled = True
-            self.all_in_btn.label = f"⚠️ 確認啟用 All In ({all_in_amt:,})"
+            self.all_in_btn.label = f"⚠️ 確認 All In ({all_in_amt:,})"
             self.all_in_btn.style = discord.ButtonStyle.danger
+            self.all_in_btn.disabled = False
             self.min_btn.label = "↩️ 取消 All In"
             self.min_btn.style = discord.ButtonStyle.secondary
             self.min_btn.disabled = False
@@ -908,11 +1031,12 @@ class GamblePanelView(BaseBettingPanelView):
             self.half_btn.disabled = False
             self.double_btn.disabled = False
             self.custom_btn.disabled = False
+            self.all_in_btn.disabled = False
             if self.is_all_in:
-                self.all_in_btn.label = f"🔥 All In 已啟用 ({self.bet:,})"
+                self.all_in_btn.label = f"🔥 All In ({self.bet:,})"
                 self.all_in_btn.style = discord.ButtonStyle.success
             else:
-                self.all_in_btn.label = "🔥 All In 全押"
+                self.all_in_btn.label = "🔥 All In"
                 self.all_in_btn.style = discord.ButtonStyle.danger
 
     def build_lobby_embed(self, balance: Optional[int] = None) -> discord.Embed:
@@ -932,7 +1056,7 @@ class GamblePanelView(BaseBettingPanelView):
                     f"**玩家**：{self.user.mention} ｜ **目前餘額**：**{bal:,}** {cur}\n"
                     f"**即將設定全押賭注**：🔥 **{all_in_amt:,}** {cur}（單局上限：`{b_max:,}`）\n\n"
                     "> ⚠️ **注意：確認啟用後，點選上方任一硬幣或骰子選項將直接全押開賭！**\n"
-                    "> 請點擊下方 **「⚠️ 確認啟用 All In」** 鎖定全押賭注，或點擊 **「↩️ 取消 All In」** 返回。"
+                    "> 請點擊下方 **「⚠️ 確認 All In」** 鎖定全押賭注，或點擊 **「↩️ 取消 All In」** 返回。"
                 ),
                 color=discord.Color.orange(),
             )
@@ -941,8 +1065,8 @@ class GamblePanelView(BaseBettingPanelView):
 
         if self.is_all_in and bal >= b_min:
             self.bet = min(bal, b_max)
-            self.sync_bet_buttons()
-        bet_tag = f"**{self.bet:,}** {cur}" + (" 🔥 *(All In 全押模式)*" if self.is_all_in else "")
+            self.sync_bet_buttons(balance=bal)
+        bet_tag = f"**{self.bet:,}** {cur}" + (" 🔥 *(All In)*" if self.is_all_in else "")
 
         embed = discord.Embed(
             title="🎲 擲硬幣 & 骰子比大小",
@@ -954,30 +1078,55 @@ class GamblePanelView(BaseBettingPanelView):
             ),
             color=discord.Color.blurple(),
         )
-        embed.set_footer(text="點擊第 1、2 排的押注按鈕即可直接開賭；點擊第 3 排按鈕可調整賭注或切換 All In。")
+        embed.set_footer(text="點擊第 1、2 排的押注按鈕即可直接開賭；點擊第 3 排按鈕可調整賭注或點擊「🔥 All In」。")
         return embed
 
     async def _trigger_gamble(self, interaction: discord.Interaction, mode: str, choice: str):
+        bal = get_economy_user(interaction.user.id)["balance"]
         b_min = int(self.cog.config.get("bet_min", 10))
         b_max = int(self.cog.config.get("bet_max", 50000))
+        cur = self.cog.currency_str()
+        if bal < b_min:
+            self.confirming_all_in = False
+            self.is_all_in = False
+            self.bet = max(0, bal)
+            self.sync_bet_buttons(balance=bal)
+            await interaction.response.edit_message(embed=self.build_lobby_embed(balance=bal), view=self)
+            await interaction.followup.send(
+                f"❌ 餘額不足！最低下注需要 **{b_min:,}** {cur}，你目前只有 **{bal:,}** {cur}。",
+                ephemeral=True,
+            )
+            return
+
         if self.is_all_in:
-            bal = get_economy_user(interaction.user.id)["balance"]
-            if bal < b_min:
-                cur = self.cog.currency_str()
-                await interaction.response.send_message(
-                    f"❌ 餘額不足以 All In！最低下注需要 **{b_min:,}** {cur}，你目前只有 **{bal:,}** {cur}。",
-                    ephemeral=True,
-                )
-                return
             self.bet = min(bal, b_max)
-            self.sync_bet_buttons()
+            self.sync_bet_buttons(balance=bal)
+            await self.cog._execute_gamble(
+                interaction,
+                self.bet,
+                mode,
+                choice,
+                panel_view=self,
+                is_all_in=True,
+            )
+            return
+
+        if self.bet > bal:
+            self.bet = min(bal, b_max)
+
+        # 當偵測到賭注 = 自身所有金額時，一樣跳出 All In 確認
+        if self.bet == bal:
+            self._pending_gamble = (mode, choice)
+            await self.prompt_all_in_confirm(interaction)
+            return
+
         await self.cog._execute_gamble(
             interaction,
             self.bet,
             mode,
             choice,
             panel_view=self,
-            is_all_in=self.is_all_in,
+            is_all_in=False,
         )
 
     @discord.ui.button(label="🪙 硬幣：正面", style=discord.ButtonStyle.primary, row=0)
@@ -1004,7 +1153,7 @@ class GamblePanelView(BaseBettingPanelView):
     async def dice_even(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._trigger_gamble(interaction, "dice_oe", "雙")
 
-    @discord.ui.button(label="🔥 All In 全押", style=discord.ButtonStyle.danger, row=2)
+    @discord.ui.button(label="🔥 All In", style=discord.ButtonStyle.danger, row=2)
     async def all_in_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.confirming_all_in:
             self.confirming_all_in = False
@@ -1013,7 +1162,8 @@ class GamblePanelView(BaseBettingPanelView):
             b_max = int(self.cog.config.get("bet_max", 50000))
             cur = self.cog.currency_str()
             if bal < b_min:
-                self.sync_bet_buttons()
+                self._pending_gamble = None
+                self.sync_bet_buttons(balance=bal)
                 await interaction.response.edit_message(embed=self.build_lobby_embed(balance=bal), view=self)
                 await interaction.followup.send(
                     f"❌ 餘額不足以 All In！最低下注需要 **{b_min:,}** {cur}，你目前只有 **{bal:,}** {cur}。",
@@ -1022,15 +1172,32 @@ class GamblePanelView(BaseBettingPanelView):
                 return
             self.bet = min(bal, b_max)
             self.is_all_in = True
-            self.sync_bet_buttons()
+            pending = self._pending_gamble
+            self._pending_gamble = None
+            if pending is not None:
+                mode, choice = pending
+                self.sync_bet_buttons(balance=bal)
+                await self.cog._execute_gamble(
+                    interaction,
+                    self.bet,
+                    mode,
+                    choice,
+                    panel_view=self,
+                    is_all_in=True,
+                )
+                return
+            self.sync_bet_buttons(balance=bal)
             await interaction.response.edit_message(embed=self.build_lobby_embed(balance=bal), view=self)
             return
+        self._pending_gamble = None
         await self.prompt_all_in_confirm(interaction)
 
     @discord.ui.button(label="💵 最低", style=discord.ButtonStyle.secondary, row=2)
     async def min_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.confirming_all_in:
             self.confirming_all_in = False
+            self.is_all_in = False
+            self._pending_gamble = None
             self.sync_bet_buttons()
             await interaction.response.edit_message(embed=self.build_lobby_embed(), view=self)
             return
@@ -1064,17 +1231,36 @@ class BlackjackLobbyView(BaseBettingPanelView):
         super().__init__(cog, user, initial_bet, is_all_in=is_all_in, played_once=played_once)
         self.sync_bet_buttons()
 
-    def sync_bet_buttons(self):
+    def sync_bet_buttons(self, balance: Optional[int] = None):
         b_min = int(self.cog.config.get("bet_min", 10))
         b_max = int(self.cog.config.get("bet_max", 50000))
+        bal = balance if balance is not None else get_economy_user(self.user_id)["balance"]
         self.min_btn.label = f"💵 最低 ({b_min:,})"
+
+        # 若沒錢（低於最低下注額），直接將按鈕 disable
+        if bal < b_min:
+            self.confirming_all_in = False
+            self.is_all_in = False
+            self.bet = max(0, bal)
+            action_prefix = "🃏 再玩一局" if self.played_once else "🃏 開始發牌"
+            self.deal_btn.label = f"{action_prefix} (下注: {self.bet:,})"
+            self.deal_btn.style = discord.ButtonStyle.success
+            self.all_in_deal_btn.label = "🔥 All In"
+            self.all_in_deal_btn.style = discord.ButtonStyle.danger
+            self.disable_all_items()
+            return
+
+        if self.is_all_in or self.bet > bal:
+            self.bet = min(bal, b_max)
+
         if self.confirming_all_in:
-            bal = get_economy_user(self.user_id)["balance"]
-            all_in_amt = min(bal, b_max) if bal >= b_min else b_min
-            self.deal_btn.label = f"⚠️ 確認 All In 發牌 ({all_in_amt:,})"
+            all_in_amt = min(bal, b_max)
+            self.deal_btn.label = f"⚠️ 確認 All In ({all_in_amt:,})"
             self.deal_btn.style = discord.ButtonStyle.danger
+            self.deal_btn.disabled = False
             self.all_in_deal_btn.label = "↩️ 取消 All In"
             self.all_in_deal_btn.style = discord.ButtonStyle.secondary
+            self.all_in_deal_btn.disabled = False
             self.min_btn.disabled = True
             self.half_btn.disabled = True
             self.double_btn.disabled = True
@@ -1083,8 +1269,10 @@ class BlackjackLobbyView(BaseBettingPanelView):
             action_prefix = "🃏 再玩一局" if self.played_once else "🃏 開始發牌"
             self.deal_btn.label = f"{action_prefix} (下注: {self.bet:,})"
             self.deal_btn.style = discord.ButtonStyle.success
-            self.all_in_deal_btn.label = "🔥 All In 全押發牌"
+            self.deal_btn.disabled = False
+            self.all_in_deal_btn.label = "🔥 All In"
             self.all_in_deal_btn.style = discord.ButtonStyle.danger
+            self.all_in_deal_btn.disabled = False
             self.min_btn.disabled = False
             self.half_btn.disabled = False
             self.double_btn.disabled = False
@@ -1107,7 +1295,7 @@ class BlackjackLobbyView(BaseBettingPanelView):
                     f"**玩家**：{self.user.mention} ｜ **目前餘額**：**{bal:,}** {cur}\n"
                     f"**即將全押投入**：🔥 **{all_in_amt:,}** {cur}（單局上限：`{b_max:,}`）\n\n"
                     "> ⚠️ **注意：All In 全押一旦落敗將損失全部投入賭注！**\n"
-                    "> 請點擊下方 **「⚠️ 確認 All In 發牌」** 立即開局，或點擊 **「↩️ 取消 All In」** 返回。"
+                    "> 請點擊下方 **「⚠️ 確認 All In」** 立即開局，或點擊 **「↩️ 取消 All In」** 返回。"
                 ),
                 color=discord.Color.orange(),
             )
@@ -1127,39 +1315,52 @@ class BlackjackLobbyView(BaseBettingPanelView):
             ),
             color=discord.Color.blurple(),
         )
-        embed.set_footer(text="請調整賭注後點擊「🃏 開始發牌」，或點擊「🔥 All In 全押發牌」梭哈！")
+        embed.set_footer(text="請調整賭注後點擊「🃏 開始發牌」，或點擊「🔥 All In」梭哈！")
         return embed
 
     @discord.ui.button(label="🃏 開始發牌", style=discord.ButtonStyle.success, row=0)
     async def deal_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        bal = get_economy_user(interaction.user.id)["balance"]
+        b_min = int(self.cog.config.get("bet_min", 10))
+        b_max = int(self.cog.config.get("bet_max", 50000))
+        cur = self.cog.currency_str()
+        if bal < b_min:
+            self.confirming_all_in = False
+            self.is_all_in = False
+            self.bet = max(0, bal)
+            self.sync_bet_buttons(balance=bal)
+            await interaction.response.edit_message(embed=self.build_lobby_embed(balance=bal), view=self)
+            await interaction.followup.send(
+                f"❌ 餘額不足！最低下注需要 **{b_min:,}** {cur}，你目前只有 **{bal:,}** {cur}。",
+                ephemeral=True,
+            )
+            return
+
         if self.confirming_all_in:
             self.confirming_all_in = False
-            bal = get_economy_user(interaction.user.id)["balance"]
-            b_min = int(self.cog.config.get("bet_min", 10))
-            b_max = int(self.cog.config.get("bet_max", 50000))
-            cur = self.cog.currency_str()
-            if bal < b_min:
-                self.sync_bet_buttons()
-                await interaction.response.edit_message(embed=self.build_lobby_embed(balance=bal), view=self)
-                await interaction.followup.send(
-                    f"❌ 餘額不足以 All In！最低下注需要 **{b_min:,}** {cur}，你目前只有 **{bal:,}** {cur}。",
-                    ephemeral=True,
-                )
-                return
             all_in_bet = min(bal, b_max)
             self.bet = all_in_bet
             self.is_all_in = True
-            self.sync_bet_buttons()
+            self.sync_bet_buttons(balance=bal)
             await self.cog._start_blackjack(interaction, all_in_bet, is_all_in=True)
+            return
+
+        if self.bet > bal:
+            self.bet = min(bal, b_max)
+
+        # 當偵測到賭注 = 自身所有金額時，一樣跳出 All In 確認
+        if self.bet == bal:
+            await self.prompt_all_in_confirm(interaction)
             return
 
         self.is_all_in = False
         await self.cog._start_blackjack(interaction, self.bet, is_all_in=False)
 
-    @discord.ui.button(label="🔥 All In 全押發牌", style=discord.ButtonStyle.danger, row=0)
+    @discord.ui.button(label="🔥 All In", style=discord.ButtonStyle.danger, row=0)
     async def all_in_deal_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.confirming_all_in:
             self.confirming_all_in = False
+            self.is_all_in = False
             self.sync_bet_buttons()
             await interaction.response.edit_message(embed=self.build_lobby_embed(), view=self)
             return
@@ -1204,6 +1405,8 @@ class BlackjackView(BaseEconomyView):
         self.player_hand = player_hand
         self.dealer_hand = dealer_hand
         self.finished = False
+        if get_economy_user(user.id)["balance"] < bet:
+            self.double_button.disabled = True
 
     def build_embed(self, reveal_dealer: bool = False, result_text: Optional[str] = None, balance: Optional[int] = None, color: Optional[discord.Color] = None) -> discord.Embed:
         cur = self.cog.currency_str()
@@ -1441,12 +1644,13 @@ class ScratchCardView(BaseEconomyView):
         else:
             new_bal = get_economy_user(self.user_id)["balance"]
 
-        # 移除「全部刮開」按鈕，改放「🎫 再買一張」按鈕
+        # 移除「全部刮開」按鈕，改放「🎫 再買一張」按鈕（若餘額不足則直接 disable）
         self.remove_item(self.reveal_all_btn)
         buy_again_btn = discord.ui.Button(
             label=f"🎫 再買一張 ({self.cost:,} {self.cog.config['currency_name']})",
             style=discord.ButtonStyle.primary,
             row=3,
+            disabled=(new_bal < self.cost),
         )
 
         async def _buy_again_cb(inter: discord.Interaction):
@@ -2468,7 +2672,15 @@ class Economy(commands.Cog):
 
         bet_tag = f"**{bet:,}** {cur}" + (" 🔥 *(All In 全押)*" if is_all_in else "")
 
-        def _build_spin_embed(r0: str, r1: str, r2: str, status_line: str, color: discord.Color, settled: bool = False) -> discord.Embed:
+        def _build_spin_embed(
+            r0: str,
+            r1: str,
+            r2: str,
+            status_line: str,
+            color: discord.Color,
+            settled: bool = False,
+            current_bet: int = bet,
+        ) -> discord.Embed:
             desc = (
                 f"**玩家**：{interaction.user.mention} ｜ **單局投入**：{bet_tag}\n\n"
                 f"> 🎰 **{status_line}** 🎰\n"
@@ -2481,7 +2693,7 @@ class Economy(commands.Cog):
             emb = discord.Embed(title="🎰 皇家拉霸機 (Slots)", description=desc, color=color)
             if settled:
                 emb.set_footer(
-                    text=f"目前餘額：{final_bal:,} {self.config['currency_name']} ｜ 當前設定賭注：{panel_view.bet:,}"
+                    text=f"目前餘額：{final_bal:,} {self.config['currency_name']} ｜ 當前設定賭注：{current_bet:,}"
                 )
             else:
                 emb.set_footer(text="🎰 開獎動畫進行中...")
@@ -2527,11 +2739,19 @@ class Economy(commands.Cog):
                 self,
                 interaction.user,
                 panel_view.bet,
-                is_all_in=False,
+                is_all_in=is_all_in,
                 played_once=True,
             )
             new_view.message = msg
-            final_embed = _build_spin_embed(reels[0], reels[1], reels[2], "最終開獎結果", final_color, settled=True)
+            final_embed = _build_spin_embed(
+                reels[0],
+                reels[1],
+                reels[2],
+                "最終開獎結果",
+                final_color,
+                settled=True,
+                current_bet=new_view.bet,
+            )
 
             # 確保最終開獎與解鎖按鈕的更新必定送達（若遇瞬時限流則自動重試）
             for attempt in range(3):
@@ -2644,7 +2864,13 @@ class Economy(commands.Cog):
 
         bet_tag = f"**{bet:,}** {cur}" + (" 🔥 *(All In 全押)*" if is_all_in else "")
 
-        def _build_gamble_embed(status_line: str, center_box: str, color: discord.Color, settled: bool = False) -> discord.Embed:
+        def _build_gamble_embed(
+            status_line: str,
+            center_box: str,
+            color: discord.Color,
+            settled: bool = False,
+            current_bet: int = bet,
+        ) -> discord.Embed:
             desc = (
                 f"**玩家**：{interaction.user.mention} ｜ **本局下注**：{bet_tag}\n\n"
                 f"> {status_line}\n"
@@ -2657,7 +2883,7 @@ class Economy(commands.Cog):
             emb = discord.Embed(title=game_title, description=desc, color=color)
             if settled:
                 emb.set_footer(
-                    text=f"目前餘額：{final_bal:,} {self.config['currency_name']} ｜ 當前設定賭注：{panel_view.bet:,}（可直接點擊按鈕再賭一局）"
+                    text=f"目前餘額：{final_bal:,} {self.config['currency_name']} ｜ 當前設定賭注：{current_bet:,}（可直接點擊按鈕再賭一局）"
                 )
             else:
                 emb.set_footer(text="🎲 開獎動畫進行中...")
@@ -2691,15 +2917,23 @@ class Economy(commands.Cog):
             await asyncio.sleep(0.8)
 
             # 動畫結束：建立全新的 GamblePanelView 實例，讓 120 秒閒置計時器從開獎結束這一刻重新計算
+            b_max = int(self.config.get("bet_max", 50000))
+            next_bet = min(final_bal, b_max) if is_all_in else panel_view.bet
             new_view = GamblePanelView(
                 self,
                 interaction.user,
-                panel_view.bet,
+                next_bet,
                 is_all_in=False,
                 played_once=True,
             )
             new_view.message = msg
-            final_embed = _build_gamble_embed("🎊 **最終開獎結果**", final_center, final_color, settled=True)
+            final_embed = _build_gamble_embed(
+                "🎊 **最終開獎結果**",
+                final_center,
+                final_color,
+                settled=True,
+                current_bet=new_view.bet,
+            )
 
             for attempt in range(3):
                 try:
@@ -2794,7 +3028,7 @@ class Economy(commands.Cog):
             dummy_view = BlackjackView(self, interaction.user, bet, shoe, player_hand, dealer_hand, is_all_in=is_all_in)
             dummy_view.finished = True
             embed = dummy_view.build_embed(reveal_dealer=True, result_text=res_text, balance=final_bal, color=color)
-            replay_view = BlackjackLobbyView(self, interaction.user, bet, is_all_in=False, played_once=True)
+            replay_view = BlackjackLobbyView(self, interaction.user, bet, is_all_in=is_all_in, played_once=True)
             replay_view.message = interaction.message
             await interaction.response.edit_message(embed=embed, view=replay_view)
             return

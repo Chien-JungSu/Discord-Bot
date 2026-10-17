@@ -2,6 +2,8 @@
 
 **English** · [繁體中文](README.md)
 
+[Official Website](https://patricksu.nkhost.dev) · [Terms of Service](https://patricksu.nkhost.dev/terms) · [Privacy Policy](https://patricksu.nkhost.dev/privacy) · [Docs](https://patricksu.nkhost.dev/docs) · [Control Panel](https://patricksu.nkhost.dev/panel)
+
 ## Overview
 
 This is a Discord bot project written with `discord.py` and `aiohttp`.
@@ -40,12 +42,12 @@ Supported features:
 - `/tts`: convert text to speech using Google Text-to-Speech (gTTS) and output as an MP3 audio file (supports custom filename and language code, defaults to English `en`)
 - `/economy_daily`: claim daily check-in coin rewards (with consecutive streak bonuses)
 - `/economy_hourly`: claim hourly check-in pocket money
-- `/economy_balance [member]`: check global coin balance, leaderboard rank, streak days, and game statistics for yourself or another member
+- `/economy_balance [member]`: check global coin balance and leaderboard rank for yourself or another member
 - `/economy_leaderboard`: view the global top 10 richest players and your own rank
 - `/economy_pay <recipient> <amount>`: transfer coins to another member (with configurable transfer tax)
-- `/economy_slots <bet>`: spend coins to play the Royal Slot Machine and win multiplier payouts
-- `/economy_gamble <bet> [choice]`: wager coins on coinflip (heads/tails) or dice (big/small, odd/even)
-- `/economy_blackjack <bet>`: play interactive Blackjack (21) against the dealer (Hit, Stand, Double Down)
+- `/economy_slots`: spend coins to play the Royal Slot Machine and win multiplier payouts
+- `/economy_gamble`: wager coins on coinflip (heads/tails) or dice (big/small, odd/even)
+- `/economy_blackjack`: play interactive Blackjack (21) against the dealer (Hit, Stand, Double Down)
 - `/economy_scratch`: buy an interactive 3×3 scratch card and match 3 identical symbols to win prizes
 - `/economy_admin`: owner-only (`owner_guild_only`) interactive control panel to configure check-in rewards, game multipliers, and user balances
 
@@ -160,9 +162,9 @@ When launched, the bot starts the Flask background server from `cogs/web_server.
 - `/economy_balance [member:<user>]`: check the current global coin balance and leaderboard rank for yourself or a specified user (shows that the bot owner does not participate in rankings when querying `owner_id`).
 - `/economy_leaderboard`: view the global top 10 richest users (automatically excluding the bot owner `owner_id`) along with your own current rank and balance.
 - `/economy_pay recipient:<user> amount:<amount>`: transfer coins from your wallet to another user (cannot pay yourself or bots), automatically applying the configured transfer tax percentage and minimum transfer limit.
-- `/economy_slots`: open the interactive Royal Slot Machine betting panel (no command arguments needed). Adjust your bet (Min, Half, Double, Custom amount, or **🔥 All In** with an in-place confirmation prompt), then spin with a step-by-step message-edit animation revealing three reels (`🍒`, `🍋`, `🍇`, `🔔`, `💎`, `7️⃣`) for Jackpot, triple, or pair payouts.
-- `/economy_gamble`: open the interactive Coinflip & Dice betting panel (no command arguments needed). Supports quick bet adjustments, custom amounts, and **🔥 All In** (with in-place confirmation buttons); pick Coinflip (Heads/Tails) or Dice (Big 4–6 / Small 1–3, Odd / Even) to watch a live message-edit roll animation and reveal the outcome.
-- `/economy_blackjack`: open the interactive Blackjack (21) betting panel (no command arguments needed) with quick bet controls, custom bet input, and **🔥 All In** (with in-place confirmation buttons). Once dealt, play against the dealer using "🃏 Hit", "🛑 Stand", and "💰 Double Down" buttons with automatic Ace (1/11) valuation, Natural Blackjack payouts, and a "🔄 Play Again" button to return to the betting panel.
+- `/economy_slots`: open the interactive Royal Slot Machine betting panel (no command arguments needed). Adjust your bet (Min, Half, Double, Custom amount, or **🔥 All In**; custom bet input displays min/max hints, automatically caps amounts exceeding your wallet to your full balance, and triggers an in-place confirmation prompt whenever the bet equals your entire balance or **🔥 All In** is clicked), then spin with a step-by-step message-edit animation revealing three reels (`🍒`, `🍋`, `🍇`, `🔔`, `💎`, `7️⃣`) for Jackpot, triple, or pair payouts; after each spin, the replay button automatically updates to the latest available bet (or disables if out of funds).
+- `/economy_gamble`: open the interactive Coinflip & Dice betting panel (no command arguments needed). Supports quick bet adjustments, custom amounts (with min/max hints and auto-cap to wallet balance), and **🔥 All In** (with in-place confirmation buttons); pick Coinflip (Heads/Tails) or Dice (Big 4–6 / Small 1–3, Odd / Even) to watch a live message-edit roll animation and reveal the outcome.
+- `/economy_blackjack`: open the interactive Blackjack (21) betting panel (no command arguments needed) with quick bet controls, custom bet input (with min/max hints and auto-cap to wallet balance), and **🔥 All In** (with in-place confirmation buttons). Once dealt, play against the dealer using "🃏 Hit", "🛑 Stand", and "💰 Double Down" buttons with automatic Ace (1/11) valuation, Natural Blackjack payouts, and a "🃏 Play Again" button (automatically synced to the latest available bet or disabled if out of funds).
 - `/economy_scratch`: buy an interactive 3×3 scratch card, click cells one by one or press "✨ Scratch All", and match 3 identical symbols to win Jackpot (💎×3), 2nd Prize (🌟×3), 3rd Prize (🍀×3), or Consolation Prize (🍒×3), with a "🎫 Buy Another" button once finished.
 - `/economy_admin`: owner-only (`owner_guild_only` and restricted to the bot owner) interactive parameter control panel. Use the dropdown menu and pre-filled modals to modify daily/hourly check-in rewards and streak bonus caps, minigame bet limits and multipliers, scratch card price, currency name/emoji/transfer tax, or directly grant/deduct/set any user's coin balance; all parameters are persisted in SQLite (`bot_database.db`).
 
