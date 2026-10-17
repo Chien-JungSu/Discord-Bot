@@ -123,10 +123,87 @@
 
     setTimeout(() => {
       toast.style.opacity = '0';
-      toast.style.transform = 'translateY(-10px)';
+      toast.style.transform = 'translateY(10px)';
       toast.style.transition = 'all 0.3s ease';
       setTimeout(() => toast.remove(), 300);
     }, 4000);
+  }
+
+  // ---------- 尚未儲存變更底部懸浮提示列 (Unsaved Changes Bar) ----------
+  const unsavedBar = document.getElementById('unsaved-changes-bar');
+  const btnUnsavedSave = document.getElementById('btn-unsaved-save');
+  const btnUnsavedReset = document.getElementById('btn-unsaved-reset');
+  const savedFormState = {
+    welcome: null,
+    music: null,
+    ownerEconomy: null,
+  };
+
+  function getFormState(formEl) {
+    if (!formEl) return null;
+    const state = {};
+    formEl.querySelectorAll('input, select, textarea').forEach((el) => {
+      if (!el.id || el.classList.contains('searchable-select-input')) return;
+      if (el.type === 'checkbox') {
+        state[el.id] = Boolean(el.checked);
+      } else {
+        state[el.id] = String(el.value ?? '');
+      }
+    });
+    return state;
+  }
+
+  function isFormDirty(formEl, snapshot) {
+    if (!formEl || !snapshot) return false;
+    const current = getFormState(formEl);
+    if (!current) return false;
+    const keys = Object.keys(snapshot);
+    for (let i = 0; i < keys.length; i += 1) {
+      const k = keys[i];
+      if (current[k] !== snapshot[k]) return true;
+    }
+    return false;
+  }
+
+  function applyFormState(formEl, snapshot) {
+    if (!formEl || !snapshot) return;
+    Object.entries(snapshot).forEach(([id, val]) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      if (el.type === 'checkbox') {
+        el.checked = Boolean(val);
+      } else {
+        el.value = String(val ?? '');
+      }
+    });
+  }
+
+  function setUnsavedBarVisible(visible) {
+    if (!unsavedBar) return;
+    unsavedBar.classList.toggle('is-visible', Boolean(visible));
+    unsavedBar.setAttribute('aria-hidden', visible ? 'false' : 'true');
+    document.body.classList.toggle('has-unsaved-changes', Boolean(visible));
+  }
+
+  function checkUnsavedChanges() {
+    if (!unsavedBar || !viewServerSettings || viewServerSettings.style.display === 'none') {
+      setUnsavedBarVisible(false);
+      return;
+    }
+    const fWelcome = document.getElementById('form-welcome');
+    const fMusic = document.getElementById('form-music');
+    const fOwnerEcon = document.getElementById('form-owner-economy');
+
+    const isOwnerMode = viewServerSettings.classList.contains('owner-mode');
+    let dirty = false;
+    if (isOwnerMode) {
+      dirty = isFormDirty(fOwnerEcon, savedFormState.ownerEconomy);
+    } else {
+      dirty =
+        isFormDirty(fWelcome, savedFormState.welcome) ||
+        isFormDirty(fMusic, savedFormState.music);
+    }
+    setUnsavedBarVisible(dirty);
   }
 
   // ---------- 視圖切換與返回伺服器清單 ----------
@@ -139,6 +216,7 @@
     currentGuildId = null;
     currentGuildName = '';
     serverChips.forEach((c) => c.classList.remove('active'));
+    setUnsavedBarVisible(false);
     if (window.location.hash) {
       history.replaceState(null, '', window.location.pathname);
     }
@@ -201,6 +279,7 @@
       loadOwnerCogsList();
       loadOwnerApiQuota();
     }
+    checkUnsavedChanges();
   }
 
   navTabs.forEach((tab) => {
@@ -565,11 +644,22 @@
     }
 
     refreshAllSearchableSelects();
+    savedFormState.welcome = getFormState(document.getElementById('form-welcome'));
+    savedFormState.music = getFormState(document.getElementById('form-music'));
+    checkUnsavedChanges();
   }
 
   // ---------- 歡迎訊息設定儲存與清除 ----------
   const formWelcome = document.getElementById('form-welcome');
   if (formWelcome) {
+    formWelcome.addEventListener('change', (e) => {
+      if (e.target && e.target.classList && e.target.classList.contains('searchable-select-input')) return;
+      checkUnsavedChanges();
+    });
+    formWelcome.addEventListener('input', (e) => {
+      if (e.target && e.target.classList && e.target.classList.contains('searchable-select-input')) return;
+      checkUnsavedChanges();
+    });
     formWelcome.addEventListener('submit', async (e) => {
       e.preventDefault();
       if (!currentGuildId) return;
@@ -590,6 +680,8 @@
         });
         const data = await res.json();
         if (res.ok) {
+          savedFormState.welcome = getFormState(formWelcome);
+          checkUnsavedChanges();
           showToast(data.message || '歡迎訊息設定已儲存！');
         } else {
           showToast(data.message || '儲存失敗', 'error');
@@ -624,6 +716,8 @@
               document.getElementById('select-role-channel').value = '';
               document.getElementById('select-auto-role').value = '';
               refreshAllSearchableSelects();
+              savedFormState.welcome = getFormState(formWelcome);
+              checkUnsavedChanges();
             } else {
               showToast(data.message || '清除失敗', 'error');
             }
@@ -638,6 +732,14 @@
   // ---------- 音樂點歌頻道設定儲存與解除 ----------
   const formMusic = document.getElementById('form-music');
   if (formMusic) {
+    formMusic.addEventListener('change', (e) => {
+      if (e.target && e.target.classList && e.target.classList.contains('searchable-select-input')) return;
+      checkUnsavedChanges();
+    });
+    formMusic.addEventListener('input', (e) => {
+      if (e.target && e.target.classList && e.target.classList.contains('searchable-select-input')) return;
+      checkUnsavedChanges();
+    });
     formMusic.addEventListener('submit', async (e) => {
       e.preventDefault();
       if (!currentGuildId) return;
@@ -651,6 +753,8 @@
         });
         const data = await res.json();
         if (res.ok) {
+          savedFormState.music = getFormState(formMusic);
+          checkUnsavedChanges();
           showToast(data.message || '點歌頻道設定已儲存！');
         } else {
           showToast(data.message || '儲存失敗', 'error');
@@ -682,6 +786,8 @@
               showToast(data.message || '已解除頻道綁定');
               document.getElementById('select-music-channel').value = '';
               refreshAllSearchableSelects();
+              savedFormState.music = getFormState(formMusic);
+              checkUnsavedChanges();
             } else {
               showToast(data.message || '操作失敗', 'error');
             }
@@ -1594,6 +1700,7 @@
       const targetSub = btn.getAttribute('data-subtab');
       const targetPane = document.getElementById(targetSub);
       if (targetPane) targetPane.classList.add('active');
+      checkUnsavedChanges();
     });
   });
 
@@ -1618,6 +1725,8 @@
           input.value = val;
         }
       }
+      savedFormState.ownerEconomy = getFormState(form);
+      checkUnsavedChanges();
     } catch (err) {
       console.error('無法讀取經濟後台設定:', err);
     }
@@ -1625,6 +1734,8 @@
 
   const formOwnerEconomy = document.getElementById('form-owner-economy');
   if (formOwnerEconomy) {
+    formOwnerEconomy.addEventListener('change', checkUnsavedChanges);
+    formOwnerEconomy.addEventListener('input', checkUnsavedChanges);
     formOwnerEconomy.addEventListener('submit', async (e) => {
       e.preventDefault();
       const payload = {};
@@ -1648,6 +1759,8 @@
         });
         const data = await res.json();
         if (res.ok) {
+          savedFormState.ownerEconomy = getFormState(formOwnerEconomy);
+          checkUnsavedChanges();
           showToast(data.message || '經濟系統後台參數已成功套用！');
         } else {
           showToast(data.message || '更新失敗', 'error');
@@ -1655,6 +1768,58 @@
       } catch (err) {
         showToast('網路請求發生錯誤', 'error');
       }
+    });
+  }
+
+  if (btnUnsavedSave) {
+    btnUnsavedSave.addEventListener('click', () => {
+      const isOwnerMode = viewServerSettings && viewServerSettings.classList.contains('owner-mode');
+      if (isOwnerMode) {
+        if (formOwnerEconomy && isFormDirty(formOwnerEconomy, savedFormState.ownerEconomy)) {
+          if (typeof formOwnerEconomy.requestSubmit === 'function') {
+            formOwnerEconomy.requestSubmit();
+          } else {
+            formOwnerEconomy.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+          }
+        }
+        return;
+      }
+
+      if (formWelcome && isFormDirty(formWelcome, savedFormState.welcome)) {
+        if (typeof formWelcome.requestSubmit === 'function') {
+          formWelcome.requestSubmit();
+        } else {
+          formWelcome.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        }
+      }
+      if (formMusic && isFormDirty(formMusic, savedFormState.music)) {
+        if (typeof formMusic.requestSubmit === 'function') {
+          formMusic.requestSubmit();
+        } else {
+          formMusic.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        }
+      }
+    });
+  }
+
+  if (btnUnsavedReset) {
+    btnUnsavedReset.addEventListener('click', () => {
+      const isOwnerMode = viewServerSettings && viewServerSettings.classList.contains('owner-mode');
+      if (isOwnerMode) {
+        if (formOwnerEconomy && savedFormState.ownerEconomy) {
+          applyFormState(formOwnerEconomy, savedFormState.ownerEconomy);
+        }
+      } else {
+        if (formWelcome && savedFormState.welcome) {
+          applyFormState(formWelcome, savedFormState.welcome);
+        }
+        if (formMusic && savedFormState.music) {
+          applyFormState(formMusic, savedFormState.music);
+        }
+        refreshAllSearchableSelects();
+      }
+      checkUnsavedChanges();
+      showToast('已重設尚未儲存的變更');
     });
   }
 

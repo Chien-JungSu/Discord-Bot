@@ -877,6 +877,21 @@
       </div>
     </div>
 
+    <!-- 尚未儲存變更底部懸浮提示列 -->
+    <div id="unsaved-changes-bar" class="unsaved-changes-bar" aria-hidden="true">
+      <div class="unsaved-bar-inner">
+        <span class="unsaved-bar-text">你有變更尚未儲存!</span>
+        <div class="unsaved-bar-actions">
+          <button type="button" id="btn-unsaved-save" class="btn btn-save-setting btn-unsaved-save">
+            <span>儲存設定</span>
+          </button>
+          <button type="button" id="btn-unsaved-reset" class="btn secondary btn-unsaved-reset">
+            <span>重設</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
     </div> <!-- /#view-server-settings -->
     {% endif %}
   </main>
