@@ -1,12 +1,15 @@
+import datetime
 import json
 import math
 import os
+import re
+import subprocess
 import sys
 import threading
 import time
 import urllib.parse
 import urllib.request
-from typing import Optional
+from typing import Any, Optional
 
 # 確保直接執行此檔案 (如 python cogs/web_server.py 或 IDE 單獨除錯) 時，
 # 正確將專案根目錄加入模組搜尋路徑，避免 ModuleNotFoundError: No module named 'cogs'
@@ -216,6 +219,132 @@ def terms_page():
 @app.route('/privacy')
 def privacy_page():
     return render_template('privacy.html')
+
+
+# ---------- GitHub 最新 Commit 紀錄快取與解析 ----------
+_commits_cache: dict[str, Any] = {
+    'timestamp': 0.0,
+    'commits': [],
+}
+_COMMITS_CACHE_TTL = 15.0  # 快取 15 秒，避免重複頻繁調用 git
+
+
+def _parse_commit_record(record: str) -> Optional[dict[str, Any]]:
+    parts = record.strip().split('\x1f')
+    if len(parts) < 5:
+        return None
+    full_hash = parts[0].strip()
+    short_hash = parts[1].strip()
+    raw_subject = parts[2].strip()
+    author = parts[3].strip()
+    date_str = parts[4].strip()
+    iso_date = parts[5].strip() if len(parts) > 5 else ''
+    body = parts[6].strip() if len(parts) > 6 else ''
+
+    # 解析 Conventional Commits 前綴 (如 feat(panel): 說明 或 fix: 說明)
+    match = re.match(r'^([a-zA-Z]+)(?:\(([^)]+)\))?!?:\s*(.*)$', raw_subject)
+    if match:
+        c_type = match.group(1).lower()
+        scope = match.group(2)
+        display_subject = match.group(3)
+    else:
+        c_type = 'commit'
+        scope = None
+        display_subject = raw_subject
+
+    type_meta = {
+        'feat': {'label': '新增功能', 'tag': 'FEAT', 'cls': 'badge-feat'},
+        'fix': {'label': '問題修復', 'tag': 'FIX', 'cls': 'badge-fix'},
+        'docs': {'label': '文檔更新', 'tag': 'DOCS', 'cls': 'badge-docs'},
+        'style': {'label': '介面優化', 'tag': 'STYLE', 'cls': 'badge-style'},
+        'refactor': {'label': '重構調整', 'tag': 'REFACTOR', 'cls': 'badge-refactor'},
+        'perf': {'label': '效能優化', 'tag': 'PERF', 'cls': 'badge-perf'},
+        'chore': {'label': '專案維護', 'tag': 'CHORE', 'cls': 'badge-chore'},
+    }.get(c_type, {'label': '提交更新', 'tag': c_type.upper() if len(c_type) <= 6 else 'COMMIT', 'cls': 'badge-commit'})
+
+    relative_time = ''
+    if iso_date:
+        try:
+            commit_dt = datetime.datetime.fromisoformat(iso_date)
+            now_dt = datetime.datetime.now(commit_dt.tzinfo)
+            diff = max(0.0, (now_dt - commit_dt).total_seconds())
+            if diff < 60:
+                relative_time = '剛剛'
+            elif diff < 3600:
+                relative_time = f'{int(diff // 60)} 分鐘前'
+            elif diff < 86400:
+                relative_time = f'{int(diff // 3600)} 小時前'
+            elif diff < 86400 * 30:
+                relative_time = f'{int(diff // 86400)} 天前'
+            elif diff < 86400 * 365:
+                relative_time = f'{int(diff // (86400 * 30))} 個月前'
+            else:
+                relative_time = f'{int(diff // (86400 * 365))} 年前'
+        except Exception:
+            relative_time = date_str
+
+    return {
+        'full_hash': full_hash,
+        'short_hash': short_hash,
+        'subject': raw_subject,
+        'display_subject': display_subject,
+        'author': author,
+        'date': date_str,
+        'iso_date': iso_date,
+        'relative_time': relative_time,
+        'body': body,
+        'type': c_type,
+        'scope': scope,
+        'badge_label': type_meta['label'],
+        'badge_tag': type_meta['tag'],
+        'badge_cls': type_meta['cls'],
+        'github_url': f'https://github.com/Chien-JungSu/Discord-Bot/commit/{full_hash}',
+    }
+
+
+def get_latest_commits(limit: int = 10) -> list[dict[str, Any]]:
+    global _commits_cache
+    now = time.monotonic()
+    if _commits_cache['commits'] and (now - _commits_cache['timestamp'] < _COMMITS_CACHE_TTL):
+        return _commits_cache['commits'][:limit]
+
+    try:
+        raw_output = subprocess.check_output(
+            [
+                'git',
+                'log',
+                '-n',
+                str(limit),
+                '--format=%H%x1f%h%x1f%s%x1f%an%x1f%ad%x1f%aI%x1f%b%x1e',
+                '--date=format:%Y-%m-%d %H:%M:%S',
+            ],
+            cwd=BASE_DIR,
+            timeout=5.0,
+        ).decode('utf-8', errors='replace')
+
+        commits: list[dict[str, Any]] = []
+        for record in raw_output.strip('\x1e\n').split('\x1e'):
+            if not record.strip():
+                continue
+            item = _parse_commit_record(record)
+            if item:
+                commits.append(item)
+
+        if commits:
+            _commits_cache['timestamp'] = now
+            _commits_cache['commits'] = commits
+            return commits
+    except Exception as e:
+        print(f"[Web] 讀取 git commit 紀錄失敗: {e}", file=sys.stderr)
+
+    return _commits_cache['commits'][:limit]
+
+
+@app.route('/commit')
+@app.route('/commits')
+def commits_page():
+    commits = get_latest_commits(10)
+    return render_template('commit.html', commits=commits)
 
 
 @app.route('/logo.png')

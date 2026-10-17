@@ -1,0 +1,558 @@
+/* ==========================================================================
+   炙彗JI器人 - Commit 更新紀錄專屬樣式 (Commit History Stylesheet)
+   遵循 Apple Liquid Glass 設計語言，提供高可讀性、流暢折射光斑與完美手機端響應式排版
+   ========================================================================== */
+
+/* 頁面說明引言 */
+.commit-intro {
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.96rem;
+  line-height: 1.6;
+  margin: -10px auto 26px;
+  max-width: 640px;
+}
+
+/* Commit 列表堆疊容器 */
+.commit-stack {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+}
+
+/* 單則 Commit 卡片 */
+.commit-card {
+  position: relative;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0.01) 40%, rgba(12, 18, 34, 0.28) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 24px;
+  padding: 22px 24px 20px;
+  box-shadow: inset 0 1px 1px 0 rgba(255, 255, 255, 0.2),
+              inset 0 -1px 2px 0 rgba(0, 0, 0, 0.25),
+              0 14px 40px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(28px) saturate(200%);
+  -webkit-backdrop-filter: blur(28px) saturate(200%);
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  overflow: hidden;
+  transition: border-color 0.28s ease,
+              box-shadow 0.28s ease,
+              transform 0.32s var(--motion-spring);
+}
+
+.commit-card > * {
+  position: relative;
+  z-index: 3;
+}
+
+/* 卡片玻璃表面動態游標聚光 (Surface Specular Sheen) */
+.commit-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(650px circle at var(--mouse-x, 50%) var(--mouse-y, 50%), rgba(255, 255, 255, 0.08) 0%, rgba(125, 211, 252, 0.02) 35%, transparent 65%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.35s ease;
+  z-index: 1;
+}
+
+/* 卡片邊緣動態折射 (Edge Bevel Refraction) */
+.commit-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: radial-gradient(420px circle at var(--mouse-x, 50%) var(--mouse-y, 50%), rgba(255, 255, 255, 0.45) 0%, rgba(125, 211, 252, 0.2) 30%, transparent 70%);
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.35s ease;
+  z-index: 2;
+}
+
+.commit-card:hover {
+  transform: translateY(-3px) scale(1.004);
+  border-color: rgba(255, 255, 255, 0.22);
+  box-shadow: inset 0 1px 1.5px 0 rgba(255, 255, 255, 0.35),
+              0 22px 54px rgba(0, 0, 0, 0.48),
+              0 0 28px rgba(125, 211, 252, 0.1);
+}
+
+.commit-card:hover::before,
+.commit-card:hover::after {
+  opacity: 1;
+}
+
+/* Commit 頂部狀態列：徽章 + Hash + 相對時間 */
+.commit-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.commit-badges {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* 類型膠囊標籤 */
+.commit-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 3px 10px;
+  border-radius: 9999px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.badge-feat {
+  color: #34d399;
+  background: rgba(52, 211, 153, 0.14);
+  border: 1px solid rgba(52, 211, 153, 0.32);
+  box-shadow: 0 0 10px rgba(52, 211, 153, 0.15);
+}
+
+.badge-fix {
+  color: #f87171;
+  background: rgba(248, 113, 113, 0.14);
+  border: 1px solid rgba(248, 113, 113, 0.32);
+  box-shadow: 0 0 10px rgba(248, 113, 113, 0.15);
+}
+
+.badge-docs {
+  color: #7dd3fc;
+  background: rgba(125, 211, 252, 0.14);
+  border: 1px solid rgba(125, 211, 252, 0.32);
+  box-shadow: 0 0 10px rgba(125, 211, 252, 0.15);
+}
+
+.badge-style {
+  color: #c084fc;
+  background: rgba(192, 132, 252, 0.14);
+  border: 1px solid rgba(192, 132, 252, 0.32);
+  box-shadow: 0 0 10px rgba(192, 132, 252, 0.15);
+}
+
+.badge-refactor {
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.14);
+  border: 1px solid rgba(251, 191, 36, 0.32);
+  box-shadow: 0 0 10px rgba(251, 191, 36, 0.15);
+}
+
+.badge-perf {
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.14);
+  border: 1px solid rgba(56, 189, 248, 0.32);
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.15);
+}
+
+.badge-chore {
+  color: #94a3b8;
+  background: rgba(148, 163, 184, 0.14);
+  border: 1px solid rgba(148, 163, 184, 0.32);
+}
+
+.badge-commit {
+  color: #cbd5e1;
+  background: rgba(203, 213, 225, 0.12);
+  border: 1px solid rgba(203, 213, 225, 0.28);
+}
+
+/* 模組範圍標籤 (Scope) */
+.commit-scope {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.8);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+/* Commit 雜湊膠囊按鈕 */
+.commit-hash-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 8px;
+  color: #cbd5e1 !important;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  text-decoration: none !important;
+  transition: all 0.2s ease;
+}
+
+.commit-hash-pill svg {
+  width: 14px;
+  height: 14px;
+  color: var(--primary);
+  flex-shrink: 0;
+  transition: transform 0.2s ease;
+}
+
+.commit-hash-pill:hover {
+  background: rgba(125, 211, 252, 0.16);
+  border-color: rgba(125, 211, 252, 0.45);
+  color: #ffffff !important;
+  transform: translateY(-1px);
+}
+
+.commit-hash-pill:hover svg {
+  transform: rotate(30deg);
+}
+
+/* 相對時間 */
+.commit-time-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  color: rgba(185, 198, 219, 0.8);
+  white-space: nowrap;
+}
+
+.commit-time-meta svg {
+  width: 14px;
+  height: 14px;
+  opacity: 0.7;
+}
+
+/* Commit 標題主旨 */
+.commit-title {
+  margin: 0 0 10px;
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: #ffffff;
+  line-height: 1.45;
+  letter-spacing: 0.01em;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* Commit 詳細說明區塊 (Body) */
+.commit-body {
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  padding: 12px 14px;
+  margin: 0 0 12px;
+  font-size: 0.88rem;
+  color: var(--muted);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  font-family: inherit;
+}
+
+/* 底部列：作者資訊 + 查看 Commit 按鈕 */
+.commit-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  margin-top: auto;
+}
+
+.commit-author-date {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.86rem;
+  color: var(--muted);
+  flex-wrap: wrap;
+}
+
+.commit-author {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+
+.commit-author svg {
+  width: 15px;
+  height: 15px;
+  color: var(--primary);
+  opacity: 0.85;
+}
+
+.commit-sep {
+  opacity: 0.4;
+}
+
+.commit-date {
+  font-size: 0.82rem;
+  color: rgba(185, 198, 219, 0.75);
+}
+
+/* 查看 Commit 按鈕 (GitHub 連結) */
+.commit-link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 9999px;
+  background: rgba(125, 211, 252, 0.08);
+  border: 1px solid rgba(125, 211, 252, 0.25);
+  color: var(--primary) !important;
+  font-size: 0.84rem;
+  font-weight: 600;
+  text-decoration: none !important;
+  white-space: nowrap;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.commit-link-btn svg {
+  width: 14px;
+  height: 14px;
+  transition: transform 0.2s ease;
+}
+
+.commit-link-btn:hover {
+  background: rgba(125, 211, 252, 0.22);
+  border-color: rgba(125, 211, 252, 0.55);
+  color: #ffffff !important;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(125, 211, 252, 0.25);
+}
+
+.commit-link-btn:hover svg {
+  transform: translate(2px, -2px);
+}
+
+.commit-link-btn:active {
+  transform: scale(0.96);
+}
+
+/* ---------- 頁面最下方：「到 GitHub 查看更多」按鈕區塊 ---------- */
+.more-commits-section {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin: 36px 0 24px;
+  width: 100%;
+}
+
+.github-more-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  height: 52px;
+  padding: 0 32px;
+  border-radius: 26px; /* 膠囊形 */
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.03) 45%, rgba(125, 211, 252, 0.12) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #ffffff !important;
+  text-decoration: none !important;
+  font-size: 1.02rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  box-shadow: inset 0 1px 1.5px 0 rgba(255, 255, 255, 0.35),
+              inset 0 -1px 2px 0 rgba(0, 0, 0, 0.3),
+              0 12px 32px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(24px) saturate(200%);
+  -webkit-backdrop-filter: blur(24px) saturate(200%);
+  overflow: hidden;
+  cursor: pointer;
+  transition: transform 0.28s var(--motion-spring),
+              background 0.25s ease,
+              border-color 0.25s ease,
+              box-shadow 0.25s ease;
+}
+
+.github-more-btn > * {
+  position: relative;
+  z-index: 2;
+}
+
+/* 液態動態光斑追蹤 */
+.github-more-btn::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(circle at var(--mouse-x, 50%) var(--mouse-y, 50%), rgba(255, 255, 255, 0.35) 0%, rgba(255, 255, 255, 0) 65%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+  z-index: 1;
+}
+
+/* 懸停時斜向折射高光掃掠 */
+.github-more-btn::before {
+  content: "";
+  position: absolute;
+  top: -50%;
+  left: -60%;
+  width: 45%;
+  height: 200%;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.35) 50%, rgba(255, 255, 255, 0) 100%);
+  transform: rotate(25deg);
+  pointer-events: none;
+  opacity: 0;
+  z-index: 1;
+}
+
+.github-more-btn:hover {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.16) 0%, rgba(167, 139, 250, 0.12) 50%, rgba(22, 34, 62, 0.45) 100%);
+  border-color: rgba(255, 255, 255, 0.38);
+  box-shadow: inset 0 1px 1.5px 0 rgba(255, 255, 255, 0.6),
+              0 14px 38px rgba(0, 0, 0, 0.48),
+              0 0 24px rgba(125, 211, 252, 0.3);
+  text-decoration: none !important;
+  transform: translateY(-2px) scale(1.03);
+}
+
+.github-more-btn:hover::after {
+  opacity: 1;
+}
+
+.github-more-btn:hover::before {
+  animation: liquidGleamSweep 0.85s var(--motion-smooth);
+}
+
+.github-more-btn:active {
+  transform: scale(0.95);
+  box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.5),
+              0 4px 14px rgba(0, 0, 0, 0.3);
+}
+
+.github-more-btn .github-icon {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+}
+
+.github-more-btn .external-icon {
+  width: 17px;
+  height: 17px;
+  flex-shrink: 0;
+  opacity: 0.85;
+  transition: transform 0.2s ease;
+}
+
+.github-more-btn:hover .external-icon {
+  transform: translate(2px, -2px);
+  opacity: 1;
+}
+
+/* 空狀態卡片 */
+.commit-empty-card {
+  text-align: center;
+  padding: 48px 24px;
+}
+
+.commit-empty-card p {
+  color: var(--muted);
+  font-size: 1.05rem;
+  margin: 0;
+}
+
+/* ---------- 響應式佈局 (Mobile 嚴格防跑版規範) ---------- */
+@media (max-width: 768px) {
+  .commit-card {
+    border-radius: 20px;
+    padding: 18px 16px;
+  }
+
+  .commit-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  .commit-badges {
+    width: 100%;
+    gap: 6px;
+  }
+
+  .commit-time-meta {
+    font-size: 0.78rem;
+  }
+
+  .commit-title {
+    font-size: 1.02rem;
+    margin-bottom: 8px;
+    line-height: 1.4;
+  }
+
+  .commit-body {
+    font-size: 0.84rem;
+    padding: 10px 12px;
+    border-radius: 10px;
+  }
+
+  .commit-footer {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+    padding-top: 10px;
+  }
+
+  .commit-author-date {
+    justify-content: space-between;
+    width: 100%;
+  }
+
+  .commit-link-btn {
+    width: 100%;
+    height: 38px;
+    justify-content: center;
+    font-size: 0.88rem;
+  }
+
+  .more-commits-section {
+    margin: 28px 0 16px;
+  }
+
+  .github-more-btn {
+    width: 100%;
+    height: 48px;
+    padding: 0 16px;
+    font-size: 0.95rem;
+    gap: 8px;
+  }
+
+  .github-more-btn .github-icon {
+    width: 20px;
+    height: 20px;
+  }
+
+  .github-more-btn .external-icon {
+    width: 15px;
+    height: 15px;
+  }
+}
