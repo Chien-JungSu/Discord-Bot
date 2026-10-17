@@ -152,12 +152,22 @@
     let closeTimer = null;
     let isPinned = false;
 
+    function syncSidebarTriggerPosition() {
+      if (!docsSidebar || !sidebarTrigger) return;
+      const rect = docsSidebar.getBoundingClientRect();
+      if (rect.height > 0) {
+        const centerY = Math.round(rect.top + rect.height / 2);
+        sidebarTrigger.style.top = `${centerY}px`;
+      }
+    }
+
     function openSidebar(pinned = false) {
       // 若全站導航選單或頭像選單為開啟狀態，禁止打開目錄
       if (isAnyGlobalMenuOpen()) return;
 
       if (closeTimer) clearTimeout(closeTimer);
       if (pinned) isPinned = true;
+      syncSidebarTriggerPosition();
       docsSidebar.classList.add('is-open');
       if (sidebarBackdrop && (isPinned || window.innerWidth <= 768)) {
         sidebarBackdrop.classList.add('is-open');
@@ -186,7 +196,9 @@
         sidebarTrigger.classList.remove('is-active');
         sidebarTrigger.setAttribute('aria-label', '展開指令目錄');
         sidebarTrigger.setAttribute('title', '展開指令目錄');
+        sidebarTrigger.blur();
       }
+      syncSidebarTriggerPosition();
     }
 
     closeSidebarFn = closeSidebar;
@@ -316,6 +328,10 @@
       window.addEventListener('scroll', updateActiveDocSection, { passive: true });
       updateActiveDocSection();
     }
+
+    syncSidebarTriggerPosition();
+    window.addEventListener('resize', syncSidebarTriggerPosition);
+    window.addEventListener('orientationchange', syncSidebarTriggerPosition);
   }
 
   // 全域：點擊任何返回首頁的按鈕/連結時，設定置頂標籤

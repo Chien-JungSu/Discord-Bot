@@ -28,6 +28,28 @@
 
 html {
   scroll-behavior: smooth;
+  overflow-y: scroll;
+  scrollbar-gutter: stable;
+  color-scheme: dark;
+}
+
+/* 自訂深色捲軸樣式，避免深色介面出現突兀的亮白原生捲軸 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(9, 13, 26, 0.6);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.28);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(125, 211, 252, 0.45);
 }
 
 body {
@@ -458,7 +480,8 @@ code:hover {
 .site-topbar {
   position: sticky;
   top: 12px;
-  z-index: 100;
+  z-index: 215;
+  width: 100%;
   max-width: 1040px;
   margin: 0 auto 24px;
   padding: 10px 18px;
@@ -468,7 +491,7 @@ code:hover {
   backdrop-filter: blur(28px) saturate(200%);
   -webkit-backdrop-filter: blur(28px) saturate(200%);
   box-shadow: 0 10px 32px rgba(0, 0, 0, 0.4), inset 0 1px 1px rgba(255, 255, 255, 0.15);
-  transition: all 0.25s ease;
+  transition: background 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
 }
 
 .topbar-inner {

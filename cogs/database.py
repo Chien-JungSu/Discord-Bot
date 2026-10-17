@@ -407,6 +407,7 @@ def load_auto_reply_settings() -> dict:
                 except Exception:
                     rep = []
                 chan_id = row['channel_id']
+                paused_flag = 1 if row['is_paused'] else 0
                 res[gid]['rules'].append({
                     'id': row['id'],
                     'name': row['name'] or '',
@@ -416,7 +417,8 @@ def load_auto_reply_settings() -> dict:
                     'reply': rep[0] if rep else '',
                     'channel_id': chan_id,
                     'scope': str(chan_id) if chan_id else 'all',
-                    'enabled': not bool(row['is_paused']),
+                    'enabled': not bool(paused_flag),
+                    'is_paused': paused_flag,
                 })
             return res
         finally:
@@ -438,7 +440,10 @@ def save_auto_reply_settings(data: dict):
                         if isinstance(r, dict):
                             kw = r.get('keywords') or ([r.get('keyword')] if r.get('keyword') else [])
                             rep = r.get('replies') or ([r.get('reply')] if r.get('reply') else [])
-                            is_paused = 0 if r.get('enabled', True) else 1
+                            if 'enabled' in r:
+                                is_paused = 0 if r.get('enabled', True) else 1
+                            else:
+                                is_paused = 1 if r.get('is_paused') else 0
                             scope = r.get('scope')
                             if scope == 'all':
                                 chan_id = None

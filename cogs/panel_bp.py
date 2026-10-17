@@ -39,6 +39,7 @@ from cogs.database import (
     save_auto_reply_settings,
     save_economy_config,
     save_music_settings,
+    save_reaction_roles,
     save_welcome_settings,
     set_economy_balance,
     update_economy_balance,
@@ -81,6 +82,19 @@ def get_owner_guild_id() -> Optional[int]:
 
 def get_bot():
     return current_app.config.get('BOT')
+
+
+def _sync_cog_settings(cog_name: str):
+    """通知正在運行的 Bot Cog 重新載入資料庫設定，確保網頁控制面板與 Discord 指令雙向即時同步。"""
+    bot = get_bot()
+    if not bot:
+        return
+    try:
+        cog = bot.get_cog(cog_name)
+        if cog is not None and hasattr(cog, 'reload_settings'):
+            cog.reload_settings()
+    except Exception as exc:
+        print(f"⚠️ 同步 {cog_name} 設定至 Bot 記憶體時發生例外: {exc}")
 
 
 def is_current_user_owner() -> bool:
@@ -450,9 +464,10 @@ def get_guild_data(guild_id: str):
     bot = get_bot()
     guild_obj = bot.get_guild(int(guild_id)) if (bot and guild_id.isdigit()) else None
 
-    # 頻道清單 (只取文字與公告頻道)
+    # 頻道清單、身分組清單與自訂表情符號清單
     channels = []
     roles = []
+    emojis = []
     if guild_obj:
         for ch in guild_obj.text_channels:
             channels.append({
@@ -470,6 +485,15 @@ def get_guild_data(guild_id: str):
                     'position': r.position,
                 })
         roles.sort(key=lambda x: x['position'], reverse=True)
+        for em in guild_obj.emojis:
+            ext = 'gif' if em.animated else 'png'
+            emojis.append({
+                'id': str(em.id),
+                'name': em.name,
+                'animated': bool(em.animated),
+                'raw': str(em),
+                'url': f"https://cdn.discordapp.com/emojis/{em.id}.{ext}?size=48",
+            })
 
     # 讀取各模組資料庫設定
     welcome_all = load_welcome_settings()
@@ -479,10 +503,32 @@ def get_guild_data(guild_id: str):
     music_cfg = music_all.get(str(guild_id), {})
 
     auto_reply_all = load_auto_reply_settings()
-    auto_reply_rules = auto_reply_all.get(str(guild_id), {}).get('rules', [])
+    raw_rules = auto_reply_all.get(str(guild_id), {}).get('rules', [])
+    auto_reply_rules = []
+    for r in raw_rules:
+        r_copy = dict(r)
+        r_copy['channel_id'] = str(r['channel_id']) if r.get('channel_id') else None
+        is_paused_flag = 1 if (r.get('is_paused') or not r.get('enabled', True)) else 0
+        r_copy['is_paused'] = is_paused_flag
+        r_copy['enabled'] = not bool(is_paused_flag)
+        auto_reply_rules.append(r_copy)
 
     reaction_roles_all = load_reaction_roles()
-    reaction_messages = reaction_roles_all.get(str(guild_id), {}).get('messages', [])
+    raw_reaction_messages = reaction_roles_all.get(str(guild_id), {}).get('messages', [])
+    reaction_messages = []
+    for m in raw_reaction_messages:
+        pairs_serialized = []
+        for p in (m.get('pairs') or []):
+            pairs_serialized.append({
+                'emoji': str(p.get('emoji') or ''),
+                'role_id': str(p.get('role_id') or ''),
+            })
+        reaction_messages.append({
+            'channel_id': str(m.get('channel_id') or ''),
+            'message_id': str(m.get('message_id') or ''),
+            'strict': bool(m.get('strict', True)),
+            'pairs': pairs_serialized,
+        })
 
     # 指令清單（確保 owner_guild_only 指令不會出現在非擁有者的控制面板中）
     commands_list = [
@@ -535,6 +581,7 @@ def get_guild_data(guild_id: str):
         'bot_in_guild': guild_obj is not None,
         'channels': channels,
         'roles': roles,
+        'emojis': emojis,
         'welcome': {
             'welcome_channel_id': str(welcome_cfg.get('welcome_channel_id') or ''),
             'rules_channel_id': str(welcome_cfg.get('rules_channel_id') or ''),
@@ -638,6 +685,7 @@ def save_guild_auto_reply_rule(guild_id: str):
     rules = guild_data.setdefault('rules', [])
 
     chan_val = int(channel_id) if channel_id else None
+    scope_val = str(chan_val) if chan_val else 'all'
 
     if rule_id is not None:
         # 修改現有規則
@@ -646,9 +694,13 @@ def save_guild_auto_reply_rule(guild_id: str):
             if r.get('id') == int(rule_id):
                 r['name'] = name[:40]
                 r['keywords'] = keywords[:10]
+                r['keyword'] = keywords[0]
                 r['replies'] = replies[:10]
+                r['reply'] = replies[0]
                 r['channel_id'] = chan_val
+                r['scope'] = scope_val
                 r['is_paused'] = is_paused
+                r['enabled'] = not bool(is_paused)
                 updated = True
                 break
         if not updated:
@@ -662,12 +714,17 @@ def save_guild_auto_reply_rule(guild_id: str):
             'id': new_id,
             'name': name[:40],
             'keywords': keywords[:10],
+            'keyword': keywords[0],
             'replies': replies[:10],
+            'reply': replies[0],
             'channel_id': chan_val,
+            'scope': scope_val,
             'is_paused': is_paused,
+            'enabled': not bool(is_paused),
         })
 
     save_auto_reply_settings(all_data)
+    _sync_cog_settings('AutoReply')
     return jsonify({'status': 'ok', 'message': '自動回覆規則已儲存成功！'})
 
 
@@ -692,6 +749,7 @@ def delete_guild_auto_reply_rule(guild_id: str):
 
     guild_data['rules'] = new_rules
     save_auto_reply_settings(all_data)
+    _sync_cog_settings('AutoReply')
     return jsonify({'status': 'ok', 'message': '規則已成功刪除'})
 
 
@@ -713,7 +771,10 @@ def toggle_guild_auto_reply_rule(guild_id: str):
     found = None
     for r in rules:
         if r.get('id') == int(rule_id):
-            r['is_paused'] = 0 if r.get('is_paused') else 1
+            currently_paused = bool(r.get('is_paused')) or not bool(r.get('enabled', True))
+            new_paused = 0 if currently_paused else 1
+            r['is_paused'] = new_paused
+            r['enabled'] = not bool(new_paused)
             found = r
             break
 
@@ -721,8 +782,278 @@ def toggle_guild_auto_reply_rule(guild_id: str):
         return jsonify({'status': 'error', 'message': '找不到指定的規則'}), 404
 
     save_auto_reply_settings(all_data)
+    _sync_cog_settings('AutoReply')
     status_str = "已暫停" if found['is_paused'] else "已啟用"
     return jsonify({'status': 'ok', 'message': f"規則「{found.get('name')}」{status_str}", 'is_paused': found['is_paused']})
+
+
+# ==============================================================================
+# 表符身分組 (Reaction Roles) 網頁控制面板同步編輯 / 刪除 API
+# ==============================================================================
+
+@panel_bp.route('/api/panel/guild/<guild_id>/reaction-roles/message/<message_id>', methods=['GET'])
+def get_guild_reaction_role_message(guild_id: str, message_id: str):
+    """讀取指定表符身分組訊息在 Discord 頻道中的目前文字內容（供編輯彈窗預填）。"""
+    if not can_manage_guild(guild_id):
+        return jsonify({'status': 'error', 'message': '權限不足'}), 403
+
+    all_data = load_reaction_roles()
+    messages = all_data.get(str(guild_id), {}).get('messages', [])
+    target_msg = next((m for m in messages if str(m.get('message_id')) == str(message_id)), None)
+    if not target_msg:
+        return jsonify({'status': 'error', 'message': '找不到該筆表符身分組配置'}), 404
+
+    content_text = ''
+    bot = get_bot()
+    if bot and getattr(bot, 'loop', None) and bot.loop.is_running() and guild_id.isdigit():
+        async def _fetch_content():
+            guild_obj = bot.get_guild(int(guild_id))
+            if not guild_obj:
+                return ''
+            ch_id = int(target_msg.get('channel_id') or 0)
+            msg_id = int(target_msg.get('message_id') or 0)
+            ch = guild_obj.get_channel(ch_id)
+            if not isinstance(ch, discord.TextChannel):
+                try:
+                    fetched = await bot.fetch_channel(ch_id)
+                    if isinstance(fetched, discord.TextChannel):
+                        ch = fetched
+                except Exception:
+                    ch = None
+            if not ch:
+                return ''
+            try:
+                m_obj = await ch.fetch_message(msg_id)
+                return m_obj.content or ''
+            except Exception:
+                return ''
+
+        try:
+            content_text = run_coroutine_threadsafe(_fetch_content(), timeout=8)
+        except Exception:
+            content_text = ''
+
+    return jsonify({
+        'status': 'ok',
+        'message_id': str(target_msg.get('message_id')),
+        'channel_id': str(target_msg.get('channel_id')),
+        'content': content_text,
+    })
+
+
+@panel_bp.route('/api/panel/guild/<guild_id>/reaction-roles/update', methods=['POST'])
+def update_guild_reaction_role(guild_id: str):
+    """修改表符身分組配置（配對清單、僅限有效表符開關、可選同步更新 Discord 訊息文字與反應）。"""
+    if not can_manage_guild(guild_id):
+        return jsonify({'status': 'error', 'message': '權限不足'}), 403
+
+    payload = request.get_json(silent=True) or {}
+    message_id = payload.get('message_id')
+    if not message_id or not str(message_id).isdigit():
+        return jsonify({'status': 'error', 'message': '缺少有效的 message_id 參數'}), 400
+
+    all_data = load_reaction_roles()
+    guild_entry = all_data.get(str(guild_id), {})
+    messages = guild_entry.get('messages', [])
+
+    target_msg = next((m for m in messages if str(m.get('message_id')) == str(message_id)), None)
+    if not target_msg:
+        return jsonify({'status': 'error', 'message': '找不到指定的表符身分組訊息配置'}), 404
+
+    # 更新 strict 開關
+    if 'strict' in payload:
+        target_msg['strict'] = bool(payload.get('strict'))
+
+    # 更新 pairs 配對清單（若有傳入）
+    if 'pairs' in payload:
+        raw_pairs = payload.get('pairs')
+        if not isinstance(raw_pairs, list) or len(raw_pairs) == 0:
+            return jsonify({'status': 'error', 'message': '表符配對不可為空，請至少設定 1 組配對'}), 400
+        if len(raw_pairs) > 20:
+            return jsonify({'status': 'error', 'message': '單一訊息最多只能設定 20 組表符配對'}), 400
+
+        cleaned_pairs = []
+        seen_emojis = set()
+        for idx, p in enumerate(raw_pairs, start=1):
+            if not isinstance(p, dict):
+                continue
+            em_str = str(p.get('emoji') or '').strip()
+            r_id_str = str(p.get('role_id') or '').strip()
+            if not em_str:
+                return jsonify({'status': 'error', 'message': f'第 {idx} 組缺少表情符號'}), 400
+            if not r_id_str or not r_id_str.isdigit():
+                return jsonify({'status': 'error', 'message': f'第 {idx} 組缺少有效的身分組'}), 400
+            if em_str in seen_emojis:
+                return jsonify({'status': 'error', 'message': f'表符 {em_str} 重複使用，每個表符只能對應一個身分組'}), 400
+            seen_emojis.add(em_str)
+            cleaned_pairs.append({
+                'emoji': em_str,
+                'role_id': int(r_id_str),
+            })
+
+        if not cleaned_pairs:
+            return jsonify({'status': 'error', 'message': '表符配對不可為空'}), 400
+
+        target_msg['pairs'] = cleaned_pairs
+
+    save_reaction_roles(all_data)
+    _sync_cog_settings('ReactionRoles')
+
+    # 若機器人在線，同步更新 Discord 原訊息的反應與內文
+    message_content = payload.get('message_content')
+    auto_sync_text = bool(payload.get('auto_sync_text', False))
+    discord_sync_note = ''
+
+    bot = get_bot()
+    if bot and getattr(bot, 'loop', None) and bot.loop.is_running() and guild_id.isdigit():
+        async def _sync_discord_message():
+            guild_obj = bot.get_guild(int(guild_id))
+            if not guild_obj:
+                return ''
+            ch_id = int(target_msg.get('channel_id') or 0)
+            msg_id = int(target_msg.get('message_id') or 0)
+            ch = guild_obj.get_channel(ch_id)
+            if not isinstance(ch, discord.TextChannel):
+                try:
+                    fetched = await bot.fetch_channel(ch_id)
+                    if isinstance(fetched, discord.TextChannel):
+                        ch = fetched
+                except Exception:
+                    ch = None
+            if not ch:
+                return '（原頻道未找到，已僅更新資料庫配置）'
+            try:
+                m_obj = await ch.fetch_message(msg_id)
+            except Exception:
+                return '（原 Discord 訊息無法讀取，已僅更新資料庫配置）'
+
+            # 1. 若有指定更新內文或自動排版內文
+            new_text = None
+            if isinstance(message_content, str) and message_content.strip():
+                new_text = message_content.strip()[:2000]
+            elif auto_sync_text:
+                first_line = (m_obj.content or '').split('\n', 1)[0].strip()
+                pairs_list = target_msg.get('pairs') or []
+                if (
+                    first_line
+                    and not first_line.startswith('<')
+                    and not first_line.startswith('•')
+                    and not any(first_line.startswith(str(p.get('emoji', ''))) for p in pairs_list)
+                ):
+                    header = first_line
+                else:
+                    header = '點擊表符領取身分組！'
+                lines = [header, '']
+                for p in pairs_list:
+                    r_obj = guild_obj.get_role(int(p.get('role_id') or 0))
+                    r_mention = r_obj.mention if r_obj else f"<@&{p.get('role_id')}>"
+                    lines.append(f"{p.get('emoji')} {r_mention}")
+                new_text = '\n'.join(lines)[:2000]
+
+            if new_text is not None and m_obj.author.id == (bot.user.id if bot.user else 0):
+                try:
+                    await m_obj.edit(content=new_text)
+                except Exception:
+                    pass
+
+            # 2. 若這次有更新 pairs，同步訊息上的表符反應
+            if 'pairs' in payload:
+                desired_emojis = [str(p.get('emoji')) for p in (target_msg.get('pairs') or [])]
+                desired_set = set(desired_emojis)
+                already_on = {str(r.emoji) for r in m_obj.reactions if r.me and str(r.emoji) in desired_set}
+                for reaction in list(m_obj.reactions):
+                    if reaction.me and str(reaction.emoji) not in desired_set:
+                        try:
+                            await reaction.clear()
+                        except Exception:
+                            pass
+                for em_str in desired_emojis:
+                    if em_str not in already_on:
+                        try:
+                            await m_obj.add_reaction(em_str)
+                        except Exception:
+                            pass
+            return '（已同步更新 Discord 訊息與反應）'
+
+        try:
+            discord_sync_note = run_coroutine_threadsafe(_sync_discord_message(), timeout=15)
+        except Exception:
+            discord_sync_note = ''
+
+    return jsonify({
+        'status': 'ok',
+        'message': f'表符身分組配置已成功更新！{discord_sync_note}',
+        'strict': bool(target_msg.get('strict', True)),
+    })
+
+
+@panel_bp.route('/api/panel/guild/<guild_id>/reaction-roles/delete', methods=['POST'])
+def delete_guild_reaction_role(guild_id: str):
+    """刪除指定的表符身分組訊息配置，並嘗試一併刪除 Discord 頻道內的原領取訊息。"""
+    if not can_manage_guild(guild_id):
+        return jsonify({'status': 'error', 'message': '權限不足'}), 403
+
+    payload = request.get_json(silent=True) or {}
+    message_id = payload.get('message_id')
+    if not message_id or not str(message_id).isdigit():
+        return jsonify({'status': 'error', 'message': '缺少有效的 message_id 參數'}), 400
+
+    all_data = load_reaction_roles()
+    guild_entry = all_data.get(str(guild_id), {})
+    messages = guild_entry.get('messages', [])
+
+    target_msg = next((m for m in messages if str(m.get('message_id')) == str(message_id)), None)
+    if not target_msg:
+        return jsonify({'status': 'error', 'message': '找不到欲刪除的表符身分組訊息配置'}), 404
+
+    channel_id = int(target_msg.get('channel_id') or 0)
+    msg_id_int = int(target_msg.get('message_id') or 0)
+
+    new_messages = [m for m in messages if str(m.get('message_id')) != str(message_id)]
+    if new_messages:
+        guild_entry['messages'] = new_messages
+    else:
+        all_data.pop(str(guild_id), None)
+
+    save_reaction_roles(all_data)
+    _sync_cog_settings('ReactionRoles')
+
+    # 若機器人在線，嘗試一併刪除 Discord 頻道內的原訊息
+    discord_del_note = ''
+    bot = get_bot()
+    if bot and getattr(bot, 'loop', None) and bot.loop.is_running() and guild_id.isdigit() and channel_id:
+        async def _del_discord_msg():
+            guild_obj = bot.get_guild(int(guild_id))
+            if not guild_obj:
+                return ''
+            ch = guild_obj.get_channel(channel_id)
+            if not isinstance(ch, discord.TextChannel):
+                try:
+                    fetched = await bot.fetch_channel(channel_id)
+                    if isinstance(fetched, discord.TextChannel):
+                        ch = fetched
+                except Exception:
+                    ch = None
+            if not ch:
+                return ''
+            try:
+                m_obj = await ch.fetch_message(msg_id_int)
+                await m_obj.delete()
+                return '（頻道內的原領取訊息也已一併刪除）'
+            except discord.NotFound:
+                return '（原頻道訊息先前已被刪除，已清除設定）'
+            except Exception:
+                return '（已移除設定；原頻道訊息因權限或連線因素未刪除）'
+
+        try:
+            discord_del_note = run_coroutine_threadsafe(_del_discord_msg(), timeout=10)
+        except Exception:
+            discord_del_note = ''
+
+    return jsonify({
+        'status': 'ok',
+        'message': f'表符身分組訊息配置已成功刪除！{discord_del_note}',
+    })
 
 
 # ==============================================================================

@@ -240,7 +240,7 @@ def test_panel_user_without_manageable_guilds():
 def test_panel_server_selection_navigation_and_confirm_modal():
     client = app.test_client()
 
-    # 1. 一般管理員：擁有伺服器選擇畫面、設定畫面包含返回按鈕與清除設定確認 Modal，但沒有管理員設定入口
+    # 1. 一般管理員：擁有伺服器選擇畫面、設定畫面僅有單一返回按鈕與清除設定確認 Modal，且無管理員設定入口
     client.get('/api/auth/dev-login?role=admin')
     res_admin = client.get('/panel')
     assert res_admin.status_code == 200
@@ -249,8 +249,10 @@ def test_panel_server_selection_navigation_and_confirm_modal():
     assert 'server-cards-grid' in admin_html
     assert 'view-server-settings' in admin_html
     assert 'btn-back-to-servers' in admin_html
-    assert 'btn-sidebar-back' in admin_html
+    assert 'btn-sidebar-back' not in admin_html
+    assert admin_html.count('<span>返回伺服器選擇</span>') == 1
     assert 'modal-confirm-clear' in admin_html
+    assert 'modal-reaction-role' in admin_html
     assert 'modal-confirm-ok' in admin_html
     assert 'btn-confirm-danger' in admin_html
     assert 'btn-dropdown-owner' not in admin_html
@@ -264,7 +266,89 @@ def test_panel_server_selection_navigation_and_confirm_modal():
     assert 'view-server-selection' in owner_html
     assert 'view-server-settings' in owner_html
     assert 'btn-back-to-servers' in owner_html
+    assert 'btn-sidebar-back' not in owner_html
+    assert owner_html.count('<span>返回伺服器選擇</span>') == 1
     assert 'modal-confirm-clear' in owner_html
+    assert 'modal-reaction-role' in owner_html
+
+
+def test_reaction_roles_panel_crud_and_snowflake_precision():
+    from cogs.database import load_reaction_roles, save_reaction_roles
+
+    client = app.test_client()
+    client.get('/api/auth/dev-login?role=admin')
+    guild_id = '222222222222222222'
+    msg_id = '1484534824910852137'
+    chan_id = '1483075031796813946'
+    role_a = '1477940768537444462'
+    role_b = '1477940839828033567'
+
+    all_rr = load_reaction_roles()
+    orig_guild_rr = all_rr.get(guild_id)
+
+    try:
+        all_rr[guild_id] = {
+            'messages': [
+                {
+                    'message_id': int(msg_id),
+                    'channel_id': int(chan_id),
+                    'strict': False,
+                    'pairs': [
+                        {'emoji': '🔥', 'role_id': int(role_a)},
+                    ],
+                }
+            ]
+        }
+        save_reaction_roles(all_rr)
+
+        # 1. 讀取伺服器設定，驗證 64-bit ID 轉為字串不失真
+        res_data = client.get(f'/api/panel/guild/{guild_id}/data')
+        assert res_data.status_code == 200
+        rr_list = res_data.get_json().get('reaction_roles_messages', [])
+        target = next((m for m in rr_list if m['message_id'] == msg_id), None)
+        assert target is not None
+        assert target['channel_id'] == chan_id
+        assert target['strict'] is False
+        assert target['pairs'] == [{'emoji': '🔥', 'role_id': role_a}]
+
+        # 2. 透過控制面板 API 更新表符身分組配對與嚴格模式
+        res_upd = client.post(
+            f'/api/panel/guild/{guild_id}/reaction-roles/update',
+            json={
+                'message_id': msg_id,
+                'strict': True,
+                'pairs': [
+                    {'emoji': '🔥', 'role_id': role_a},
+                    {'emoji': '<:custom:1483078986119479377>', 'role_id': role_b},
+                ],
+            },
+        )
+        assert res_upd.status_code == 200
+        updated_msgs = load_reaction_roles().get(guild_id, {}).get('messages', [])
+        updated_rr = next((m for m in updated_msgs if str(m.get('message_id')) == msg_id), None)
+        assert updated_rr is not None
+        assert updated_rr['strict'] is True
+        assert updated_rr['pairs'] == [
+            {'emoji': '🔥', 'role_id': int(role_a)},
+            {'emoji': '<:custom:1483078986119479377>', 'role_id': int(role_b)},
+        ]
+
+        # 3. 透過控制面板 API 刪除表符身分組訊息設定
+        res_del = client.post(
+            f'/api/panel/guild/{guild_id}/reaction-roles/delete',
+            json={'message_id': msg_id, 'delete_discord_message': True},
+        )
+        assert res_del.status_code == 200
+        after_msgs = load_reaction_roles().get(guild_id, {}).get('messages', [])
+        assert all(str(m.get('message_id')) != msg_id for m in after_msgs)
+    finally:
+        all_rr = load_reaction_roles()
+        if orig_guild_rr is None:
+            all_rr.pop(guild_id, None)
+        else:
+            all_rr[guild_id] = orig_guild_rr
+        save_reaction_roles(all_rr)
+
 
 
 

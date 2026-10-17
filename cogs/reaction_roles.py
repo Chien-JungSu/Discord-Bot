@@ -543,8 +543,50 @@ class ReactionRoles(commands.Cog):
             embed.add_field(name='ℹ️ 最新狀態', value=status[:1024], inline=False)
         return embed
 
+    def reload_settings(self):
+        """從資料庫重新載入表符身份組設定（供網頁控制面板變更後同步記憶體狀態）。"""
+        self.settings = _load_reaction_roles()
+
+    async def _delete_mapping(
+        self,
+        guild_key: str,
+        message_id: int,
+        interaction: Optional[discord.Interaction] = None,
+    ) -> bool:
+        """從伺服器設定中移除指定的領取訊息紀錄並寫入資料庫；失敗時回滾記憶體狀態並回傳 False。"""
+        guild_entry = self.settings.get(str(guild_key))
+        if not guild_entry:
+            return False
+        messages = guild_entry.get('messages') or []
+        removed_items = []
+        new_messages = []
+        for idx, msg_entry in enumerate(messages):
+            if int(msg_entry.get('message_id') or 0) == int(message_id):
+                removed_items.append((idx, msg_entry))
+            else:
+                new_messages.append(msg_entry)
+        if not removed_items:
+            return False
+
+        old_messages = list(messages)
+        if new_messages:
+            guild_entry['messages'] = new_messages
+        else:
+            self.settings.pop(str(guild_key), None)
+
+        try:
+            _save_reaction_roles(self.settings)
+        except Exception as e:
+            # 回滾記憶體狀態
+            self.settings[str(guild_key)] = {'messages': old_messages}
+            traceback.print_exc()
+            if interaction is not None and hasattr(self.bot, 'notify_owner_error'):
+                await self.bot.notify_owner_error(e, interaction, extra_info='reaction_roles_edit: 刪除領取訊息設定失敗')
+            return False
+        return True
+
     # ---------- /reaction_roles_edit：選單＋按鈕＋輸入框的互動式編輯 ----------
-    @app_commands.command(name='reaction_roles_edit', description='編輯已發送的表符身份組訊息：選單選擇訊息後，用輸入框修改文字／表符配對，或切換「僅限有效表符」')
+    @app_commands.command(name='reaction_roles_edit', description='編輯或刪除已發送的表符身份組訊息：修改文字／表符配對、切換僅限有效表符，或刪除領取訊息')
     @app_commands.guild_only()
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.checks.has_permissions(manage_guild=True)  # H3: 執行期檢查，伺服器端覆寫權限也擋得住
@@ -578,6 +620,7 @@ class ReactionRoles(commands.Cog):
                 '• 按「**編輯表符配對**」進入配對編輯器：用**身份組選單**直接搜尋身份組、'
                 '到**領取訊息上按表符**即可選表符，不必再複製身份組 ID 或表符代碼\n'
                 '• 按「**🛡️ 僅限有效表符**」一下即可切換開／關\n'
+                '• 按「**🗑️ 刪除領取訊息**」可在確認後刪除該則領取訊息與配對設定\n'
                 '• 所有操作都在同一則訊息上進行（連續編輯不會洗版）；連續 120 秒沒有操作按鈕會自動失效，再執行一次指令即可'
             ),
             color=discord.Color.blurple(),
@@ -1150,6 +1193,19 @@ class ReactionRolesEditActionView(discord.ui.View):
         # 就地把這則訊息換成結果＋同排按鈕（不另外開一則，避免連續操作時洗版）
         await interaction.response.edit_message(embed=embed, view=self)
 
+    @discord.ui.button(label='刪除領取訊息', style=discord.ButtonStyle.danger, emoji='🗑️', row=1)
+    async def delete_message_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """開啟二次確認畫面，確認後刪除領取訊息與對應設定。"""
+        self.stop()
+        confirm_view = ReactionRolesDeleteConfirmView(self.cog, self.guild, self.mapping)
+        confirm_view.initiator_id = interaction.user.id
+        embed = confirm_view.build_confirm_embed()
+        await interaction.response.edit_message(embed=embed, view=confirm_view)
+        try:
+            confirm_view.message = await interaction.original_response()
+        except discord.HTTPException:
+            pass
+
     @discord.ui.button(label='取消', style=discord.ButtonStyle.secondary, row=1)
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self._disable_all()
@@ -1159,6 +1215,133 @@ class ReactionRolesEditActionView(discord.ui.View):
             color=discord.Color.light_grey(),
         )
         await interaction.response.edit_message(embed=embed, view=self)
+
+
+class ReactionRolesDeleteConfirmView(discord.ui.View):
+    """刪除表符身份組領取訊息的二次確認視窗：確認後會嘗試刪除頻道內的原訊息並移除資料庫設定。"""
+
+    def __init__(self, cog: 'ReactionRoles', guild: discord.Guild, mapping: dict):
+        super().__init__(timeout=BUTTON_IDLE_TIMEOUT)
+        self.cog = cog
+        self.guild = guild
+        self.mapping = mapping
+        self.initiator_id: Optional[int] = None
+        self.message: Optional[discord.Message] = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if self.initiator_id is not None and interaction.user.id != self.initiator_id:
+            await interaction.response.send_message('❌ 只有執行編輯指令的人才能操作這些按鈕。', ephemeral=True)
+            return False
+        return True
+
+    def _disable_all(self):
+        for item in self.children:
+            if isinstance(item, discord.ui.Button):
+                item.disabled = True
+
+    async def on_timeout(self):
+        self._disable_all()
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+    def build_confirm_embed(self) -> discord.Embed:
+        channel_id = int(self.mapping.get('channel_id') or 0)
+        message_id = int(self.mapping.get('message_id') or 0)
+        channel = self.guild.get_channel(channel_id)
+        channel_text = channel.mention if channel is not None else f'（ID {channel_id}）'
+        jump_url = f'https://discord.com/channels/{self.guild.id}/{channel_id}/{message_id}'
+        pairs = self.mapping.get('pairs') or []
+
+        lines = [
+            f'📢 頻道：{channel_text}',
+            f'🔗 [前往訊息]({jump_url})',
+            '',
+            f'🧩 即將移除的表符配對（共 {len(pairs)} 組）：',
+        ]
+        if pairs:
+            for pair in pairs:
+                role = self.guild.get_role(int(pair.get('role_id') or 0))
+                role_text = role.mention if role is not None else f"<@&{pair.get('role_id')}>"
+                lines.append(f"• {pair.get('emoji')} → {role_text}")
+        else:
+            lines.append('（沒有任何配對）')
+
+        lines.extend([
+            '',
+            '⚠️ **確定要刪除這則表符身份組領取訊息嗎？**',
+            '• 機器人將一併刪除頻道內的原領取訊息與所有綁定設定',
+            '• 刪除後無法復原（先前已領取身份組的成員不會被收回身份組）',
+        ])
+
+        return discord.Embed(
+            title='⚠️ 確認刪除表符身份組訊息',
+            description='\n'.join(lines),
+            color=discord.Color.red(),
+        )
+
+    @discord.ui.button(label='確認刪除', style=discord.ButtonStyle.danger, emoji='🗑️', row=0)
+    async def confirm_delete_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        channel_id = int(self.mapping.get('channel_id') or 0)
+        message_id = int(self.mapping.get('message_id') or 0)
+        pairs_count = len(self.mapping.get('pairs') or [])
+        channel = self.guild.get_channel(channel_id)
+        channel_text = channel.mention if channel is not None else f'（ID {channel_id}）'
+
+        # 1. 先移除設定並儲存（若儲存失敗則不刪除原訊息）
+        deleted_ok = await self.cog._delete_mapping(str(self.guild.id), message_id, interaction=interaction)
+        if not deleted_ok:
+            await interaction.response.send_message(
+                '❌ 刪除失敗：找不到這則領取訊息設定，或儲存時發生錯誤。',
+                ephemeral=True,
+            )
+            return
+
+        # 2. 嘗試刪除 Discord 頻道內的原領取訊息
+        target_channel = channel if isinstance(channel, discord.TextChannel) else None
+        if target_channel is None:
+            try:
+                fetched = await self.cog.bot.fetch_channel(channel_id)
+                if isinstance(fetched, discord.TextChannel):
+                    target_channel = fetched
+            except discord.HTTPException:
+                target_channel = None
+
+        msg_note = '頻道內的原領取訊息也已一併刪除。'
+        if target_channel is not None:
+            try:
+                msg_obj = await target_channel.fetch_message(message_id)
+                await msg_obj.delete()
+            except discord.NotFound:
+                msg_note = '（原頻道訊息先前已被刪除，已清除殘留設定）'
+            except discord.Forbidden:
+                msg_note = '（⚠️ 機器人無權限刪除頻道內的原訊息，但已解除並移除此表符身份組設定）'
+            except discord.HTTPException:
+                msg_note = '（⚠️ 無法刪除頻道內的原訊息，但已解除並移除此表符身份組設定）'
+        else:
+            msg_note = '（原頻道已不存在，已清除殘留設定）'
+
+        self.stop()
+        self._disable_all()
+        embed = discord.Embed(
+            title='🗑️ 已刪除表符身份組訊息',
+            description=(
+                f'已成功移除 {channel_text} 的表符身份組配置（共 {pairs_count} 組配對）。\n'
+                f'{msg_note}'
+            ),
+            color=discord.Color.green(),
+        )
+        await _respond_in_place(interaction, embed=embed, view=None)
+
+    @discord.ui.button(label='取消返回', style=discord.ButtonStyle.secondary, emoji='↩️', row=0)
+    async def cancel_delete_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.stop()
+        view = ReactionRolesEditActionView(self.cog, self.guild, self.mapping)
+        view.initiator_id = interaction.user.id
+        embed = self.cog._build_edit_embed(self.guild, self.mapping, status='已取消刪除，表符身份組設定保持不變。')
+        view.message = await _respond_in_place(interaction, embed=embed, view=view)
 
 
 class ReactionRolesEditTextModal(discord.ui.Modal):

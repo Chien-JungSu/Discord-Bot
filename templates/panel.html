@@ -227,16 +227,6 @@
 
     <!-- 2. 伺服器詳細設定畫面 (點選伺服器後顯示，初始隱藏) -->
     <div id="view-server-settings" class="server-settings-view" style="display: none;">
-      <!-- 頂部左上角返回按鈕 -->
-      <div class="settings-nav-header">
-        <button id="btn-back-to-servers" class="btn-back-to-servers" type="button" title="回到選擇伺服器">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
-            <path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/>
-          </svg>
-          <span>← 返回選擇伺服器</span>
-        </button>
-      </div>
-
       <!-- 伺服器未加入機器人提示卡 -->
       <div id="bot-invite-banner" class="invite-banner" style="display: none;">
         <div class="invite-banner-content">
@@ -256,11 +246,11 @@
         <!-- 側邊欄導航 (Tabs) -->
         <aside class="panel-sidebar">
           <div class="sidebar-header">
-            <button id="btn-sidebar-back" class="btn-sidebar-back" type="button" title="切換伺服器">
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+            <button id="btn-back-to-servers" class="btn-back-to-servers" type="button" title="返回伺服器選擇">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
                 <path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/>
               </svg>
-              <span>切換伺服器</span>
+              <span>返回伺服器選擇</span>
             </button>
             <div class="sidebar-server-meta">
               <span id="active-server-display" class="active-server-name">載入中...</span>
@@ -268,7 +258,7 @@
             </div>
             {% if is_owner %}
             <div class="owner-sidebar-info" id="owner-sidebar-info">
-              <p>目前處於全域系統管理專區。點擊上方「切換伺服器」即可回到伺服器清單。</p>
+              <p>目前處於全域系統管理專區。點擊上方「返回伺服器選擇」即可回到伺服器清單。</p>
             </div>
             {% endif %}
           </div>
@@ -408,9 +398,9 @@
         <div id="tab-reaction-roles" class="tab-pane">
           <div class="pane-header">
             <div class="tag">Reaction Roles Module</div>
-            <h2>🎭 表符身分組配置檢視</h2>
+            <h2>🎭 表符身分組配置管理</h2>
             <p class="pane-desc">
-              檢視伺服器中已部署的表情符號身分組領取面板。可透過指令 <code>/reaction_roles_create</code> 於 Discord 中快速建立新面板。
+              檢視、編輯或刪除伺服器中已部署的表情符號身分組領取訊息，變更將與 Discord 機器人即時同步。如需建立全新的領取訊息，請在 Discord 頻道執行 <code>/reaction_roles_create</code>。
             </p>
           </div>
 
@@ -760,7 +750,7 @@
           </div>
           <div class="form-group">
             <label>回覆內容 (一行一則；多行時隨機挑選一則回覆)</label>
-            <textarea id="modal-rule-replies" class="form-control" rows="4" placeholder="例如：&#10;你好呀！祝你有美好的一天！&#10;哈囉！今天過得好嗎？" required></textarea>
+            <textarea id="modal-rule-replies" class="form-control" rows="3" placeholder="例如：&#10;你好呀！祝你有美好的一天！&#10;哈囉！今天過得好嗎？" required></textarea>
           </div>
           <div class="form-group">
             <label>限定生效文字頻道 (可選)</label>
@@ -779,6 +769,67 @@
               <span>💾 儲存規則</span>
             </button>
             <button type="button" id="modal-auto-reply-cancel" class="btn secondary">
+              <span>取消</span>
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- 表符身分組 編輯配置 Modal 彈出視窗 -->
+    <div id="modal-reaction-role" class="modal-backdrop" style="display: none;" aria-hidden="true">
+      <div class="modal-card modal-rr-card">
+        <div class="modal-header">
+          <h3 id="modal-rr-title">✏️ 編輯表符身分組配置</h3>
+          <button id="modal-rr-close" class="btn-close-modal" type="button">&times;</button>
+        </div>
+        <form id="form-modal-reaction-role" class="modal-body">
+          <input type="hidden" id="modal-rr-message-id" value="" />
+          <div id="modal-rr-meta-info" class="rr-modal-meta-bar"></div>
+
+          <div class="form-group checkbox-group">
+            <label class="custom-checkbox-label">
+              <input type="checkbox" id="modal-rr-strict" checked />
+              <span>🛡️ 開啟「僅限有效表符」（成員點擊非綁定表符時，機器人自動移除該反應）</span>
+            </label>
+          </div>
+
+          <div class="form-group">
+            <label>🧩 目前表符與身分組配對清單 (最多 20 組)</label>
+            <div id="modal-rr-pairs-list" class="rr-editor-pairs-list"></div>
+          </div>
+
+          <div class="rr-add-pair-box">
+            <label class="rr-add-pair-title">➕ 新增表符配對</label>
+            <div class="rr-add-pair-controls">
+              <input type="text" id="modal-rr-new-emoji" class="form-control rr-emoji-input" placeholder="輸入表情符號 (如 🎉) 或點選下方伺服器表符" />
+              <select id="modal-rr-new-role" class="form-control rr-role-select">
+                <option value="">-- 選擇對應身分組 --</option>
+              </select>
+              <button type="button" id="btn-rr-add-pair" class="btn secondary rr-btn-add-pair">
+                <span>＋ 加入</span>
+              </button>
+            </div>
+            <div id="modal-rr-emoji-picker-wrap" class="rr-emoji-picker-wrap" style="display: none;">
+              <small class="form-hint">點選伺服器自訂表情符號快速填入：</small>
+              <div id="modal-rr-emoji-picker" class="rr-emoji-picker-list"></div>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>📝 領取訊息文字 (可選填同步更新 Discord 訊息內文)</label>
+            <textarea id="modal-rr-content" class="form-control" rows="3" placeholder="留空則保持原 Discord 訊息文字不變；或勾選下方自動排版"></textarea>
+            <label class="custom-checkbox-label" style="margin-top: 4px;">
+              <input type="checkbox" id="modal-rr-auto-sync-text" />
+              <span>✨ 儲存時依上方配對清單自動重新排版 Discord 訊息文字</span>
+            </label>
+          </div>
+
+          <div class="modal-footer">
+            <button type="submit" class="btn primary">
+              <span>💾 儲存配置並同步</span>
+            </button>
+            <button type="button" id="modal-rr-cancel" class="btn secondary">
               <span>取消</span>
             </button>
           </div>

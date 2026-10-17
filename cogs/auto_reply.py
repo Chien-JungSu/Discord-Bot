@@ -966,6 +966,10 @@ class AutoReply(commands.Cog):
         # key = f"{guild_id}:{channel_id}:{rule_id}:{user_id}" → 最近一次回覆的 monotonic 時間
         self._reply_cooldowns: dict = {}
 
+    def reload_settings(self):
+        """從資料庫重新載入自動回覆設定（供網頁控制面板變更後同步記憶體狀態）。"""
+        self.settings = _load_auto_reply_settings()
+
     # ---------- 資料操作 ----------
 
     def _get_rules(self, guild_id: int) -> list:

@@ -37,7 +37,7 @@ main {
 .docs-sidebar-trigger {
   position: fixed;
   left: 0;
-  top: 50%;
+  top: calc(50% + 34px);
   transform: translateY(-50%);
   z-index: 126;
   display: flex;
@@ -59,30 +59,36 @@ main {
   transition: background 0.25s ease, border-color 0.25s ease, color 0.25s ease, box-shadow 0.25s ease, width 0.2s ease;
 }
 
-.docs-sidebar-trigger:not(.is-active):hover {
-  background: rgba(15, 23, 42, 0.98);
-  border-color: rgba(125, 211, 252, 0.6);
-  color: #ffffff;
-  width: 30px;
-  box-shadow: 6px 0 20px rgba(125, 211, 252, 0.35);
+@media (hover: hover) {
+  .docs-sidebar-trigger:not(.is-active):hover {
+    background: rgba(15, 23, 42, 0.98);
+    border-color: rgba(125, 211, 252, 0.6);
+    color: #ffffff;
+    width: 30px;
+    box-shadow: 6px 0 20px rgba(125, 211, 252, 0.35);
+  }
 }
 
-.docs-sidebar-trigger.is-active {
+.docs-sidebar-trigger.is-active,
+.docs-sidebar-trigger.is-active:focus,
+.docs-sidebar-trigger.is-active:active {
   left: 0;
   background: transparent;
   border-color: transparent;
   box-shadow: none;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
-  color: rgba(255, 255, 255, 0.65);
-  width: 28px;
+  color: rgba(255, 255, 255, 0.72);
+  width: 32px;
 }
 
-.docs-sidebar-trigger.is-active:hover {
-  background: rgba(255, 255, 255, 0.06);
-  border-color: transparent;
-  box-shadow: none;
-  color: #ffffff;
+@media (hover: hover) {
+  .docs-sidebar-trigger.is-active:hover {
+    background: rgba(255, 255, 255, 0.06);
+    border-color: transparent;
+    box-shadow: none;
+    color: #ffffff;
+  }
 }
 
 .trigger-chevron {

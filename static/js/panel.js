@@ -10,7 +10,9 @@
   let currentGuildName = '';
   let currentChannels = [];
   let currentRoles = [];
+  let currentEmojis = [];
   let currentCommands = [];
+  let currentReactionRoles = [];
 
   // DOM 元素快取
   const toastContainer = document.getElementById('toast-container');
@@ -24,7 +26,6 @@
   const viewServerSelection = document.getElementById('view-server-selection');
   const viewServerSettings = document.getElementById('view-server-settings');
   const btnBackToServers = document.getElementById('btn-back-to-servers');
-  const btnSidebarBack = document.getElementById('btn-sidebar-back');
   const btnDropdownOwner = document.getElementById('btn-dropdown-owner');
 
   const modalConfirm = document.getElementById('modal-confirm-clear');
@@ -115,9 +116,6 @@
 
   if (btnBackToServers) {
     btnBackToServers.addEventListener('click', returnToServerSelection);
-  }
-  if (btnSidebarBack) {
-    btnSidebarBack.addEventListener('click', returnToServerSelection);
   }
 
   function openSettingsViewForOwner() {
@@ -234,7 +232,9 @@
       const data = await res.json();
       currentChannels = data.channels || [];
       currentRoles = data.roles || [];
+      currentEmojis = data.emojis || [];
       currentCommands = data.commands || [];
+      currentReactionRoles = data.reaction_roles_messages || [];
 
       // 1. 填入下拉選單 (歡迎頻道、身分組等)
       populateDropdowns(data.welcome, data.music);
@@ -243,7 +243,7 @@
       renderAutoReplyRules(data.auto_reply_rules || []);
 
       // 3. 渲染表符身分組配置
-      renderReactionRoles(data.reaction_roles_messages || []);
+      renderReactionRoles(currentReactionRoles);
 
       // 4. 渲染指令清單 (確保 owner_guild_only 依身分嚴格隔離)
       renderCommandsTable(currentCommands);
@@ -442,7 +442,7 @@
         .map((k) => `<span class="keyword-tag">${escapeHtml(k)}</span>`)
         .join('');
 
-      const repliesText = (r.replies || []).join('\n---\n');
+      const repliesText = (r.replies || []).join('\n──────────\n');
 
       let channelName = '全伺服器生效';
       if (r.channel_id) {
@@ -450,22 +450,34 @@
         channelName = matched ? `# ${matched.name}` : `頻道 ID: ${r.channel_id}`;
       }
 
+      const statusBadge = r.is_paused
+        ? '<span class="rule-status-badge paused">⏸️ 已暫停</span>'
+        : '<span class="rule-status-badge active">● 啟用中</span>';
+
       card.innerHTML = `
-        <div class="rule-card-main">
-          <div class="rule-card-title-row">
+        <div class="rule-card-header">
+          <div class="rule-card-title-group">
             <span class="rule-title">${escapeHtml(r.name || '未命名規則')}</span>
-            ${r.is_paused ? '<span class="tag" style="border-color: #f87171; color: #f87171;">已暫停</span>' : '<span class="tag" style="border-color: #34d399; color: #34d399;">啟用中</span>'}
+            ${statusBadge}
+            <span class="rule-scope-badge">📍 ${escapeHtml(channelName)}</span>
           </div>
-          <div class="rule-keywords-row">
-            ${keywordsHtml}
+          <div class="rule-actions-row">
+            <button class="btn-icon-action btn-edit-rule" data-id="${r.id}" type="button">✏️ 編輯</button>
+            <button class="btn-icon-action btn-toggle-rule" data-id="${r.id}" type="button">${r.is_paused ? '▶️ 啟用' : '⏸️ 暫停'}</button>
+            <button class="btn-icon-action delete btn-del-rule" data-id="${r.id}" type="button">🗑️ 刪除</button>
           </div>
-          <div class="rule-replies-box">${escapeHtml(repliesText)}</div>
-          <div class="rule-meta-info">📍 生效範圍：${escapeHtml(channelName)}</div>
         </div>
-        <div class="rule-actions-col">
-          <button class="btn-icon-action btn-edit-rule" data-id="${r.id}" type="button">✏️ 編輯</button>
-          <button class="btn-icon-action btn-toggle-rule" data-id="${r.id}" type="button">${r.is_paused ? '▶️ 啟用' : '⏸️ 暫停'}</button>
-          <button class="btn-icon-action delete btn-del-rule" data-id="${r.id}" type="button">🗑️ 刪除</button>
+        <div class="rule-card-body">
+          <div class="rule-section-block">
+            <span class="rule-section-label">🔑 觸發關鍵字（符合任一即觸發）</span>
+            <div class="rule-keywords-row">
+              ${keywordsHtml}
+            </div>
+          </div>
+          <div class="rule-section-block">
+            <span class="rule-section-label">💬 自動回覆內容${(r.replies || []).length > 1 ? `（共 ${r.replies.length} 則隨機回覆）` : ''}</span>
+            <div class="rule-replies-box">${escapeHtml(repliesText)}</div>
+          </div>
         </div>
       `;
       autoReplyListContainer.appendChild(card);
@@ -501,7 +513,7 @@
       nameEl.value = rule.name || '';
       kwEl.value = (rule.keywords || []).join(', ');
       repEl.value = (rule.replies || []).join('\n');
-      chanEl.value = rule.channel_id || '';
+      chanEl.value = rule.channel_id ? String(rule.channel_id) : '';
       pausedEl.checked = Boolean(rule.is_paused);
     } else {
       titleEl.textContent = '新增自動回覆規則';
@@ -523,6 +535,11 @@
   if (btnAddAutoReply) btnAddAutoReply.addEventListener('click', () => openEditRuleModal(null));
   if (modalCloseBtn) modalCloseBtn.addEventListener('click', closeModal);
   if (modalCancelBtn) modalCancelBtn.addEventListener('click', closeModal);
+  if (modalAutoReply) {
+    modalAutoReply.addEventListener('click', (e) => {
+      if (e.target === modalAutoReply) closeModal();
+    });
+  }
 
   if (formModalAutoReply) {
     formModalAutoReply.addEventListener('submit', async (e) => {
@@ -579,29 +596,61 @@
     }
   }
 
-  async function deleteRule(ruleId) {
+  function deleteRule(ruleId) {
     if (!currentGuildId || !ruleId) return;
-    if (!confirm('確定要刪除這條自動回覆規則嗎？')) return;
+    const rule = currentRulesList.find((r) => String(r.id) === String(ruleId));
+    const ruleTitle = rule && rule.name ? `「${rule.name}」` : '這條';
 
-    try {
-      const res = await fetch(`/api/panel/guild/${currentGuildId}/auto-reply/delete`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: parseInt(ruleId) }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        showToast(data.message || '規則已刪除');
-        loadGuildData(currentGuildId);
-      } else {
-        showToast(data.message || '刪除失敗', 'error');
-      }
-    } catch (err) {
-      showToast('請求網路錯誤', 'error');
-    }
+    showConfirmModal({
+      title: '⚠️ 確認刪除自動回覆規則',
+      message: `確定要刪除${ruleTitle}自動回覆規則嗎？刪除後將無法復原。`,
+      confirmText: '確認刪除',
+      cancelText: '取消',
+      onConfirm: async () => {
+        try {
+          const res = await fetch(`/api/panel/guild/${currentGuildId}/auto-reply/delete`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: parseInt(ruleId) }),
+          });
+          const data = await res.json();
+          if (res.ok) {
+            showToast(data.message || '規則已刪除');
+            loadGuildData(currentGuildId);
+          } else {
+            showToast(data.message || '刪除失敗', 'error');
+          }
+        } catch (err) {
+          showToast('請求網路錯誤', 'error');
+        }
+      },
+    });
   }
 
-  // ---------- 表符身分組配置清單渲染 ----------
+  // ---------- 表符解析與表符身分組配置 (Reaction Roles) ----------
+  function renderEmojiHtml(emojiStr) {
+    const raw = String(emojiStr || '').trim();
+    const match = raw.match(/^<(a?):([^:>]+):(\d+)>$/);
+    if (match) {
+      const isAnimated = match[1] === 'a';
+      const name = match[2];
+      const id = match[3];
+      const ext = isAnimated ? 'gif' : 'png';
+      const url = `https://cdn.discordapp.com/emojis/${id}.${ext}?size=48&quality=lossless`;
+      return `
+        <span class="rr-emoji-wrap" title=":${escapeHtml(name)}:">
+          <img class="rr-custom-emoji" src="${url}" alt=":${escapeHtml(name)}:" loading="lazy" />
+          <span class="rr-emoji-label">:${escapeHtml(name)}:</span>
+        </span>
+      `;
+    }
+    return `
+      <span class="rr-emoji-wrap">
+        <span class="rr-unicode-emoji">${escapeHtml(raw)}</span>
+      </span>
+    `;
+  }
+
   function renderReactionRoles(messages) {
     const container = document.getElementById('reaction-roles-list-container');
     if (!container) return;
@@ -616,34 +665,394 @@
       const card = document.createElement('div');
       card.className = 'rr-card';
 
-      const channelObj = currentChannels.find((c) => String(c.id) === String(msg.channel_id));
-      const channelLabel = channelObj ? `# ${channelObj.name}` : `頻道 ID: ${msg.channel_id}`;
+      const msgId = String(msg.message_id);
+      const chanId = msg.channel_id ? String(msg.channel_id) : '';
+      const channelObj = currentChannels.find((c) => String(c.id) === chanId);
+      const channelLabel = channelObj ? `# ${channelObj.name}` : (chanId ? `頻道 ID: ${chanId}` : '未知頻道');
+      const jumpUrl = currentGuildId && chanId && msgId
+        ? `https://discord.com/channels/${currentGuildId}/${chanId}/${msgId}`
+        : null;
 
       const pairsHtml = (msg.pairs || [])
         .map((p) => {
-          const roleObj = currentRoles.find((r) => String(r.id) === String(p.role_id));
-          const roleName = roleObj ? roleObj.name : `身分組 ID: ${p.role_id}`;
-          const roleColor = roleObj ? roleObj.color : '#94a3b8';
+          const roleId = String(p.role_id);
+          const roleObj = currentRoles.find((r) => String(r.id) === roleId);
+          const roleName = roleObj ? roleObj.name : `身分組 ID: ${roleId}`;
+          const roleColor = roleObj && roleObj.color ? roleObj.color : '#94a3b8';
           return `
             <div class="rr-pair-item">
-              <span class="rr-emoji">${escapeHtml(p.emoji)}</span>
-              <span class="rr-role-name" style="color: ${roleColor};">@ ${escapeHtml(roleName)}</span>
+              ${renderEmojiHtml(p.emoji)}
+              <span class="rr-pair-arrow">→</span>
+              <span class="rr-role-badge" style="color: ${roleColor};">
+                <span class="rr-role-dot" style="background: ${roleColor};"></span>
+                <span class="rr-role-text">@ ${escapeHtml(roleName)}</span>
+              </span>
             </div>
           `;
         })
         .join('');
 
+      const strictBadge = msg.strict
+        ? '<span class="rr-meta-pill strict-on">🛡️ 僅限有效表符：開啟</span>'
+        : '<span class="rr-meta-pill strict-off">🔓 僅限有效表符：關閉</span>';
+
+      const jumpLinkHtml = jumpUrl
+        ? `<a href="${jumpUrl}" target="_blank" rel="noopener noreferrer" class="rr-meta-pill" style="text-decoration: none; color: #93c5fd;">🔗 前往訊息</a>`
+        : '';
+
       card.innerHTML = `
-        <div class="rr-header-row">
-          <span>📨 訊息 ID：<code>${msg.message_id}</code></span>
-          <span>📍 頻道：${escapeHtml(channelLabel)}</span>
-          <span>⚙️ 模式：${msg.strict ? '單選互斥 (Strict)' : '複選自由'}</span>
+        <div class="rr-card-header">
+          <div class="rr-meta-group">
+            <span class="rr-meta-pill">📢 <strong>${escapeHtml(channelLabel)}</strong></span>
+            <span class="rr-meta-pill">📨 訊息 ID：<code>${escapeHtml(msgId)}</code></span>
+            ${strictBadge}
+            ${jumpLinkHtml}
+          </div>
+          <div class="rr-actions-row">
+            <button class="btn-icon-action btn-edit-rr" data-msg-id="${escapeHtml(msgId)}" type="button">✏️ 編輯配置</button>
+            <button class="btn-icon-action btn-toggle-rr-strict" data-msg-id="${escapeHtml(msgId)}" type="button">${msg.strict ? '🔓 關閉限制' : '🛡️ 開啟限制'}</button>
+            <button class="btn-icon-action delete btn-del-rr" data-msg-id="${escapeHtml(msgId)}" type="button">🗑️ 刪除訊息</button>
+          </div>
         </div>
         <div class="rr-pairs-grid">
-          ${pairsHtml}
+          ${pairsHtml || '<div class="empty-rules-hint">尚未設定任何表符與身分組配對</div>'}
         </div>
       `;
       container.appendChild(card);
+    });
+
+    container.querySelectorAll('.btn-edit-rr').forEach((btn) => {
+      btn.addEventListener('click', () => openEditReactionRoleModal(btn.getAttribute('data-msg-id')));
+    });
+    container.querySelectorAll('.btn-toggle-rr-strict').forEach((btn) => {
+      btn.addEventListener('click', () => toggleReactionRoleStrict(btn.getAttribute('data-msg-id')));
+    });
+    container.querySelectorAll('.btn-del-rr').forEach((btn) => {
+      btn.addEventListener('click', () => deleteReactionRoleMessage(btn.getAttribute('data-msg-id')));
+    });
+  }
+
+  // ---------- 表符身分組編輯與刪除 Modal 邏輯 ----------
+  const modalReactionRole = document.getElementById('modal-reaction-role');
+  const modalRrClose = document.getElementById('modal-rr-close');
+  const modalRrCancel = document.getElementById('modal-rr-cancel');
+  const formModalRr = document.getElementById('form-modal-reaction-role');
+  const modalRrMessageId = document.getElementById('modal-rr-message-id');
+  const modalRrMetaInfo = document.getElementById('modal-rr-meta-info');
+  const modalRrStrict = document.getElementById('modal-rr-strict');
+  const modalRrPairsList = document.getElementById('modal-rr-pairs-list');
+  const modalRrNewEmoji = document.getElementById('modal-rr-new-emoji');
+  const modalRrNewRole = document.getElementById('modal-rr-new-role');
+  const btnRrAddPair = document.getElementById('btn-rr-add-pair');
+  const modalRrEmojiPickerWrap = document.getElementById('modal-rr-emoji-picker-wrap');
+  const modalRrEmojiPicker = document.getElementById('modal-rr-emoji-picker');
+  const modalRrContent = document.getElementById('modal-rr-content');
+  const modalRrAutoSyncText = document.getElementById('modal-rr-auto-sync-text');
+
+  let rrDraftPairs = [];
+
+  function closeRrModal() {
+    if (modalReactionRole) modalReactionRole.style.display = 'none';
+    rrDraftPairs = [];
+  }
+
+  if (modalRrClose) modalRrClose.addEventListener('click', closeRrModal);
+  if (modalRrCancel) modalRrCancel.addEventListener('click', closeRrModal);
+  if (modalReactionRole) {
+    modalReactionRole.addEventListener('click', (e) => {
+      if (e.target === modalReactionRole) closeRrModal();
+    });
+  }
+
+  function renderRrDraftPairs() {
+    if (!modalRrPairsList) return;
+    if (!rrDraftPairs || rrDraftPairs.length === 0) {
+      modalRrPairsList.innerHTML = '<div class="empty-rules-hint" style="padding: 16px;">目前沒有任何配對，請在下方新增至少一組表符與身分組！</div>';
+      return;
+    }
+
+    modalRrPairsList.innerHTML = '';
+    rrDraftPairs.forEach((pair, idx) => {
+      const row = document.createElement('div');
+      row.className = 'rr-editor-row';
+
+      const roleOptionsHtml = currentRoles
+        .map((r) => {
+          const selected = String(r.id) === String(pair.role_id) ? 'selected' : '';
+          return `<option value="${escapeHtml(String(r.id))}" ${selected}>@ ${escapeHtml(r.name)}</option>`;
+        })
+        .join('');
+
+      // 若原角色不在清單中，保留該 ID 選項
+      const hasRoleInList = currentRoles.some((r) => String(r.id) === String(pair.role_id));
+      const fallbackOption = !hasRoleInList && pair.role_id
+        ? `<option value="${escapeHtml(String(pair.role_id))}" selected>身分組 ID: ${escapeHtml(String(pair.role_id))}</option>`
+        : '';
+
+      row.innerHTML = `
+        <div class="rr-editor-emoji-cell">
+          ${renderEmojiHtml(pair.emoji)}
+        </div>
+        <span class="rr-pair-arrow">→</span>
+        <div class="rr-editor-role-select">
+          <select class="form-select rr-draft-role-select" data-idx="${idx}">
+            ${fallbackOption}
+            ${roleOptionsHtml}
+          </select>
+        </div>
+        <button type="button" class="btn-icon-action delete btn-rr-remove-pair" data-idx="${idx}">✕ 移除</button>
+      `;
+      modalRrPairsList.appendChild(row);
+    });
+
+    modalRrPairsList.querySelectorAll('.rr-draft-role-select').forEach((sel) => {
+      sel.addEventListener('change', (e) => {
+        const idx = parseInt(sel.getAttribute('data-idx'), 10);
+        if (rrDraftPairs[idx]) {
+          rrDraftPairs[idx].role_id = e.target.value;
+        }
+      });
+    });
+
+    modalRrPairsList.querySelectorAll('.btn-rr-remove-pair').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const idx = parseInt(btn.getAttribute('data-idx'), 10);
+        rrDraftPairs.splice(idx, 1);
+        renderRrDraftPairs();
+      });
+    });
+  }
+
+  function populateRrModalRoleAndEmojis() {
+    if (modalRrNewRole) {
+      modalRrNewRole.innerHTML = '<option value="">-- 選擇對應身分組 --</option>';
+      currentRoles.forEach((r) => {
+        const opt = document.createElement('option');
+        opt.value = String(r.id);
+        opt.textContent = `@ ${r.name}`;
+        modalRrNewRole.appendChild(opt);
+      });
+    }
+
+    if (modalRrEmojiPicker && modalRrEmojiPickerWrap) {
+      // 收集伺服器自訂表符以及現有設定中的自訂表符
+      const emojiMap = new Map();
+      currentEmojis.forEach((em) => {
+        emojiMap.set(em.raw, em);
+      });
+      currentReactionRoles.forEach((msg) => {
+        (msg.pairs || []).forEach((p) => {
+          const m = String(p.emoji || '').match(/^<(a?):([^:>]+):(\d+)>$/);
+          if (m && !emojiMap.has(p.emoji)) {
+            const isAnim = m[1] === 'a';
+            const name = m[2];
+            const id = m[3];
+            emojiMap.set(p.emoji, {
+              id,
+              name,
+              raw: p.emoji,
+              url: `https://cdn.discordapp.com/emojis/${id}.${isAnim ? 'gif' : 'png'}?size=48&quality=lossless`,
+            });
+          }
+        });
+      });
+
+      const emojiList = Array.from(emojiMap.values());
+      if (emojiList.length > 0) {
+        modalRrEmojiPickerWrap.style.display = 'block';
+        modalRrEmojiPicker.innerHTML = '';
+        emojiList.forEach((em) => {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'rr-emoji-chip-btn';
+          btn.title = `點擊填入 :${em.name}:`;
+          btn.innerHTML = `<img src="${em.url}" alt=":${escapeHtml(em.name)}:" loading="lazy" /><span>:${escapeHtml(em.name)}:</span>`;
+          btn.addEventListener('click', () => {
+            if (modalRrNewEmoji) {
+              modalRrNewEmoji.value = em.raw;
+              modalRrNewEmoji.focus();
+            }
+          });
+          modalRrEmojiPicker.appendChild(btn);
+        });
+      } else {
+        modalRrEmojiPickerWrap.style.display = 'none';
+      }
+    }
+  }
+
+  if (btnRrAddPair) {
+    btnRrAddPair.addEventListener('click', () => {
+      const emojiVal = modalRrNewEmoji ? modalRrNewEmoji.value.trim() : '';
+      const roleVal = modalRrNewRole ? modalRrNewRole.value.trim() : '';
+
+      if (!emojiVal) {
+        showToast('請輸入或選擇一個表符', 'error');
+        return;
+      }
+      if (!roleVal) {
+        showToast('請選擇要綁定的身分組', 'error');
+        return;
+      }
+      if (rrDraftPairs.length >= 20) {
+        showToast('單一訊息最多只能設定 20 個表符配對', 'error');
+        return;
+      }
+      if (rrDraftPairs.some((p) => p.emoji === emojiVal)) {
+        showToast('此表符已經在配對清單中，請直接修改該列的身分組', 'error');
+        return;
+      }
+
+      rrDraftPairs.push({ emoji: emojiVal, role_id: roleVal });
+      if (modalRrNewEmoji) modalRrNewEmoji.value = '';
+      if (modalRrNewRole) modalRrNewRole.value = '';
+      renderRrDraftPairs();
+    });
+  }
+
+  async function openEditReactionRoleModal(messageId) {
+    if (!modalReactionRole || !currentGuildId || !messageId) return;
+    const msg = currentReactionRoles.find((m) => String(m.message_id) === String(messageId));
+    if (!msg) return;
+
+    const chanId = msg.channel_id ? String(msg.channel_id) : '';
+    const channelObj = currentChannels.find((c) => String(c.id) === chanId);
+    const channelLabel = channelObj ? `# ${channelObj.name}` : (chanId ? `頻道 ID: ${chanId}` : '未知頻道');
+
+    if (modalRrMessageId) modalRrMessageId.value = String(msg.message_id);
+    if (modalRrStrict) modalRrStrict.checked = Boolean(msg.strict);
+    if (modalRrAutoSyncText) modalRrAutoSyncText.checked = true;
+    if (modalRrContent) {
+      modalRrContent.value = '';
+      modalRrContent.placeholder = '正在從 Discord 讀取現有訊息內文...';
+    }
+    if (modalRrMetaInfo) {
+      modalRrMetaInfo.innerHTML = `
+        <span class="rr-meta-pill">📢 頻道：<strong>${escapeHtml(channelLabel)}</strong></span>
+        <span class="rr-meta-pill">📨 訊息 ID：<code>${escapeHtml(String(msg.message_id))}</code></span>
+      `;
+    }
+
+    rrDraftPairs = (msg.pairs || []).map((p) => ({
+      emoji: String(p.emoji),
+      role_id: String(p.role_id),
+    }));
+
+    populateRrModalRoleAndEmojis();
+    renderRrDraftPairs();
+    modalReactionRole.style.display = 'flex';
+
+    // 非同步向後端拉取現有 Discord 訊息內文
+    try {
+      const res = await fetch(`/api/panel/guild/${currentGuildId}/reaction-roles/message/${encodeURIComponent(String(messageId))}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (modalRrContent) {
+          modalRrContent.value = data.content || '';
+          modalRrContent.placeholder = '可在此編輯 Discord 訊息文字內容（留空則維持原訊息文字不變）';
+        }
+      } else if (modalRrContent) {
+        modalRrContent.placeholder = '可在此輸入新的 Discord 訊息文字內容（留空則維持原訊息文字不變）';
+      }
+    } catch (err) {
+      if (modalRrContent) {
+        modalRrContent.placeholder = '可在此輸入新的 Discord 訊息文字內容（留空則維持原訊息文字不變）';
+      }
+    }
+  }
+
+  if (formModalRr) {
+    formModalRr.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (!currentGuildId) return;
+
+      const messageId = modalRrMessageId ? modalRrMessageId.value.trim() : '';
+      if (!messageId) return;
+
+      if (rrDraftPairs.length === 0) {
+        showToast('請至少保留一組表符與身分組配對，若要移除整則設定請使用「刪除訊息」按鈕', 'error');
+        return;
+      }
+
+      const payload = {
+        message_id: messageId,
+        strict: modalRrStrict ? modalRrStrict.checked : false,
+        pairs: rrDraftPairs,
+        message_content: modalRrContent && modalRrContent.value.trim() ? modalRrContent.value : null,
+        auto_sync_text: modalRrAutoSyncText ? modalRrAutoSyncText.checked : false,
+      };
+
+      try {
+        const res = await fetch(`/api/panel/guild/${currentGuildId}/reaction-roles/update`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          showToast(data.message || '表符身分組設定已儲存！');
+          closeRrModal();
+          loadGuildData(currentGuildId);
+        } else {
+          showToast(data.message || '更新失敗', 'error');
+        }
+      } catch (err) {
+        showToast('網路請求失敗', 'error');
+      }
+    });
+  }
+
+  async function toggleReactionRoleStrict(messageId) {
+    if (!currentGuildId || !messageId) return;
+    const msg = currentReactionRoles.find((m) => String(m.message_id) === String(messageId));
+    if (!msg) return;
+
+    try {
+      const res = await fetch(`/api/panel/guild/${currentGuildId}/reaction-roles/update`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message_id: String(messageId),
+          strict: !msg.strict,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast(data.message || '已切換表符限制模式');
+        loadGuildData(currentGuildId);
+      } else {
+        showToast(data.message || '切換失敗', 'error');
+      }
+    } catch (err) {
+      showToast('網路請求錯誤', 'error');
+    }
+  }
+
+  function deleteReactionRoleMessage(messageId) {
+    if (!currentGuildId || !messageId) return;
+    showConfirmModal({
+      title: '⚠️ 確認刪除表符身分組訊息',
+      message: `確定要刪除訊息 ID (${messageId}) 的表符身分組設定嗎？此操作將清除資料庫綁定並一併刪除 Discord 頻道中的該則領取訊息，無法復原。`,
+      confirmText: '確認刪除',
+      cancelText: '取消',
+      onConfirm: async () => {
+        try {
+          const res = await fetch(`/api/panel/guild/${currentGuildId}/reaction-roles/delete`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message_id: String(messageId), delete_discord_message: true }),
+          });
+          const data = await res.json();
+          if (res.ok) {
+            showToast(data.message || '已刪除表符身分組訊息');
+            loadGuildData(currentGuildId);
+          } else {
+            showToast(data.message || '刪除失敗', 'error');
+          }
+        } catch (err) {
+          showToast('網路請求錯誤', 'error');
+        }
+      },
     });
   }
 
