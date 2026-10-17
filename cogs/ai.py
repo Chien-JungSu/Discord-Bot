@@ -155,45 +155,62 @@ class AI(commands.Cog):
         payer_id: int,
         is_guild_sponsored: bool,
         new_balance: int,
+        payer_name: str = "User",
         image_url: Optional[str] = None,
     ) -> discord.Embed:
-        """依需求建立包含提供商、模型名稱、Token消耗、思考時間、容災紀錄與支付者的美觀 Embed 回覆。"""
-        display_question = prompt if len(prompt) <= 250 else f"{prompt[:247]}..."
+        """依照簡潔優雅風格 (圖二) 建立 AI 回覆 Embed：
+        無贅餘標題與欄位，僅保留純淨 AI 回覆，底部 Footer 緊湊呈現計費統計、模型與耗時。
+        格式範例：0.00/C | I 33C/0.00 | O 120C/0.00 | TC 0.00 | Pay Nicko | deepseek-v4.1-flash | 4.91s
+        """
+        # 內容保護 (Embed description 上限 4096 字元，首段取至多 3900 字元)
+        desc = response_text if len(response_text) <= 3900 else f"{response_text[:3897]}..."
+
+        # 乾淨高質感的 Discord Blurple 邊框 (與圖二相同)
         embed = discord.Embed(
-            title="🤖 炙彗 AI 智慧回覆",
-            description=response_text if len(response_text) <= 3900 else response_text[:3900],
-            color=0x7dd3fc,
+            description=desc,
+            color=0x5865F2,
         )
-        embed.add_field(name="💬 提問", value=display_question or "（圖片提問）", inline=False)
 
-        payer_text = f"<@{payer_id}> (伺服器贊助)" if is_guild_sponsored else f"<@{payer_id}>"
-        provider_name = stats.get("provider_name", "AI Engine")
-        model_name = stats.get("model", "auto")
-        thinking_time = stats.get("thinking_time", 0.0)
-        total_tokens = stats.get("total_tokens", 0)
-        failovers = stats.get("failover_history", [])
+        # 提取模型名稱 (去除 groq: 或 nvidia: 前綴，精簡顯示如 deepseek-v4.1-flash / llama-3.2-11b-vision-instruct)
+        model_raw = str(stats.get("model") or "auto")
+        if ":" in model_raw:
+            model_raw = model_raw.split(":", 1)[1]
+        clean_model = model_raw.split("/")[-1] if "/" in model_raw else model_raw
 
-        meta_lines = [
-            f"• **執行提供商**：`{provider_name}` (`{model_name}`)",
-            f"• **消耗 Tokens**：`{total_tokens:,}` (提示: {stats.get('prompt_tokens', 0):,} / 生成: {stats.get('completion_tokens', 0):,})",
-            f"• **運算耗時**：`{thinking_time:.2f} 秒`",
-            f"• **扣除費用**：`{cost:,}` ⚡AI幣 (支付者: {payer_text} · 剩餘: `{new_balance:,}` 點)",
-        ]
+        # 提取 Token 統計與耗時
+        prompt_tokens = stats.get("prompt_tokens", 0) or 0
+        completion_tokens = stats.get("completion_tokens", 0) or 0
+        total_tokens = stats.get("total_tokens", 0) or (prompt_tokens + completion_tokens)
+        thinking_time = float(stats.get("thinking_time", 0.0) or 0.0)
 
-        if failovers:
-            meta_lines.append(f"• **自動容災轉移**：{' ➔ '.join(failovers)}")
+        # 格式化單位費率、輸入/輸出費用與總費用 (完全對齊圖二 0.00/C 格式)
+        if total_tokens > 0 and cost > 0:
+            unit_rate = (cost / total_tokens) * 1000
+            p_ratio = prompt_tokens / total_tokens if total_tokens > 0 else 0.5
+            input_cost = cost * p_ratio
+            output_cost = cost - input_cost
+            unit_rate_str = f"{unit_rate:.2f}/C"
+            input_cost_str = f"{input_cost:.2f}"
+            output_cost_str = f"{output_cost:.2f}"
+            total_cost_str = f"{float(cost):.2f}"
+        else:
+            unit_rate_str = "0.00/C"
+            input_cost_str = "0.00"
+            output_cost_str = "0.00"
+            total_cost_str = f"{float(cost):.2f}"
 
-        if image_url:
-            meta_lines.append("• **多模態模式**：🖼️ 已解析圖片內容")
+        clean_payer = payer_name.replace("|", "").strip() or "User"
+        footer_text = (
+            f"{unit_rate_str} | I {prompt_tokens}C/{input_cost_str} | "
+            f"O {completion_tokens}C/{output_cost_str} | TC {total_cost_str} | "
+            f"Pay {clean_payer} | {clean_model} | {thinking_time:.2f}s"
+        )
 
-        embed.add_field(name="📊 運算統計與計費", value="\n".join(meta_lines), inline=False)
+        embed.set_footer(text=footer_text)
+
         if image_url:
             embed.set_thumbnail(url=image_url)
 
-        embed.set_footer(
-            text=f"多供應商自動容錯容災閘道 · 炙彗JI器人",
-            icon_url=self.bot.user.display_avatar.url if self.bot.user else None,
-        )
         return embed
 
     # ==========================================================================
@@ -346,10 +363,8 @@ class AI(commands.Cog):
             max_tokens=max_tokens,
         )
 
-        action_view = AIChannelActionView(guild_id, channel_id)
-
         if error_msg or not response_text:
-            await interaction.followup.send(error_msg or "⚠️ AI 未回傳內容，請稍候重試。", view=action_view)
+            await interaction.followup.send(error_msg or "⚠️ AI 未回傳內容，請稍候重試。")
             return
 
         # 8. 寫入頻道記憶
@@ -363,7 +378,10 @@ class AI(commands.Cog):
             set_user_ai_points(payer_id, 0)
             new_balance = 0
 
-        # 10. 組裝 Embed 與分段發送
+        payer_member = interaction.guild.get_member(payer_id) if interaction.guild else None
+        payer_name = payer_member.display_name if payer_member else (interaction.user.display_name or interaction.user.name)
+
+        # 10. 組裝簡約 Embed (如圖二排版)
         embed = self._build_ai_embed(
             response_text=response_text,
             prompt=clean_prompt,
@@ -372,11 +390,12 @@ class AI(commands.Cog):
             payer_id=payer_id,
             is_guild_sponsored=is_guild_sponsored,
             new_balance=new_balance,
+            payer_name=payer_name,
             image_url=img_url,
         )
 
         chunks = split_message_chunks(response_text, max_chars=3900)
-        await interaction.followup.send(embed=embed, view=action_view)
+        await interaction.followup.send(embed=embed)
         if len(chunks) > 1:
             for extra_chunk in chunks[1:]:
                 sub_chunks = split_message_chunks(extra_chunk, max_chars=1900)
@@ -782,10 +801,8 @@ class AI(commands.Cog):
                     max_tokens=max_tokens,
                 )
 
-                action_view = AIChannelActionView(guild_id, channel_id)
-
                 if error_msg or not response_text:
-                    await message.reply(error_msg or "⚠️ AI 未能產生回覆內容，請稍候重試。", view=action_view, mention_author=False)
+                    await message.reply(error_msg or "⚠️ AI 未能產生回覆內容，請稍候重試。", mention_author=False)
                     return
 
                 # 記錄對話歷史
@@ -799,6 +816,9 @@ class AI(commands.Cog):
                     set_user_ai_points(payer_id, 0)
                     new_balance = 0
 
+                payer_member = message.guild.get_member(payer_id) if message.guild else None
+                payer_name = payer_member.display_name if payer_member else (message.author.display_name or message.author.name)
+
                 embed = self._build_ai_embed(
                     response_text=response_text,
                     prompt=clean_content,
@@ -807,11 +827,12 @@ class AI(commands.Cog):
                     payer_id=payer_id,
                     is_guild_sponsored=is_guild_sponsored,
                     new_balance=new_balance,
+                    payer_name=payer_name,
                     image_url=img_url,
                 )
 
                 chunks = split_message_chunks(response_text, max_chars=3900)
-                await message.reply(embed=embed, view=action_view, mention_author=False)
+                await message.reply(embed=embed, mention_author=False)
                 if len(chunks) > 1:
                     for extra_chunk in chunks[1:]:
                         sub_chunks = split_message_chunks(extra_chunk, max_chars=1900)
