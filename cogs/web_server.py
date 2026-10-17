@@ -222,26 +222,24 @@ def privacy_page():
 
 
 # ---------- GitHub 最新 Commit 紀錄快取與解析 ----------
+COMMITS_CACHE_FILE = os.path.join(BASE_DIR, 'commits_cache.json')
 _commits_cache: dict[str, Any] = {
     'timestamp': 0.0,
     'commits': [],
 }
-_COMMITS_CACHE_TTL = 15.0  # 快取 15 秒，避免重複頻繁調用 git
+_COMMITS_CACHE_TTL = 60.0  # 記憶體快取 60 秒
 
 
-def _parse_commit_record(record: str) -> Optional[dict[str, Any]]:
-    parts = record.strip().split('\x1f')
-    if len(parts) < 5:
-        return None
-    full_hash = parts[0].strip()
-    short_hash = parts[1].strip()
-    raw_subject = parts[2].strip()
-    author = parts[3].strip()
-    date_str = parts[4].strip()
-    iso_date = parts[5].strip() if len(parts) > 5 else ''
-    body = parts[6].strip() if len(parts) > 6 else ''
-
-    # 解析 Conventional Commits 前綴 (如 feat(panel): 說明 或 fix: 說明)
+def _format_commit_info(
+    full_hash: str,
+    short_hash: str,
+    raw_subject: str,
+    author: str,
+    date_str: str,
+    iso_date: str = '',
+    body: str = '',
+) -> dict[str, Any]:
+    """格式化單則 Commit 資訊，支援 Conventional Commits 前綴解析與相對時間計算。"""
     match = re.match(r'^([a-zA-Z]+)(?:\(([^)]+)\))?!?:\s*(.*)$', raw_subject)
     if match:
         c_type = match.group(1).lower()
@@ -262,10 +260,11 @@ def _parse_commit_record(record: str) -> Optional[dict[str, Any]]:
         'chore': {'label': '專案維護', 'tag': 'CHORE', 'cls': 'badge-chore'},
     }.get(c_type, {'label': '提交更新', 'tag': c_type.upper() if len(c_type) <= 6 else 'COMMIT', 'cls': 'badge-commit'})
 
-    relative_time = ''
+    relative_time = date_str
     if iso_date:
         try:
-            commit_dt = datetime.datetime.fromisoformat(iso_date)
+            clean_iso = iso_date.replace('Z', '+00:00')
+            commit_dt = datetime.datetime.fromisoformat(clean_iso)
             now_dt = datetime.datetime.now(commit_dt.tzinfo)
             diff = max(0.0, (now_dt - commit_dt).total_seconds())
             if diff < 60:
@@ -302,14 +301,74 @@ def _parse_commit_record(record: str) -> Optional[dict[str, Any]]:
     }
 
 
-def get_latest_commits(limit: int = 10) -> list[dict[str, Any]]:
-    global _commits_cache
-    now = time.monotonic()
-    if _commits_cache['commits'] and (now - _commits_cache['timestamp'] < _COMMITS_CACHE_TTL):
-        return _commits_cache['commits'][:limit]
+def _parse_commit_record(record: str) -> Optional[dict[str, Any]]:
+    """解析由本機 git log --format 輸出的單行 commit 紀錄。"""
+    parts = record.strip().split('\x1f')
+    if len(parts) < 5:
+        return None
+    full_hash = parts[0].strip()
+    short_hash = parts[1].strip()
+    raw_subject = parts[2].strip()
+    author = parts[3].strip()
+    date_str = parts[4].strip()
+    iso_date = parts[5].strip() if len(parts) > 5 else ''
+    body = parts[6].strip() if len(parts) > 6 else ''
+
+    return _format_commit_info(
+        full_hash=full_hash,
+        short_hash=short_hash,
+        raw_subject=raw_subject,
+        author=author,
+        date_str=date_str,
+        iso_date=iso_date,
+        body=body,
+    )
+
+
+def _parse_github_api_commit(item: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """解析由 GitHub REST API /commits 回傳的單筆 commit 紀錄。"""
+    full_hash = item.get('sha', '').strip()
+    if not full_hash:
+        return None
+    short_hash = full_hash[:7]
+    commit_data = item.get('commit') or {}
+    msg = commit_data.get('message') or ''
+    lines = msg.splitlines()
+    raw_subject = lines[0].strip() if lines else ''
+    body = '\n'.join(lines[1:]).strip() if len(lines) > 1 else ''
+
+    author_obj = commit_data.get('author') or {}
+    author = author_obj.get('name') or (item.get('author') or {}).get('login') or 'GitHub User'
+    iso_date = author_obj.get('date', '')
+
+    date_str = iso_date
+    if iso_date:
+        try:
+            dt = datetime.datetime.fromisoformat(iso_date.replace('Z', '+00:00')).astimezone()
+            date_str = dt.strftime('%Y-%m-%d %H:%M:%S')
+        except Exception:
+            pass
+
+    return _format_commit_info(
+        full_hash=full_hash,
+        short_hash=short_hash,
+        raw_subject=raw_subject,
+        author=author,
+        date_str=date_str,
+        iso_date=iso_date,
+        body=body,
+    )
+
+
+def _fetch_commits_from_local_git(limit: int = 10) -> list[dict[str, Any]]:
+    """嘗試從本機 .git 目錄執行 git log 取得 commit 紀錄。"""
+    git_dir = os.path.join(BASE_DIR, '.git')
+    # 若本機非 git 儲存庫（如雲端主機/容器部屬未攜帶 .git），直接返回空清單，避免拋出 fatal 錯誤
+    if not os.path.exists(git_dir):
+        return []
 
     try:
-        raw_output = subprocess.check_output(
+        res = subprocess.run(
             [
                 'git',
                 'log',
@@ -319,24 +378,106 @@ def get_latest_commits(limit: int = 10) -> list[dict[str, Any]]:
                 '--date=format:%Y-%m-%d %H:%M:%S',
             ],
             cwd=BASE_DIR,
+            capture_output=True,
+            encoding='utf-8',
+            errors='replace',
             timeout=5.0,
-        ).decode('utf-8', errors='replace')
+        )
+        if res.returncode != 0:
+            return []
 
         commits: list[dict[str, Any]] = []
-        for record in raw_output.strip('\x1e\n').split('\x1e'):
+        for record in res.stdout.strip('\x1e\n').split('\x1e'):
             if not record.strip():
                 continue
             item = _parse_commit_record(record)
             if item:
                 commits.append(item)
+        return commits
+    except Exception:
+        return []
 
-        if commits:
-            _commits_cache['timestamp'] = now
-            _commits_cache['commits'] = commits
-            return commits
-    except Exception as e:
-        print(f"[Web] 讀取 git commit 紀錄失敗: {e}", file=sys.stderr)
 
+def _fetch_commits_from_github_api(limit: int = 10) -> list[dict[str, Any]]:
+    """當伺服器無本機 .git 目錄時，透過 GitHub 官方公開 REST API 取得最新 commit。"""
+    try:
+        url = f"https://api.github.com/repos/Chien-JungSu/Discord-Bot/commits?per_page={max(1, limit)}"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (compatible; DiscordBot-CommitFetcher/1.0)',
+            'Accept': 'application/vnd.github.v3+json',
+        }
+        github_token = os.getenv('GITHUB_TOKEN', '').strip()
+        if github_token:
+            headers['Authorization'] = f"token {github_token}"
+
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=6.0) as resp:
+            if resp.status == 200:
+                data = json.loads(resp.read().decode('utf-8'))
+                commits: list[dict[str, Any]] = []
+                for item in data:
+                    parsed = _parse_github_api_commit(item)
+                    if parsed:
+                        commits.append(parsed)
+                return commits
+    except Exception:
+        pass
+    return []
+
+
+def _load_disk_cached_commits() -> list[dict[str, Any]]:
+    """從硬碟備援檔案讀取最後一次成功的 commit 快取。"""
+    if os.path.isfile(COMMITS_CACHE_FILE):
+        try:
+            with open(COMMITS_CACHE_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return data
+        except Exception:
+            pass
+    return []
+
+
+def _save_disk_cached_commits(commits: list[dict[str, Any]]) -> None:
+    """將成功的 commit 快取持久化至硬碟。"""
+    if not commits:
+        return
+    try:
+        with open(COMMITS_CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(commits, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def get_latest_commits(limit: int = 10) -> list[dict[str, Any]]:
+    """讀取最新 commit 紀錄：三層容錯機制 (記憶體快取 -> 本機 Git -> GitHub API 備援 -> 硬碟持久快取)。"""
+    global _commits_cache
+    now = time.monotonic()
+    if _commits_cache['commits'] and (now - _commits_cache['timestamp'] < _COMMITS_CACHE_TTL):
+        return _commits_cache['commits'][:limit]
+
+    commits: list[dict[str, Any]] = []
+
+    # 1. 優先嘗試本機 git log（若存在 .git 目錄）
+    commits = _fetch_commits_from_local_git(limit)
+
+    # 2. 本機非 git 儲存庫或讀取失敗時，無縫切換至 GitHub REST API
+    if not commits:
+        commits = _fetch_commits_from_github_api(limit)
+
+    # 3. 網路異常或受限時，讀取硬碟快取備援
+    if not commits:
+        commits = _load_disk_cached_commits()
+
+    # 4. 更新快取
+    if commits:
+        _commits_cache['timestamp'] = now
+        _commits_cache['commits'] = commits
+        _save_disk_cached_commits(commits)
+        return commits[:limit]
+
+    # 若皆無資料，設定冷卻時間避免頻繁重複嘗試
+    _commits_cache['timestamp'] = now
     return _commits_cache['commits'][:limit]
 
 
