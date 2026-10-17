@@ -530,48 +530,49 @@ def get_guild_data(guild_id: str):
             'pairs': pairs_serialized,
         })
 
-    # 指令清單（確保 owner_guild_only 指令不會出現在非擁有者的控制面板中）
+    # 指令清單（區分「所有成員」與「管理員」，且擁有者專屬指令僅對擁有者於專屬伺服器顯示）
     commands_list = [
-        {"name": "/ping", "description": "測試機器人的連線延遲", "category": "General"},
-        {"name": "/choice", "description": "隨機選擇輸入的選項", "category": "General"},
-        {"name": "/quotes", "description": "隨機名言或笑話", "category": "General"},
-        {"name": "/steal", "description": "偷取表情符號並新增至伺服器", "category": "General"},
-        {"name": "/weather", "description": "查詢台澎金馬地區天氣", "category": "Weather"},
-        {"name": "/bus", "description": "查詢全台公車到站預估時間", "category": "Bus"},
-        {"name": "/server_info", "description": "顯示當前伺服器詳細資訊", "category": "Server Info"},
-        {"name": "/welcome_active", "description": "啟用並設定歡迎訊息頻道與身分組", "category": "Welcome"},
-        {"name": "/welcome_inactive", "description": "停用伺服器歡迎訊息功能", "category": "Welcome"},
-        {"name": "/auto_reply_add", "description": "新增關鍵字自動回覆規則", "category": "Auto Reply"},
-        {"name": "/auto_reply_edit", "description": "編輯現有關鍵字回覆規則", "category": "Auto Reply"},
-        {"name": "/auto_reply_list", "description": "檢視本伺服器自動回覆清單", "category": "Auto Reply"},
-        {"name": "/auto_reply_remove", "description": "刪除指定關鍵字回覆規則", "category": "Auto Reply"},
-        {"name": "/reaction_roles_create", "description": "建立表符身分組面板訊息", "category": "Reaction Roles"},
-        {"name": "/reaction_roles_edit", "description": "編輯表符身分組配置", "category": "Reaction Roles"},
-        {"name": "/music_join", "description": "讓機器人加入語音頻道", "category": "Music"},
-        {"name": "/music_leave", "description": "讓機器人離開語音頻道", "category": "Music"},
-        {"name": "/music_play", "description": "播放歌曲或加入佇列", "category": "Music"},
-        {"name": "/music_skip", "description": "跳過當前歌曲", "category": "Music"},
-        {"name": "/music_stop", "description": "停止播放並清空佇列", "category": "Music"},
-        {"name": "/music_queue", "description": "顯示播放佇列", "category": "Music"},
-        {"name": "/music_set_channel", "description": "設定專屬點歌頻道", "category": "Music"},
-        {"name": "/tts", "description": "文字轉語音並在語音頻道朗讀", "category": "TTS"},
-        {"name": "/shorten", "description": "將長網址縮短為短網址", "category": "Shortener"},
-        {"name": "/economy_daily", "description": "領取每日簽到金幣與連簽獎勵", "category": "Economy"},
-        {"name": "/economy_hourly", "description": "領取每小時整點簽到金幣", "category": "Economy"},
-        {"name": "/economy_balance", "description": "查詢金幣餘額與統計", "category": "Economy"},
-        {"name": "/economy_leaderboard", "description": "檢視金幣排行榜", "category": "Economy"},
-        {"name": "/economy_pay", "description": "轉帳金幣給其他成員", "category": "Economy"},
-        {"name": "/economy_slots", "description": "拉霸機小遊戲賭金幣", "category": "Economy"},
-        {"name": "/economy_gamble", "description": "擲硬幣或骰子賭金幣", "category": "Economy"},
-        {"name": "/economy_blackjack", "description": "21點小遊戲挑戰莊家", "category": "Economy"},
-        {"name": "/economy_scratch", "description": "九宮格刮刮樂小遊戲", "category": "Economy"},
+        {"name": "/ping", "description": "測試機器人的連線延遲", "category": "General", "permission": "所有成員"},
+        {"name": "/choice", "description": "隨機選擇輸入的選項", "category": "General", "permission": "所有成員"},
+        {"name": "/quotes", "description": "隨機名言或笑話", "category": "General", "permission": "所有成員"},
+        {"name": "/steal", "description": "偷取表情符號並新增至伺服器", "category": "General", "permission": "管理員"},
+        {"name": "/weather", "description": "查詢台澎金馬地區天氣", "category": "Weather", "permission": "所有成員"},
+        {"name": "/bus", "description": "查詢全台公車到站預估時間", "category": "Bus", "permission": "所有成員"},
+        {"name": "/server_info", "description": "顯示當前伺服器詳細資訊", "category": "Server Info", "permission": "所有成員"},
+        {"name": "/welcome_active", "description": "啟用並設定歡迎訊息頻道與身分組", "category": "Welcome", "permission": "管理員"},
+        {"name": "/welcome_inactive", "description": "停用伺服器歡迎訊息功能", "category": "Welcome", "permission": "管理員"},
+        {"name": "/auto_reply_add", "description": "新增關鍵字自動回覆規則", "category": "Auto Reply", "permission": "管理員"},
+        {"name": "/auto_reply_edit", "description": "編輯現有關鍵字回覆規則", "category": "Auto Reply", "permission": "管理員"},
+        {"name": "/auto_reply_list", "description": "檢視本伺服器自動回覆清單", "category": "Auto Reply", "permission": "管理員"},
+        {"name": "/auto_reply_remove", "description": "刪除指定關鍵字回覆規則", "category": "Auto Reply", "permission": "管理員"},
+        {"name": "/reaction_roles_create", "description": "建立表符身分組面板訊息", "category": "Reaction Roles", "permission": "管理員"},
+        {"name": "/reaction_roles_edit", "description": "編輯表符身分組配置", "category": "Reaction Roles", "permission": "管理員"},
+        {"name": "/music_join", "description": "讓機器人加入語音頻道", "category": "Music", "permission": "所有成員"},
+        {"name": "/music_leave", "description": "讓機器人離開語音頻道", "category": "Music", "permission": "所有成員"},
+        {"name": "/music_play", "description": "播放歌曲或加入佇列", "category": "Music", "permission": "所有成員"},
+        {"name": "/music_skip", "description": "跳過當前歌曲", "category": "Music", "permission": "所有成員"},
+        {"name": "/music_stop", "description": "停止播放並清空佇列", "category": "Music", "permission": "所有成員"},
+        {"name": "/music_queue", "description": "顯示播放佇列", "category": "Music", "permission": "所有成員"},
+        {"name": "/music_set_channel", "description": "設定專屬點歌頻道", "category": "Music", "permission": "管理員"},
+        {"name": "/tts", "description": "文字轉語音並在語音頻道朗讀", "category": "TTS", "permission": "所有成員"},
+        {"name": "/shorten", "description": "將長網址縮短為短網址", "category": "Shortener", "permission": "所有成員"},
+        {"name": "/economy_daily", "description": "領取每日簽到金幣與連簽獎勵", "category": "Economy", "permission": "所有成員"},
+        {"name": "/economy_hourly", "description": "領取每小時整點簽到金幣", "category": "Economy", "permission": "所有成員"},
+        {"name": "/economy_balance", "description": "查詢金幣餘額與統計", "category": "Economy", "permission": "所有成員"},
+        {"name": "/economy_leaderboard", "description": "檢視金幣排行榜", "category": "Economy", "permission": "所有成員"},
+        {"name": "/economy_pay", "description": "轉帳金幣給其他成員", "category": "Economy", "permission": "所有成員"},
+        {"name": "/economy_slots", "description": "拉霸機小遊戲賭金幣", "category": "Economy", "permission": "所有成員"},
+        {"name": "/economy_gamble", "description": "擲硬幣或骰子賭金幣", "category": "Economy", "permission": "所有成員"},
+        {"name": "/economy_blackjack", "description": "21點小遊戲挑戰莊家", "category": "Economy", "permission": "所有成員"},
+        {"name": "/economy_scratch", "description": "九宮格刮刮樂小遊戲", "category": "Economy", "permission": "所有成員"},
     ]
 
-    # 關鍵防護：只有機器人擁有者 (is_current_user_owner()) 才能看到 owner_guild_only 指令！
-    if is_current_user_owner():
+    # 關鍵防護：管理員專用指令 (owner_guild_only) 絕對不對一般使用者顯示，且僅在擁有者檢視專屬伺服器時附加
+    owner_gid = str(get_owner_guild_id() or '1477930950288478262')
+    if is_current_user_owner() and str(guild_id) == owner_gid:
         commands_list.extend([
-            {"name": "/reload_cogs", "description": "【擁有者專屬】線上熱重載指定 Cog 模組並同步指令樹", "category": "Owner / System", "owner_guild_only": True},
-            {"name": "/economy_admin", "description": "【擁有者專屬】開啟經濟系統參數控制面板與管理使用者金幣", "category": "Owner / Economy", "owner_guild_only": True},
+            {"name": "/reload_cogs", "description": "線上熱重載指定 Cog 模組並同步指令樹", "category": "Owner / System", "permission": "管理員", "owner_guild_only": True},
+            {"name": "/economy_admin", "description": "開啟經濟系統參數控制面板與管理使用者金幣", "category": "Owner / Economy", "permission": "管理員", "owner_guild_only": True},
         ])
 
     return jsonify({
@@ -838,6 +839,122 @@ def get_guild_reaction_role_message(guild_id: str, message_id: str):
         'message_id': str(target_msg.get('message_id')),
         'channel_id': str(target_msg.get('channel_id')),
         'content': content_text,
+    })
+
+
+@panel_bp.route('/api/panel/guild/<guild_id>/reaction-roles/create', methods=['POST'])
+def create_guild_reaction_role(guild_id: str):
+    """從控制面板新增表符身分組領取訊息，並同步發送至 Discord 指定文字頻道與加上表符反應。"""
+    if not can_manage_guild(guild_id):
+        return jsonify({'status': 'error', 'message': '權限不足'}), 403
+
+    payload = request.get_json(silent=True) or {}
+    channel_id = str(payload.get('channel_id') or '').strip()
+    if not channel_id or not channel_id.isdigit():
+        return jsonify({'status': 'error', 'message': '請選擇要發送領取訊息的文字頻道'}), 400
+
+    strict_mode = bool(payload.get('strict', True))
+    raw_pairs = payload.get('pairs')
+    if not isinstance(raw_pairs, list) or len(raw_pairs) == 0:
+        return jsonify({'status': 'error', 'message': '請至少新增 1 組表符與身分組配對'}), 400
+    if len(raw_pairs) > 20:
+        return jsonify({'status': 'error', 'message': '單一訊息最多只能設定 20 組表符配對'}), 400
+
+    cleaned_pairs = []
+    seen_emojis = set()
+    for idx, p in enumerate(raw_pairs, start=1):
+        if not isinstance(p, dict):
+            continue
+        em_str = str(p.get('emoji') or '').strip()
+        r_id_str = str(p.get('role_id') or '').strip()
+        if not em_str:
+            return jsonify({'status': 'error', 'message': f'第 {idx} 組缺少表情符號'}), 400
+        if not r_id_str or not r_id_str.isdigit():
+            return jsonify({'status': 'error', 'message': f'第 {idx} 組缺少有效的身分組'}), 400
+        if em_str in seen_emojis:
+            return jsonify({'status': 'error', 'message': f'表符 {em_str} 重複使用，每個表符只能對應一個身分組'}), 400
+        seen_emojis.add(em_str)
+        cleaned_pairs.append({
+            'emoji': em_str,
+            'role_id': int(r_id_str),
+        })
+
+    if not cleaned_pairs:
+        return jsonify({'status': 'error', 'message': '表符配對不可為空'}), 400
+
+    all_data = load_reaction_roles()
+    guild_entry = all_data.setdefault(str(guild_id), {'messages': []})
+    messages = guild_entry.setdefault('messages', [])
+    if len(messages) >= 10:
+        return jsonify({'status': 'error', 'message': '此伺服器的表符身分組訊息已達上限（10 則），請先刪除舊訊息'}), 400
+
+    raw_content = str(payload.get('message_content') or '').strip()
+    auto_sync_text = bool(payload.get('auto_sync_text', True))
+
+    new_msg_id = None
+    discord_note = ''
+    bot = get_bot()
+    if bot and getattr(bot, 'loop', None) and bot.loop.is_running() and guild_id.isdigit():
+        async def _send_rr_message():
+            guild_obj = bot.get_guild(int(guild_id))
+            if not guild_obj:
+                raise RuntimeError('機器人尚未加入此伺服器')
+            ch = guild_obj.get_channel(int(channel_id))
+            if not isinstance(ch, discord.TextChannel):
+                try:
+                    fetched = await bot.fetch_channel(int(channel_id))
+                    if isinstance(fetched, discord.TextChannel):
+                        ch = fetched
+                except Exception:
+                    ch = None
+            if not ch:
+                raise RuntimeError('找不到指定的 Discord 文字頻道')
+
+            if raw_content and not auto_sync_text:
+                final_text = raw_content[:2000]
+            else:
+                header = raw_content.split('\n', 1)[0].strip() if raw_content else '點擊表符領取身分組！'
+                lines = [header, '']
+                for p in cleaned_pairs:
+                    r_obj = guild_obj.get_role(int(p['role_id']))
+                    r_mention = r_obj.mention if r_obj else f"<@&{p['role_id']}>"
+                    lines.append(f"{p['emoji']} {r_mention}")
+                final_text = '\n'.join(lines)[:2000]
+
+            sent = await ch.send(
+                content=final_text,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            for p in cleaned_pairs:
+                try:
+                    await sent.add_reaction(p['emoji'])
+                except Exception:
+                    pass
+            return sent.id
+
+        try:
+            new_msg_id = run_coroutine_threadsafe(_send_rr_message(), timeout=20)
+            discord_note = '（已於 Discord 頻道發送領取訊息並掛載表符）'
+        except Exception as exc:
+            return jsonify({'status': 'error', 'message': f'發送 Discord 訊息失敗：{exc}'}), 400
+    else:
+        # 單機開發或測試環境模擬 ID
+        mock_id = payload.get('mock_message_id')
+        new_msg_id = int(mock_id) if (mock_id and str(mock_id).isdigit()) else int(time.time() * 1000)
+
+    messages.append({
+        'channel_id': int(channel_id),
+        'message_id': int(new_msg_id),
+        'strict': strict_mode,
+        'pairs': cleaned_pairs,
+    })
+    save_reaction_roles(all_data)
+    _sync_cog_settings('ReactionRoles')
+
+    return jsonify({
+        'status': 'ok',
+        'message': f'已成功新增表符身分組訊息！{discord_note}',
+        'message_id': str(new_msg_id),
     })
 
 

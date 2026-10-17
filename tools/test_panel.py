@@ -341,6 +341,32 @@ def test_reaction_roles_panel_crud_and_snowflake_precision():
         assert res_del.status_code == 200
         after_msgs = load_reaction_roles().get(guild_id, {}).get('messages', [])
         assert all(str(m.get('message_id')) != msg_id for m in after_msgs)
+
+        # 4. 透過控制面板 API 新增表符身分組訊息設定
+        created_msg_id = '1484534824910899999'
+        res_create = client.post(
+            f'/api/panel/guild/{guild_id}/reaction-roles/create',
+            json={
+                'channel_id': chan_id,
+                'mock_message_id': created_msg_id,
+                'strict': True,
+                'pairs': [
+                    {'emoji': '🎉', 'role_id': role_a},
+                    {'emoji': '<:custom:1483078986119479377>', 'role_id': role_b},
+                ],
+            },
+        )
+        assert res_create.status_code == 200
+        assert res_create.get_json().get('message_id') == created_msg_id
+        created_msgs = load_reaction_roles().get(guild_id, {}).get('messages', [])
+        created_rr = next((m for m in created_msgs if str(m.get('message_id')) == created_msg_id), None)
+        assert created_rr is not None
+        assert str(created_rr['channel_id']) == chan_id
+        assert created_rr['strict'] is True
+        assert created_rr['pairs'] == [
+            {'emoji': '🎉', 'role_id': int(role_a)},
+            {'emoji': '<:custom:1483078986119479377>', 'role_id': int(role_b)},
+        ]
     finally:
         all_rr = load_reaction_roles()
         if orig_guild_rr is None:
@@ -350,5 +376,53 @@ def test_reaction_roles_panel_crud_and_snowflake_precision():
         save_reaction_roles(all_rr)
 
 
+def test_auto_reply_multiline_blocks_and_command_permissions():
+    from cogs.database import load_auto_reply_settings, save_auto_reply_settings
 
+    client = app.test_client()
+    client.get('/api/auth/dev-login?role=admin')
+    guild_id = '222222222222222222'
+
+    # 1. 驗證面板 HTML 包含新增身分組訊息、新增回覆區塊按鈕與統一的設定元素
+    res_panel = client.get('/panel')
+    assert res_panel.status_code == 200
+    html = res_panel.data.decode('utf-8')
+    assert 'btn-add-reaction-role' in html
+    assert 'btn-add-reply-block' in html
+    assert 'modal-rule-replies-list' in html
+    assert 'modal-rr-channel' in html
+
+    # 2. 驗證指令清單僅有「所有成員」與「管理員」兩種權限分類，且一般使用者看不到 owner_guild_only 指令
+    res_data = client.get(f'/api/panel/guild/{guild_id}/data')
+    assert res_data.status_code == 200
+    commands = res_data.get_json().get('commands', [])
+    assert len(commands) > 0
+    for c in commands:
+        assert c.get('permission') in ('所有成員', '管理員')
+        assert not c.get('owner_guild_only')
+
+    # 3. 驗證自動回覆多行回覆區塊儲存與讀取不會被拆成多則
+    all_ar = load_auto_reply_settings()
+    orig_guild_ar = all_ar.get(guild_id)
+    try:
+        multiline_reply_1 = '第一行文字\n第二行文字\n第三行文字'
+        multiline_reply_2 = '另一則回覆的第一行\n另一則回覆的第二行'
+        res_save = client.post(
+            f'/api/panel/guild/{guild_id}/auto-reply/save',
+            json={
+                'name': '多行回覆測試規則',
+                'keywords': ['早安', '你好'],
+                'replies': [multiline_reply_1, multiline_reply_2],
+            },
+        )
+        assert res_save.status_code == 200
+        saved_rules = load_auto_reply_settings().get(guild_id, {}).get('rules', [])
+        assert any(r.get('replies') == [multiline_reply_1, multiline_reply_2] for r in saved_rules)
+    finally:
+        all_ar = load_auto_reply_settings()
+        if orig_guild_ar is None:
+            all_ar.pop(guild_id, None)
+        else:
+            all_ar[guild_id] = orig_guild_ar
+        save_auto_reply_settings(all_ar)
 

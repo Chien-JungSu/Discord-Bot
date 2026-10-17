@@ -397,11 +397,18 @@
         <!-- Tab 4: 表符身分組配置 -->
         <div id="tab-reaction-roles" class="tab-pane">
           <div class="pane-header">
-            <div class="tag">Reaction Roles Module</div>
-            <h2>🎭 表符身分組配置管理</h2>
-            <p class="pane-desc">
-              檢視、編輯或刪除伺服器中已部署的表情符號身分組領取訊息，變更將與 Discord 機器人即時同步。如需建立全新的領取訊息，請在 Discord 頻道執行 <code>/reaction_roles_create</code>。
-            </p>
+            <div class="pane-header-flex">
+              <div>
+                <div class="tag">Reaction Roles Module</div>
+                <h2>🎭 表符身分組配置管理</h2>
+                <p class="pane-desc">
+                  檢視、新增、編輯或刪除伺服器中的表情符號身分組領取訊息，所有變更將與 Discord 機器人即時同步。
+                </p>
+              </div>
+              <button id="btn-add-reaction-role" class="btn primary" type="button">
+                <span>＋ 新增身分組訊息</span>
+              </button>
+            </div>
           </div>
 
           <div id="reaction-roles-list-container" class="rr-cards-list">
@@ -749,8 +756,11 @@
             <small class="form-hint">訊息內容只要包含上述任一關鍵字即可觸發。</small>
           </div>
           <div class="form-group">
-            <label>回覆內容 (一行一則；多行時隨機挑選一則回覆)</label>
-            <textarea id="modal-rule-replies" class="form-control" rows="3" placeholder="例如：&#10;你好呀！祝你有美好的一天！&#10;哈囉！今天過得好嗎？" required></textarea>
+            <div class="reply-blocks-header">
+              <label>回覆內容 (單則支援直接換行；多則時隨機挑選一則回覆)</label>
+              <button type="button" id="btn-add-reply-block" class="btn-icon-action btn-add-reply-block">＋ 新增回覆區塊</button>
+            </div>
+            <div id="modal-rule-replies-list" class="reply-blocks-list"></div>
           </div>
           <div class="form-group">
             <label>限定生效文字頻道 (可選)</label>
@@ -776,7 +786,7 @@
       </div>
     </div>
 
-    <!-- 表符身分組 編輯配置 Modal 彈出視窗 -->
+    <!-- 表符身分組 新增/編輯配置 Modal 彈出視窗 -->
     <div id="modal-reaction-role" class="modal-backdrop" style="display: none;" aria-hidden="true">
       <div class="modal-card modal-rr-card">
         <div class="modal-header">
@@ -786,6 +796,13 @@
         <form id="form-modal-reaction-role" class="modal-body">
           <input type="hidden" id="modal-rr-message-id" value="" />
           <div id="modal-rr-meta-info" class="rr-modal-meta-bar"></div>
+
+          <div id="modal-rr-channel-group" class="form-group" style="display: none;">
+            <label for="modal-rr-channel">📢 發送目標文字頻道</label>
+            <select id="modal-rr-channel" class="form-control">
+              <option value="">-- 請選擇要發送領取訊息的文字頻道 --</option>
+            </select>
+          </div>
 
           <div class="form-group checkbox-group">
             <label class="custom-checkbox-label">
@@ -802,7 +819,7 @@
           <div class="rr-add-pair-box">
             <label class="rr-add-pair-title">➕ 新增表符配對</label>
             <div class="rr-add-pair-controls">
-              <input type="text" id="modal-rr-new-emoji" class="form-control rr-emoji-input" placeholder="輸入表情符號 (如 🎉) 或點選下方伺服器表符" />
+              <input type="text" id="modal-rr-new-emoji" class="form-control rr-emoji-input" placeholder="輸入表情符號 (如 🎉) 或點選下方表符" />
               <select id="modal-rr-new-role" class="form-control rr-role-select">
                 <option value="">-- 選擇對應身分組 --</option>
               </select>
@@ -817,16 +834,16 @@
           </div>
 
           <div class="form-group">
-            <label>📝 領取訊息文字 (可選填同步更新 Discord 訊息內文)</label>
+            <label id="modal-rr-content-label">📝 領取訊息文字 (可選填同步更新 Discord 訊息內文)</label>
             <textarea id="modal-rr-content" class="form-control" rows="3" placeholder="留空則保持原 Discord 訊息文字不變；或勾選下方自動排版"></textarea>
             <label class="custom-checkbox-label" style="margin-top: 4px;">
               <input type="checkbox" id="modal-rr-auto-sync-text" />
-              <span>✨ 儲存時依上方配對清單自動重新排版 Discord 訊息文字</span>
+              <span>✨ 儲存時依上方配對清單自動排版 Discord 訊息文字</span>
             </label>
           </div>
 
           <div class="modal-footer">
-            <button type="submit" class="btn primary">
+            <button type="submit" id="btn-modal-rr-submit" class="btn primary">
               <span>💾 儲存配置並同步</span>
             </button>
             <button type="button" id="modal-rr-cancel" class="btn secondary">
@@ -848,14 +865,14 @@
           <p id="modal-confirm-message" class="confirm-message">
             確定要清除此伺服器的設定嗎？清除後設定將被還原為預設值，且該功能將暫時停用。
           </p>
-        </div>
-        <div class="modal-footer confirm-footer">
-          <button type="button" id="modal-confirm-cancel" class="btn secondary">
-            <span>取消</span>
-          </button>
-          <button type="button" id="modal-confirm-ok" class="btn btn-confirm-danger">
-            <span>確認清除</span>
-          </button>
+          <div class="modal-footer confirm-footer">
+            <button type="button" id="modal-confirm-cancel" class="btn secondary">
+              <span>取消</span>
+            </button>
+            <button type="button" id="modal-confirm-ok" class="btn btn-confirm-danger">
+              <span>確認清除</span>
+            </button>
+          </div>
         </div>
       </div>
     </div>

@@ -260,6 +260,7 @@
     const autoRoleSelect = document.getElementById('select-auto-role');
     const musicSelect = document.getElementById('select-music-channel');
     const modalRuleChannelSelect = document.getElementById('modal-rule-channel');
+    const modalRrChannelSelect = document.getElementById('modal-rr-channel');
 
     function fillChannels(selectEl, selectedVal, defaultLabel) {
       if (!selectEl) return;
@@ -278,6 +279,7 @@
     fillChannels(roleSelect, welcomeCfg.role_channel_id, '未指定（略過提及）');
     fillChannels(musicSelect, musicCfg.music_channel_id, '未綁定（所有頻道皆可使用）');
     fillChannels(modalRuleChannelSelect, '', '全伺服器所有文字頻道生效');
+    fillChannels(modalRrChannelSelect, welcomeCfg.role_channel_id || '', '請選擇要發送領取訊息的文字頻道');
 
     if (autoRoleSelect) {
       autoRoleSelect.innerHTML = '<option value="">-- 未設定（不自動賦予） --</option>';
@@ -422,7 +424,70 @@
   const modalCloseBtn = document.getElementById('modal-auto-reply-close');
   const modalCancelBtn = document.getElementById('modal-auto-reply-cancel');
   const formModalAutoReply = document.getElementById('form-modal-auto-reply');
+  const modalRuleRepliesList = document.getElementById('modal-rule-replies-list');
+  const btnAddReplyBlock = document.getElementById('btn-add-reply-block');
   let currentRulesList = [];
+  let ruleDraftReplies = [''];
+
+  function renderRuleReplyBlocks() {
+    if (!modalRuleRepliesList) return;
+    if (!ruleDraftReplies || ruleDraftReplies.length === 0) {
+      ruleDraftReplies = [''];
+    }
+
+    modalRuleRepliesList.innerHTML = '';
+    ruleDraftReplies.forEach((replyText, idx) => {
+      const item = document.createElement('div');
+      item.className = 'reply-block-item';
+      const removeBtnHtml = ruleDraftReplies.length > 1
+        ? `<button type="button" class="btn-remove-reply-block" data-idx="${idx}">✕ 移除</button>`
+        : '';
+
+      item.innerHTML = `
+        <div class="reply-block-top">
+          <span class="reply-block-badge">回覆區塊 #${idx + 1}</span>
+          ${removeBtnHtml}
+        </div>
+        <textarea class="form-control reply-block-textarea" data-idx="${idx}" rows="2" placeholder="輸入此則回覆內容（可直接按 Enter 換行）...">${escapeHtml(replyText)}</textarea>
+      `;
+      modalRuleRepliesList.appendChild(item);
+    });
+
+    modalRuleRepliesList.querySelectorAll('.reply-block-textarea').forEach((ta) => {
+      ta.addEventListener('input', (e) => {
+        const idx = parseInt(ta.getAttribute('data-idx'), 10);
+        if (!Number.isNaN(idx)) {
+          ruleDraftReplies[idx] = e.target.value;
+        }
+      });
+    });
+
+    modalRuleRepliesList.querySelectorAll('.btn-remove-reply-block').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const idx = parseInt(btn.getAttribute('data-idx'), 10);
+        if (!Number.isNaN(idx) && ruleDraftReplies.length > 1) {
+          ruleDraftReplies.splice(idx, 1);
+          renderRuleReplyBlocks();
+        }
+      });
+    });
+  }
+
+  if (btnAddReplyBlock) {
+    btnAddReplyBlock.addEventListener('click', () => {
+      if (ruleDraftReplies.length >= 10) {
+        showToast('單條規則最多只能設定 10 則隨機回覆區塊', 'error');
+        return;
+      }
+      ruleDraftReplies.push('');
+      renderRuleReplyBlocks();
+      if (modalRuleRepliesList) {
+        const textareas = modalRuleRepliesList.querySelectorAll('.reply-block-textarea');
+        const lastTa = textareas[textareas.length - 1];
+        if (lastTa) lastTa.focus();
+      }
+    });
+  }
 
   function renderAutoReplyRules(rules) {
     currentRulesList = rules;
@@ -442,7 +507,15 @@
         .map((k) => `<span class="keyword-tag">${escapeHtml(k)}</span>`)
         .join('');
 
-      const repliesText = (r.replies || []).join('\n──────────\n');
+      const repliesList = r.replies || [];
+      const repliesHtml = repliesList
+        .map((rep, idx) => `
+          <div class="rule-reply-item">
+            ${repliesList.length > 1 ? `<span class="rule-reply-idx">#${idx + 1}</span>` : ''}
+            <div class="rule-reply-text">${escapeHtml(rep)}</div>
+          </div>
+        `)
+        .join('');
 
       let channelName = '全伺服器生效';
       if (r.channel_id) {
@@ -475,8 +548,8 @@
             </div>
           </div>
           <div class="rule-section-block">
-            <span class="rule-section-label">💬 自動回覆內容${(r.replies || []).length > 1 ? `（共 ${r.replies.length} 則隨機回覆）` : ''}</span>
-            <div class="rule-replies-box">${escapeHtml(repliesText)}</div>
+            <span class="rule-section-label">💬 自動回覆內容${repliesList.length > 1 ? `（共 ${repliesList.length} 則隨機回覆）` : ''}</span>
+            <div class="rule-replies-list">${repliesHtml}</div>
           </div>
         </div>
       `;
@@ -501,7 +574,6 @@
     const idEl = document.getElementById('modal-rule-id');
     const nameEl = document.getElementById('modal-rule-name');
     const kwEl = document.getElementById('modal-rule-keywords');
-    const repEl = document.getElementById('modal-rule-replies');
     const chanEl = document.getElementById('modal-rule-channel');
     const pausedEl = document.getElementById('modal-rule-paused');
 
@@ -512,7 +584,7 @@
       idEl.value = rule.id;
       nameEl.value = rule.name || '';
       kwEl.value = (rule.keywords || []).join(', ');
-      repEl.value = (rule.replies || []).join('\n');
+      ruleDraftReplies = (rule.replies && rule.replies.length > 0) ? [...rule.replies] : [''];
       chanEl.value = rule.channel_id ? String(rule.channel_id) : '';
       pausedEl.checked = Boolean(rule.is_paused);
     } else {
@@ -520,11 +592,12 @@
       idEl.value = '';
       nameEl.value = '';
       kwEl.value = '';
-      repEl.value = '';
+      ruleDraftReplies = [''];
       chanEl.value = '';
       pausedEl.checked = false;
     }
 
+    renderRuleReplyBlocks();
     modalAutoReply.style.display = 'flex';
   }
 
@@ -546,12 +619,21 @@
       e.preventDefault();
       if (!currentGuildId) return;
 
+      const cleanReplies = ruleDraftReplies
+        .map((r) => String(r || '').trim())
+        .filter(Boolean);
+
+      if (cleanReplies.length === 0) {
+        showToast('請至少填寫一則自動回覆內容', 'error');
+        return;
+      }
+
       const ruleId = document.getElementById('modal-rule-id').value;
       const payload = {
         id: ruleId ? parseInt(ruleId) : null,
         name: document.getElementById('modal-rule-name').value.trim(),
         keywords: document.getElementById('modal-rule-keywords').value.trim(),
-        replies: document.getElementById('modal-rule-replies').value.trim(),
+        replies: cleanReplies,
         channel_id: document.getElementById('modal-rule-channel').value || null,
         is_paused: document.getElementById('modal-rule-paused').checked,
       };
@@ -633,14 +715,12 @@
     const match = raw.match(/^<(a?):([^:>]+):(\d+)>$/);
     if (match) {
       const isAnimated = match[1] === 'a';
-      const name = match[2];
       const id = match[3];
       const ext = isAnimated ? 'gif' : 'png';
       const url = `https://cdn.discordapp.com/emojis/${id}.${ext}?size=48&quality=lossless`;
       return `
-        <span class="rr-emoji-wrap" title=":${escapeHtml(name)}:">
-          <img class="rr-custom-emoji" src="${url}" alt=":${escapeHtml(name)}:" loading="lazy" />
-          <span class="rr-emoji-label">:${escapeHtml(name)}:</span>
+        <span class="rr-emoji-wrap">
+          <img class="rr-custom-emoji" src="${url}" alt="emoji" loading="lazy" />
         </span>
       `;
     }
@@ -656,7 +736,7 @@
     if (!container) return;
 
     if (!messages || messages.length === 0) {
-      container.innerHTML = '<div class="empty-rules-hint">此伺服器目前尚未設定任何表符身分組。您可在 Discord 中直接執行 <code>/reaction_roles_create</code> 快速建立領取身分組訊息！</div>';
+      container.innerHTML = '<div class="empty-rules-hint">此伺服器目前尚未設定任何表符身分組。點擊上方「＋ 新增身分組訊息」即可直接建立並發送至 Discord 頻道！</div>';
       return;
     }
 
@@ -732,13 +812,17 @@
     });
   }
 
-  // ---------- 表符身分組編輯與刪除 Modal 邏輯 ----------
+  // ---------- 表符身分組 新增 / 編輯 / 刪除 Modal 邏輯 ----------
+  const btnAddReactionRole = document.getElementById('btn-add-reaction-role');
   const modalReactionRole = document.getElementById('modal-reaction-role');
+  const modalRrTitle = document.getElementById('modal-rr-title');
   const modalRrClose = document.getElementById('modal-rr-close');
   const modalRrCancel = document.getElementById('modal-rr-cancel');
   const formModalRr = document.getElementById('form-modal-reaction-role');
   const modalRrMessageId = document.getElementById('modal-rr-message-id');
   const modalRrMetaInfo = document.getElementById('modal-rr-meta-info');
+  const modalRrChannelGroup = document.getElementById('modal-rr-channel-group');
+  const modalRrChannel = document.getElementById('modal-rr-channel');
   const modalRrStrict = document.getElementById('modal-rr-strict');
   const modalRrPairsList = document.getElementById('modal-rr-pairs-list');
   const modalRrNewEmoji = document.getElementById('modal-rr-new-emoji');
@@ -748,6 +832,7 @@
   const modalRrEmojiPicker = document.getElementById('modal-rr-emoji-picker');
   const modalRrContent = document.getElementById('modal-rr-content');
   const modalRrAutoSyncText = document.getElementById('modal-rr-auto-sync-text');
+  const btnModalRrSubmit = document.getElementById('btn-modal-rr-submit');
 
   let rrDraftPairs = [];
 
@@ -774,7 +859,7 @@
     modalRrPairsList.innerHTML = '';
     rrDraftPairs.forEach((pair, idx) => {
       const row = document.createElement('div');
-      row.className = 'rr-editor-row';
+      row.className = 'rr-editor-pair-row';
 
       const roleOptionsHtml = currentRoles
         .map((r) => {
@@ -795,7 +880,7 @@
         </div>
         <span class="rr-pair-arrow">→</span>
         <div class="rr-editor-role-select">
-          <select class="form-select rr-draft-role-select" data-idx="${idx}">
+          <select class="form-control rr-draft-role-select" data-idx="${idx}">
             ${fallbackOption}
             ${roleOptionsHtml}
           </select>
@@ -864,9 +949,8 @@
         emojiList.forEach((em) => {
           const btn = document.createElement('button');
           btn.type = 'button';
-          btn.className = 'rr-emoji-chip-btn';
-          btn.title = `點擊填入 :${em.name}:`;
-          btn.innerHTML = `<img src="${em.url}" alt=":${escapeHtml(em.name)}:" loading="lazy" /><span>:${escapeHtml(em.name)}:</span>`;
+          btn.className = 'rr-picker-emoji-btn rr-emoji-chip-btn';
+          btn.innerHTML = `<img src="${em.url}" alt="emoji" loading="lazy" />`;
           btn.addEventListener('click', () => {
             if (modalRrNewEmoji) {
               modalRrNewEmoji.value = em.raw;
@@ -910,6 +994,37 @@
     });
   }
 
+  function openCreateReactionRoleModal() {
+    if (!modalReactionRole || !currentGuildId) return;
+
+    if (modalRrTitle) modalRrTitle.textContent = '➕ 新增表符身分組訊息';
+    if (modalRrMessageId) modalRrMessageId.value = '';
+    if (modalRrMetaInfo) {
+      modalRrMetaInfo.style.display = 'none';
+      modalRrMetaInfo.innerHTML = '';
+    }
+    if (modalRrChannelGroup) modalRrChannelGroup.style.display = 'flex';
+    if (modalRrStrict) modalRrStrict.checked = true;
+    if (modalRrAutoSyncText) modalRrAutoSyncText.checked = true;
+    if (modalRrContent) {
+      modalRrContent.value = '';
+      modalRrContent.placeholder = '可選填訊息開頭文字（預設為「點擊表符領取身分組！」），下方將自動依配對列出表符與身分組';
+    }
+    if (btnModalRrSubmit) {
+      const span = btnModalRrSubmit.querySelector('span');
+      if (span) span.textContent = '🚀 發送訊息並建立配置';
+    }
+
+    rrDraftPairs = [];
+    populateRrModalRoleAndEmojis();
+    renderRrDraftPairs();
+    modalReactionRole.style.display = 'flex';
+  }
+
+  if (btnAddReactionRole) {
+    btnAddReactionRole.addEventListener('click', openCreateReactionRoleModal);
+  }
+
   async function openEditReactionRoleModal(messageId) {
     if (!modalReactionRole || !currentGuildId || !messageId) return;
     const msg = currentReactionRoles.find((m) => String(m.message_id) === String(messageId));
@@ -919,7 +1034,9 @@
     const channelObj = currentChannels.find((c) => String(c.id) === chanId);
     const channelLabel = channelObj ? `# ${channelObj.name}` : (chanId ? `頻道 ID: ${chanId}` : '未知頻道');
 
+    if (modalRrTitle) modalRrTitle.textContent = '✏️ 編輯表符身分組配置';
     if (modalRrMessageId) modalRrMessageId.value = String(msg.message_id);
+    if (modalRrChannelGroup) modalRrChannelGroup.style.display = 'none';
     if (modalRrStrict) modalRrStrict.checked = Boolean(msg.strict);
     if (modalRrAutoSyncText) modalRrAutoSyncText.checked = true;
     if (modalRrContent) {
@@ -927,10 +1044,15 @@
       modalRrContent.placeholder = '正在從 Discord 讀取現有訊息內文...';
     }
     if (modalRrMetaInfo) {
+      modalRrMetaInfo.style.display = 'flex';
       modalRrMetaInfo.innerHTML = `
         <span class="rr-meta-pill">📢 頻道：<strong>${escapeHtml(channelLabel)}</strong></span>
         <span class="rr-meta-pill">📨 訊息 ID：<code>${escapeHtml(String(msg.message_id))}</code></span>
       `;
+    }
+    if (btnModalRrSubmit) {
+      const span = btnModalRrSubmit.querySelector('span');
+      if (span) span.textContent = '💾 儲存配置並同步';
     }
 
     rrDraftPairs = (msg.pairs || []).map((p) => ({
@@ -967,10 +1089,45 @@
       if (!currentGuildId) return;
 
       const messageId = modalRrMessageId ? modalRrMessageId.value.trim() : '';
-      if (!messageId) return;
+      const isCreateMode = !messageId;
 
       if (rrDraftPairs.length === 0) {
-        showToast('請至少保留一組表符與身分組配對，若要移除整則設定請使用「刪除訊息」按鈕', 'error');
+        showToast('請至少新增一組表符與身分組配對！', 'error');
+        return;
+      }
+
+      if (isCreateMode) {
+        const channelId = modalRrChannel ? modalRrChannel.value.trim() : '';
+        if (!channelId) {
+          showToast('請選擇要發送領取訊息的文字頻道', 'error');
+          return;
+        }
+
+        const createPayload = {
+          channel_id: channelId,
+          strict: modalRrStrict ? modalRrStrict.checked : true,
+          pairs: rrDraftPairs,
+          message_content: modalRrContent && modalRrContent.value.trim() ? modalRrContent.value : null,
+          auto_sync_text: modalRrAutoSyncText ? modalRrAutoSyncText.checked : true,
+        };
+
+        try {
+          const res = await fetch(`/api/panel/guild/${currentGuildId}/reaction-roles/create`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(createPayload),
+          });
+          const data = await res.json();
+          if (res.ok) {
+            showToast(data.message || '已成功建立表符身分組訊息！');
+            closeRrModal();
+            loadGuildData(currentGuildId);
+          } else {
+            showToast(data.message || '建立失敗', 'error');
+          }
+        } catch (err) {
+          showToast('網路請求失敗', 'error');
+        }
         return;
       }
 
@@ -1061,8 +1218,11 @@
     const container = document.getElementById('commands-table-container');
     if (!container) return;
 
-    if (!commands || commands.length === 0) {
-      container.innerHTML = '<div class="empty-rules-hint">沒有可用指令。</div>';
+    // 過濾掉系統管理員專用指令 (owner_guild_only)，一般伺服器指令清單僅顯示「所有成員」與「管理員」指令
+    const visibleCommands = (commands || []).filter((c) => !c.owner_guild_only);
+
+    if (visibleCommands.length === 0) {
+      container.innerHTML = '<div class="empty-rules-hint">沒有符合條件的可用指令。</div>';
       return;
     }
 
@@ -1071,7 +1231,6 @@
         <thead>
           <tr>
             <th>指令名稱</th>
-            <th>分類</th>
             <th>功能說明</th>
             <th>權限限制</th>
           </tr>
@@ -1079,16 +1238,15 @@
         <tbody>
     `;
 
-    commands.forEach((c) => {
-      const isOwnerOnly = Boolean(c.owner_guild_only);
-      const permBadge = isOwnerOnly
-        ? '<span class="tag">管理員專用</span>'
-        : '<span class="tag">全體成員 / 管理員</span>';
+    visibleCommands.forEach((c) => {
+      const isAdminPerm = c.permission === '管理員';
+      const permBadge = isAdminPerm
+        ? '<span class="perm-badge admin">管理員</span>'
+        : '<span class="perm-badge member">所有成員</span>';
 
       html += `
         <tr>
           <td><span class="cmd-badge">${escapeHtml(c.name)}</span></td>
-          <td>${escapeHtml(c.category)}</td>
           <td>${escapeHtml(c.description)}</td>
           <td>${permBadge}</td>
         </tr>
@@ -1109,9 +1267,10 @@
       }
       const filtered = currentCommands.filter(
         (c) =>
-          c.name.toLowerCase().includes(query) ||
-          c.description.toLowerCase().includes(query) ||
-          c.category.toLowerCase().includes(query)
+          !c.owner_guild_only &&
+          (c.name.toLowerCase().includes(query) ||
+            c.description.toLowerCase().includes(query) ||
+            (c.permission && c.permission.toLowerCase().includes(query)))
       );
       renderCommandsTable(filtered);
     });
