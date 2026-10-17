@@ -33,13 +33,15 @@
       const rect = topbar.getBoundingClientRect();
       const gap = 8;
       navDrawer.style.top = `${Math.round(rect.bottom + gap)}px`;
+      navDrawer.style.left = `${Math.round(rect.left)}px`;
+      navDrawer.style.right = 'auto';
 
       if (window.innerWidth > 640) {
-        navDrawer.style.left = `${Math.round(rect.left)}px`;
         navDrawer.style.width = '280px';
+        navDrawer.style.maxWidth = 'calc(100% - 28px)';
       } else {
-        navDrawer.style.left = '12px';
-        navDrawer.style.width = 'calc(100vw - 24px)';
+        navDrawer.style.width = `${Math.round(rect.width)}px`;
+        navDrawer.style.maxWidth = 'none';
       }
     }
   }

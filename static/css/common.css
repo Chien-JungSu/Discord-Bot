@@ -905,9 +905,9 @@ a.dropdown-item.dropdown-logout-btn:hover span,
 .site-nav-drawer {
   position: fixed;
   top: 86px;
-  left: max(16px, calc((100% - 1040px) / 2));
+  left: max(20px, calc((100% - 1040px) / 2));
   width: 280px;
-  max-width: calc(100vw - 32px);
+  max-width: calc(100% - 28px);
   max-height: calc(100vh - 102px);
   overflow-y: auto;
   background: rgba(15, 23, 42, 0.94);
@@ -997,9 +997,15 @@ body.site-nav-open .docs-edge-hotspot {
   transform: scale(1.08);
 }
 
+@media (max-width: 768px) {
+  body {
+    padding: 12px 14px 40px;
+  }
+}
+
 @media (max-width: 640px) {
   body {
-    padding: 8px 12px 40px;
+    padding: 8px 14px 40px;
   }
 
   .site-topbar {
@@ -1011,9 +1017,12 @@ body.site-nav-open .docs-edge-hotspot {
 
   .site-nav-drawer {
     top: 72px;
-    left: 12px;
-    width: calc(100vw - 24px);
+    left: 14px;
+    right: 14px;
+    width: auto;
+    max-width: none;
     max-height: calc(100vh - 84px);
+    max-height: calc(100dvh - 84px);
   }
 
   .topbar-name {
