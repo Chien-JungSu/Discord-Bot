@@ -23,6 +23,7 @@ from cogs.database import (
     calculate_ai_token_cost,
     get_guild_ai_settings,
     get_user_ai_points,
+    is_guild_ai_authorized,
     load_ai_settings,
     save_guild_ai_settings,
     set_user_ai_points,
@@ -210,6 +211,15 @@ class AI(commands.Cog):
                 default_stats["thinking_time"] = elapsed
                 if status_code == 401:
                     return None, "❌ **OpenRouter 認證失敗 (401 Unauthorized)**\n請確認 `.env` 中的 `OPENROUTER_API_KEY` 是否有效正確。", default_stats
+                elif status_code == 402:
+                    return (
+                        None,
+                        "💳 **OpenRouter 帳號額度不足 / 反濫用限制 (402 Payment Required)**\n"
+                        "• **原因**：OpenRouter 針對免費模型實施反濫用安全規範，API Key 所在帳號需曾儲值過至少一次（如最低 $5 美元）以驗證帳號真實性。\n"
+                        "• **解決方式**：請前往 [OpenRouter 額度設定](https://openrouter.ai/settings/credits) 購買點數以解鎖 API 調用權限，並確認使用的 API Key 與組織 (Org) 正確無誤。\n"
+                        "• 若使用免費模型，也請確認模型名稱帶有 `:free` 標籤。",
+                        default_stats,
+                    )
                 elif status_code == 429:
                     return None, "⏳ **OpenRouter 請求頻率過高 (429 Rate Limit)**\n當前免費模型請求次數已達短期上限，請稍候 30 秒再試！", default_stats
                 elif status_code == 404:
@@ -247,7 +257,6 @@ class AI(commands.Cog):
     @app_commands.choices(
         model=[
             app_commands.Choice(name="✨ openrouter/auto (自動推薦最佳免費模型)", value="openrouter/auto"),
-            app_commands.Choice(name="⚡ deepseek/deepseek-v4.1-flash-1017 (DeepSeek Flash)", value="deepseek/deepseek-v4.1-flash-1017"),
             app_commands.Choice(name="🦙 meta-llama/llama-3.3-70b-instruct:free", value="meta-llama/llama-3.3-70b-instruct:free"),
             app_commands.Choice(name="⚡ google/gemini-2.0-flash-exp:free", value="google/gemini-2.0-flash-exp:free"),
             app_commands.Choice(name="🧠 deepseek/deepseek-r1:free (深度思考推理)", value="deepseek/deepseek-r1:free"),
@@ -270,6 +279,24 @@ class AI(commands.Cog):
             return
 
         guild_id = interaction.guild_id
+
+        # 0. 封測階段伺服器授權檢查 (限量測試階段，預設僅開放 Owner Guild 與獲授權之伺服器)
+        if not is_guild_ai_authorized(guild_id):
+            panel_view = build_panel_link_view(guild_id) if guild_id else None
+            embed_unauth = discord.Embed(
+                title="🔒 AI 智慧助手內部封測中",
+                description=(
+                    "⚠️ **本伺服器尚未獲得 AI 智慧問答功能的封測使用授權。**\n\n"
+                    "💡 **封測說明**：\n"
+                    "• 因目前處於初階測試階段且免費模型具備 API 請求頻率上限，目前預設僅開放給機器人擁有者伺服器。\n"
+                    "• 如需開通此功能，請聯繫機器人管理員至後台控制面板發放本伺服器的 AI 封測授權！"
+                ),
+                color=0xf59e0b,
+            )
+            embed_unauth.set_footer(text="待測試穩定後將全面開放所有伺服器使用！")
+            await interaction.response.send_message(embed=embed_unauth, view=panel_view, ephemeral=True)
+            return
+
         cfg = self._get_guild_cfg(guild_id)
 
         # 1. 檢查伺服器是否停用 AI 功能
@@ -395,11 +422,15 @@ class AI(commands.Cog):
         else:
             payer_text = "未指定（由每位提問者自行支付）"
 
+        is_auth = is_guild_ai_authorized(guild_id)
+        auth_text = "🟢 已開通封測授權" if is_auth else "🔒 未授權 (內部封測中)"
+
         embed = discord.Embed(
             title="⚙️ 伺服器 AI 智慧助手配置狀態",
             description="管理員可隨時透過 `/ai_settings` 指令或點擊下方按鈕前往「網頁控制面板」即時自訂 AI 人設、預設模型與指定支付者！",
             color=0xa78bfa,
         )
+        embed.add_field(name="封測授權狀態", value=auth_text, inline=True)
         embed.add_field(name="功能狀態", value=status_text, inline=True)
         embed.add_field(name="預設模型", value=f"`{model_name}`", inline=True)
         embed.add_field(name="限定頻道", value=channel_text, inline=True)
@@ -435,7 +466,6 @@ class AI(commands.Cog):
     @app_commands.choices(
         model=[
             app_commands.Choice(name="✨ openrouter/auto (自動推薦最佳免費模型)", value="openrouter/auto"),
-            app_commands.Choice(name="⚡ deepseek/deepseek-v4.1-flash-1017 (DeepSeek Flash)", value="deepseek/deepseek-v4.1-flash-1017"),
             app_commands.Choice(name="🦙 meta-llama/llama-3.3-70b-instruct:free", value="meta-llama/llama-3.3-70b-instruct:free"),
             app_commands.Choice(name="⚡ google/gemini-2.0-flash-exp:free", value="google/gemini-2.0-flash-exp:free"),
             app_commands.Choice(name="🧠 deepseek/deepseek-r1:free (深度思考推理)", value="deepseek/deepseek-r1:free"),
@@ -462,11 +492,26 @@ class AI(commands.Cog):
             await interaction.response.send_message("❌ 此指令僅限在伺服器中使用！", ephemeral=True)
             return
 
+        guild_id = interaction.guild_id
+
+        # 封測階段伺服器授權檢查
+        if not is_guild_ai_authorized(guild_id):
+            panel_view = build_panel_link_view(guild_id) if guild_id else None
+            embed_unauth = discord.Embed(
+                title="🔒 AI 智慧助手內部封測中",
+                description=(
+                    "⚠️ **本伺服器尚未獲得 AI 智慧助手封測授權，無法修改相關設定。**\n\n"
+                    "請聯繫機器人擁有者/管理員在後台控制面板發放本伺服器的 AI 封測授權後再進行設定！"
+                ),
+                color=0xf59e0b,
+            )
+            await interaction.response.send_message(embed=embed_unauth, view=panel_view, ephemeral=True)
+            return
+
         if not interaction.user.guild_permissions.manage_guild and not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ 你需要具備「管理伺服器」權限才能使用此設定指令！", ephemeral=True)
             return
 
-        guild_id = interaction.guild_id
         cfg = dict(self._get_guild_cfg(guild_id))
 
         updates = []
@@ -544,6 +589,11 @@ class AI(commands.Cog):
         content = re.sub(rf'<@!?{bot_user.id}>', '', content).strip()
 
         guild_id = message.guild.id
+
+        # 封測階段授權檢查 (未獲授權之伺服器不觸發 @機器人 智慧對話)
+        if not is_guild_ai_authorized(guild_id):
+            return
+
         cfg = self._get_guild_cfg(guild_id)
 
         # 檢查是否啟用

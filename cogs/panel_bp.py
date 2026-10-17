@@ -28,20 +28,24 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(BASE_DIR, '.env'))
 
 from cogs.database import (
+    authorize_guild_ai,
+    delete_guild_ai_settings,
+    get_ai_authorized_guilds,
     get_daily_api_usage,
     get_economy_user,
     get_guild_ai_settings,
     get_user_ai_points,
     init_db,
+    is_guild_ai_authorized,
     load_auto_reply_settings,
     load_economy_config,
     load_music_settings,
     load_reaction_roles,
     load_welcome_settings,
+    revoke_guild_ai,
     save_auto_reply_settings,
     save_economy_config,
     save_guild_ai_settings,
-    delete_guild_ai_settings,
     save_music_settings,
     save_reaction_roles,
     save_welcome_settings,
@@ -595,12 +599,15 @@ def get_guild_data(guild_id: str):
         ])
 
     ai_cfg = get_guild_ai_settings(str(guild_id))
+    ai_authorized = is_guild_ai_authorized(str(guild_id), owner_gid)
 
     return jsonify({
         'status': 'ok',
         'guild_id': str(guild_id),
         'guild_name': guild_obj.name if guild_obj else '未命名伺服器',
         'bot_in_guild': guild_obj is not None,
+        'is_owner_guild': (str(guild_id) == owner_gid),
+        'ai_authorized': ai_authorized,
         'channels': channels,
         'roles': roles,
         'members': members,
@@ -634,6 +641,10 @@ def save_guild_ai(guild_id: str):
     """儲存或重設伺服器的 AI 智慧助手與人設配置 (OpenRouter)。"""
     if not can_manage_guild(guild_id):
         return jsonify({'status': 'error', 'message': '權限不足'}), 403
+
+    owner_gid = str(get_owner_guild_id() or '1477930950288478262')
+    if not is_guild_ai_authorized(str(guild_id), owner_gid) and not is_current_user_owner():
+        return jsonify({'status': 'error', 'message': '本伺服器尚未獲得 AI 功能封測授權，無法修改 AI 設定'}), 403
 
     payload = request.get_json(silent=True) or {}
     action = payload.get('action', 'save')
@@ -1500,3 +1511,103 @@ def owner_api_quota():
         results[s] = {'count': count, 'date': date_str}
 
     return jsonify({'status': 'ok', 'quotas': results})
+
+
+@panel_bp.route('/api/panel/owner/ai-guilds', methods=['GET', 'POST'])
+def owner_ai_guilds():
+    """管理員後台：檢視所有伺服器之 AI 封測授權狀態，並發放或撤銷其他伺服器的 AI 使用權限。"""
+    owner_gid = str(get_owner_guild_id() or '1477930950288478262')
+
+    if request.method == 'GET':
+        bot = get_bot()
+        auth_list = get_ai_authorized_guilds()
+        auth_map = {str(a['guild_id']): a for a in auth_list}
+
+        guilds_data = []
+        if bot:
+            for g in bot.guilds:
+                gid = str(g.id)
+                is_owner_g = (gid == owner_gid)
+                is_auth = is_owner_g or (gid in auth_map)
+                auth_info = auth_map.get(gid, {})
+                guilds_data.append({
+                    'id': gid,
+                    'name': g.name,
+                    'icon': g.icon.url if g.icon else None,
+                    'member_count': g.member_count,
+                    'is_owner_guild': is_owner_g,
+                    'is_authorized': is_auth,
+                    'authorized_at': auth_info.get('authorized_at'),
+                    'authorized_by': auth_info.get('authorized_by'),
+                    'notes': auth_info.get('notes', ''),
+                })
+
+        # 納入資料庫中已授權但機器人可能已離線的伺服器
+        known_gids = {g['id'] for g in guilds_data}
+        for a in auth_list:
+            if a['guild_id'] not in known_gids:
+                guilds_data.append({
+                    'id': a['guild_id'],
+                    'name': a['guild_name'] or f"伺服器 ({a['guild_id']})",
+                    'icon': None,
+                    'member_count': 0,
+                    'is_owner_guild': (a['guild_id'] == owner_gid),
+                    'is_authorized': True,
+                    'authorized_at': a['authorized_at'],
+                    'authorized_by': a['authorized_by'],
+                    'notes': a['notes'],
+                })
+
+        # 排序：擁有者伺服器置頂，其餘按已授權在前、名稱排序
+        guilds_data.sort(key=lambda x: (not x['is_owner_guild'], not x['is_authorized'], x['name'].lower()))
+
+        return jsonify({
+            'status': 'ok',
+            'guilds': guilds_data,
+            'owner_guild_id': owner_gid,
+        })
+
+    # POST: 授權或撤銷
+    payload = request.get_json(silent=True) or {}
+    guild_id = str(payload.get('guild_id') or '').strip()
+    action = payload.get('action')  # 'authorize' or 'revoke'
+    notes = str(payload.get('notes') or '').strip()
+
+    if not guild_id:
+        return jsonify({'status': 'error', 'message': '請提供有效的伺服器 ID'}), 400
+
+    bot = get_bot()
+    guild_name = ''
+    if bot:
+        try:
+            g_obj = bot.get_guild(int(guild_id)) if guild_id.isdigit() else None
+            if g_obj:
+                guild_name = g_obj.name
+        except Exception:
+            pass
+
+    user = session.get('user') or {}
+    user_id = int(user.get('id', 0)) if str(user.get('id', '')).isdigit() else 0
+
+    if action == 'authorize':
+        authorize_guild_ai(guild_id, guild_name=guild_name, authorized_by=user_id, notes=notes)
+        _sync_cog_settings('AI')
+        return jsonify({
+            'status': 'ok',
+            'message': f"已成功開通伺服器「{guild_name or guild_id}」的 AI 智慧助手封測授權！",
+        })
+    elif action == 'revoke':
+        if guild_id == owner_gid:
+            return jsonify({'status': 'error', 'message': '機器人擁有者伺服器為預設開通，無法撤銷授權！'}), 400
+        ok = revoke_guild_ai(guild_id)
+        _sync_cog_settings('AI')
+        if ok:
+            return jsonify({
+                'status': 'ok',
+                'message': f"已撤銷伺服器「{guild_name or guild_id}」的 AI 智慧助手授權。",
+            })
+        else:
+            return jsonify({'status': 'error', 'message': '找不到該伺服器的授權紀錄或已經被撤銷'}), 404
+    else:
+        return jsonify({'status': 'error', 'message': f"未知的操作類型: {action}"}), 400
+

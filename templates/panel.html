@@ -436,6 +436,19 @@
             </p>
           </div>
 
+          <div id="ai-unauthorized-banner" class="ai-unauth-card" style="display: none;">
+            <div class="ai-unauth-header">
+              <span class="ai-unauth-icon">🔒</span>
+              <div class="ai-unauth-text">
+                <h4 class="ai-unauth-title">本伺服器尚未獲得 AI 智慧助手封測授權</h4>
+                <p class="ai-unauth-desc">目前為限量內部封測階段，預設僅開放擁有者伺服器使用。若需開通本伺服器的 AI 智慧對話功能，請聯繫機器人擁有者至後台控制面板發放封測授權。</p>
+              </div>
+            </div>
+            <div class="ai-unauth-tip">
+              <span>💡 提示：獲取授權後即可使用 <code>/ai</code> 指令與 <code>@機器人</code> 提及對話，並在此自訂專屬人設與預設模型！</span>
+            </div>
+          </div>
+
           <form id="form-ai" class="panel-form">
             <div class="form-group checkbox-group">
               <label class="custom-checkbox-label">
@@ -448,7 +461,6 @@
               <label for="select-ai-model">🤖 預設免費 AI 模型 (OpenRouter Free Model)</label>
               <select id="select-ai-model" class="form-control">
                 <option value="openrouter/auto">✨ openrouter/auto (自動推薦最佳免費模型，推薦)</option>
-                <option value="deepseek/deepseek-v4.1-flash-1017">⚡ deepseek/deepseek-v4.1-flash-1017 (DeepSeek Flash 1017)</option>
                 <option value="meta-llama/llama-3.3-70b-instruct:free">🦙 meta-llama/llama-3.3-70b-instruct:free (Llama 3.3 70B)</option>
                 <option value="google/gemini-2.0-flash-exp:free">⚡ google/gemini-2.0-flash-exp:free (Gemini 2.0 Flash)</option>
                 <option value="deepseek/deepseek-r1:free">🧠 deepseek/deepseek-r1:free (DeepSeek R1 推理模型)</option>
@@ -576,6 +588,19 @@
                 </button>
                 <button class="owner-subtab-btn" data-subtab="owner-sub-quota" type="button">
                   <span>外部 API 配額</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- 類別三：AI 模組授權管理 -->
+            <div class="admin-category-card">
+              <div class="admin-category-header">
+                <span class="admin-cat-icon">🤖</span>
+                <span class="admin-cat-title">AI 模組授權</span>
+              </div>
+              <div class="admin-subtabs-row">
+                <button class="owner-subtab-btn" data-subtab="owner-sub-ai-guilds" type="button">
+                  <span>伺服器授權名單</span>
                 </button>
               </div>
             </div>
@@ -879,6 +904,30 @@
                 <span id="quota-reurl-count" class="quota-number">--</span>
                 <span id="quota-reurl-date" class="quota-date">統計日期: --</span>
               </div>
+            </div>
+          </div>
+
+          <!-- 子分頁 3: AI 伺服器授權管理 (內部封測限定) -->
+          <div id="owner-sub-ai-guilds" class="owner-subpane">
+            <div class="owner-ai-header-row">
+              <div>
+                <h4 class="subpane-group-title">🤖 伺服器 AI 功能授權管理 (內部封測限定)</h4>
+                <p class="pane-desc" style="margin-top: 4px; font-size: 0.85rem;">
+                  因目前處於初階測試階段且 OpenRouter 免費模型有請求頻率限制，預設僅開放擁有者伺服器使用。<br>
+                  您可以在此手動授權或撤銷其他伺服器的 AI 使用權限，開通後該伺服器即可在控制面板自訂 AI 人設與使用 <code>/ai</code> 指令。
+                </p>
+              </div>
+              <button type="button" id="btn-refresh-ai-guilds" class="btn secondary btn-refresh-ai-guilds">
+                <span>🔄 重新整理清單</span>
+              </button>
+            </div>
+
+            <div class="commands-search-row" style="margin-top: 16px;">
+              <input type="text" id="ai-guild-search-input" class="form-control" placeholder="🔍 搜尋伺服器名稱或 ID..." />
+            </div>
+
+            <div id="owner-ai-guilds-list" class="owner-ai-guilds-list" style="margin-top: 16px;">
+              <div class="empty-rules-hint">載入伺服器授權名單中...</div>
             </div>
           </div>
         </div>

@@ -151,6 +151,17 @@ def init_db():
             );
             """)
 
+            # 11. 伺服器 AI 功能授權名單表 (封測階段限定 Owner Guild 與獲授權之伺服器)
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS ai_authorized_guilds (
+                guild_id TEXT PRIMARY KEY,
+                guild_name TEXT DEFAULT '',
+                authorized_at REAL NOT NULL,
+                authorized_by INTEGER NOT NULL DEFAULT 0,
+                notes TEXT DEFAULT ''
+            );
+            """)
+
             # ---------- 自動欄位安全遷移 (Migration) ----------
             cursor.execute("PRAGMA table_info(economy_users);")
             econ_cols = [r["name"] if isinstance(r, sqlite3.Row) else r[1] for r in cursor.fetchall()]
@@ -428,11 +439,6 @@ OPENROUTER_FREE_MODELS = [
         "desc": "由 OpenRouter 自動分配當前可用、品質最高的免費模型",
     },
     {
-        "id": "deepseek/deepseek-v4.1-flash-1017",
-        "name": "⚡ deepseek/deepseek-v4.1-flash-1017 (DeepSeek Flash 高速推理)",
-        "desc": "DeepSeek V4.1 Flash 快速回應模型，極速生成與出色多輪對話能力",
-    },
-    {
         "id": "meta-llama/llama-3.3-70b-instruct:free",
         "name": "🦙 meta-llama/llama-3.3-70b-instruct:free",
         "desc": "Meta Llama 3.3 旗艦 70B 模型，具備強大繁體中文理解與邏輯推理能力",
@@ -472,7 +478,6 @@ OPENROUTER_FREE_MODELS = [
 # 各模型對話計費費率倍數（基準：ai_cost_per_1k_tokens / 1,000）
 MODEL_TOKEN_RATES = {
     "openrouter/auto": 1.0,
-    "deepseek/deepseek-v4.1-flash-1017": 1.2,
     "deepseek/deepseek-r1:free": 1.5,
     "deepseek/deepseek-chat:free": 1.0,
     "google/gemini-2.0-flash-exp:free": 1.0,
@@ -605,6 +610,110 @@ def delete_guild_ai_settings(guild_id: str) -> None:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM ai_settings WHERE guild_id = ?;", (str(guild_id),))
             conn.commit()
+        finally:
+            conn.close()
+
+
+def is_guild_ai_authorized(guild_id: Any, owner_guild_id: Optional[Any] = None) -> bool:
+    """檢查指定伺服器是否具備使用 AI 智慧助手的封測授權。
+
+    擁有者伺服器（Owner Guild）永遠預設為授權狀態。
+    其他伺服器需在 ai_authorized_guilds 名單中方可使用。
+    """
+    if not guild_id:
+        return False
+    gid_str = str(guild_id).strip()
+    if not gid_str:
+        return False
+
+    # 1. 檢查是否為擁有者伺服器 (永遠開通)
+    resolved_owner_guild = owner_guild_id
+    if not resolved_owner_guild:
+        resolved_owner_guild = (
+            os.getenv("DISCORD_OWNER_GUILD_ID")
+            or os.getenv("OWNER_GUILD_ID")
+            or "1477930950288478262"
+        )
+    if gid_str == str(resolved_owner_guild).strip():
+        return True
+
+    # 2. 查詢資料庫授權名單
+    init_db()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1 FROM ai_authorized_guilds WHERE guild_id = ? LIMIT 1;", (gid_str,))
+            return cursor.fetchone() is not None
+        finally:
+            conn.close()
+
+
+def get_ai_authorized_guilds() -> List[Dict[str, Any]]:
+    """讀取所有已獲得 AI 功能封測授權的伺服器名單。"""
+    init_db()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT guild_id, guild_name, authorized_at, authorized_by, notes FROM ai_authorized_guilds ORDER BY authorized_at DESC;"
+            )
+            res = []
+            for row in cursor.fetchall():
+                res.append({
+                    "guild_id": str(row["guild_id"]),
+                    "guild_name": row["guild_name"] or "",
+                    "authorized_at": float(row["authorized_at"]),
+                    "authorized_by": int(row["authorized_by"] or 0),
+                    "notes": row["notes"] or "",
+                })
+            return res
+        finally:
+            conn.close()
+
+
+def authorize_guild_ai(
+    guild_id: Any,
+    guild_name: str = "",
+    authorized_by: int = 0,
+    notes: str = "",
+) -> None:
+    """發放特定伺服器的 AI 功能封測授權。"""
+    init_db()
+    gid_str = str(guild_id).strip()
+    if not gid_str:
+        return
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO ai_authorized_guilds (guild_id, guild_name, authorized_at, authorized_by, notes)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (gid_str, str(guild_name or "").strip(), time.time(), int(authorized_by or 0), str(notes or "").strip()),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def revoke_guild_ai(guild_id: Any) -> bool:
+    """撤銷特定伺服器的 AI 功能封測授權。"""
+    init_db()
+    gid_str = str(guild_id).strip()
+    if not gid_str:
+        return False
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM ai_authorized_guilds WHERE guild_id = ?;", (gid_str,))
+            affected = cursor.rowcount > 0
+            conn.commit()
+            return affected
         finally:
             conn.close()
 

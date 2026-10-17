@@ -2337,8 +2337,248 @@ body.has-unsaved-changes.has-back-to-top .toast-container {
   border-radius: 9999px !important;
 }
 
-body.has-unsaved-changes .server-settings-view {
-  margin-bottom: 104px;
+/* ---------- AI 封測未授權提示卡片 ---------- */
+.ai-unauth-card {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.12), rgba(217, 119, 6, 0.06));
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-radius: 18px;
+  padding: 20px 24px;
+  margin-bottom: 24px;
+}
+
+.ai-unauth-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.ai-unauth-icon {
+  font-size: 2rem;
+  line-height: 1;
+  filter: drop-shadow(0 4px 8px rgba(245, 158, 11, 0.4));
+  flex-shrink: 0;
+}
+
+.ai-unauth-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.ai-unauth-title {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #fbbf24;
+  margin: 0 0 6px;
+  letter-spacing: -0.01em;
+}
+
+.ai-unauth-desc {
+  font-size: 0.92rem;
+  color: #e2e8f0;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.ai-unauth-tip {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(245, 158, 11, 0.2);
+  font-size: 0.84rem;
+  color: #fde68a;
+  line-height: 1.5;
+}
+
+.ai-unauth-tip code {
+  background: rgba(0, 0, 0, 0.35);
+  padding: 2px 6px;
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: #fed7aa;
+}
+
+/* ---------- 擁有者後台：AI 伺服器授權管理 ---------- */
+.owner-ai-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.btn-refresh-ai-guilds {
+  padding: 8px 16px;
+  font-size: 0.85rem;
+}
+
+.owner-ai-guilds-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.owner-ai-guild-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  padding: 16px 20px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.owner-ai-guild-card:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.16);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+
+.owner-ai-guild-card.is-owner-guild {
+  border-color: rgba(245, 158, 11, 0.4);
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.08), rgba(255, 255, 255, 0.03));
+}
+
+.owner-ai-guild-card.is-authorized:not(.is-owner-guild) {
+  border-color: rgba(56, 189, 248, 0.35);
+  background: linear-gradient(135deg, rgba(56, 189, 248, 0.06), rgba(255, 255, 255, 0.03));
+}
+
+.owner-ai-guild-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex: 1;
+  min-width: 0;
+}
+
+.owner-ai-guild-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  object-fit: cover;
+  flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.owner-ai-guild-placeholder {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.owner-ai-guild-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.owner-ai-guild-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.owner-ai-guild-name {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #f8fafc;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.owner-ai-guild-meta {
+  font-size: 0.8rem;
+  color: #94a3b8;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.owner-ai-badge {
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.owner-ai-badge.owner {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+}
+
+.owner-ai-badge.authorized {
+  background: rgba(34, 197, 94, 0.2);
+  color: #4ade80;
+  border: 1px solid rgba(34, 197, 94, 0.4);
+}
+
+.owner-ai-badge.unauthorized {
+  background: rgba(148, 163, 184, 0.15);
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+}
+
+.owner-ai-guild-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.btn-ai-auth {
+  padding: 8px 16px;
+  font-size: 0.85rem;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-ai-auth.btn-grant {
+  background: linear-gradient(135deg, #10b981, #059669);
+  color: #fff;
+  border: none;
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+}
+
+.btn-ai-auth.btn-grant:hover {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+}
+
+.btn-ai-auth.btn-revoke {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+}
+
+.btn-ai-auth.btn-revoke:hover {
+  background: rgba(239, 68, 68, 0.25);
+  border-color: rgba(239, 68, 68, 0.6);
 }
 
 /* ---------- 響應式斷點 ---------- */
@@ -2489,6 +2729,44 @@ body.has-unsaved-changes .server-settings-view {
     font-size: 0.88rem;
     color: #cbd5e1;
     line-height: 1.5;
+  }
+
+  .ai-unauth-card {
+    padding: 16px;
+    border-radius: 16px;
+  }
+
+  .ai-unauth-header {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .owner-ai-header-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .owner-ai-header-row .btn-refresh-ai-guilds {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .owner-ai-guild-card {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 14px;
+    padding: 14px 16px;
+  }
+
+  .owner-ai-guild-right {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .owner-ai-guild-right .btn-ai-auth {
+    width: 100%;
+    justify-content: center;
+    text-align: center;
   }
 
   .modal-backdrop {

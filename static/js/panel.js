@@ -287,6 +287,7 @@
       loadOwnerEconomyConfig();
       loadOwnerCogsList();
       loadOwnerApiQuota();
+      loadOwnerAiGuilds();
     }
     checkUnsavedChanges();
   }
@@ -367,6 +368,30 @@
 
       // 4. 渲染指令清單 (確保 owner_guild_only 依身分嚴格隔離)
       renderCommandsTable(currentCommands);
+
+      // 5. 處理 AI 智慧助手封測授權狀態
+      const isAiAuthorized = data.ai_authorized !== false;
+      const aiUnauthBanner = document.getElementById('ai-unauthorized-banner');
+      if (aiUnauthBanner) {
+        aiUnauthBanner.style.display = isAiAuthorized ? 'none' : 'block';
+      }
+      const formAi = document.getElementById('form-ai');
+      if (formAi) {
+        const aiSubmit = formAi.querySelector('.btn-save-setting');
+        const aiReset = document.getElementById('btn-reset-ai');
+        if (aiSubmit) {
+          aiSubmit.disabled = !isAiAuthorized;
+          aiSubmit.style.opacity = isAiAuthorized ? '1' : '0.5';
+          aiSubmit.style.cursor = isAiAuthorized ? 'pointer' : 'not-allowed';
+          aiSubmit.title = isAiAuthorized ? '' : '本伺服器尚未獲得 AI 封測授權';
+        }
+        if (aiReset) {
+          aiReset.disabled = !isAiAuthorized;
+          aiReset.style.opacity = isAiAuthorized ? '1' : '0.5';
+          aiReset.style.cursor = isAiAuthorized ? 'pointer' : 'not-allowed';
+          aiReset.title = isAiAuthorized ? '' : '本伺服器尚未獲得 AI 封測授權';
+        }
+      }
     } catch (err) {
       console.error(err);
       showToast('網路連線失敗，無法讀取伺服器設定', 'error');
@@ -677,7 +702,6 @@
     if (aiModelSelect) {
       const presetModels = [
         'openrouter/auto',
-        'deepseek/deepseek-v4.1-flash-1017',
         'meta-llama/llama-3.3-70b-instruct:free',
         'google/gemini-2.0-flash-exp:free',
         'deepseek/deepseek-r1:free',
@@ -1887,6 +1911,9 @@
       const targetSub = btn.getAttribute('data-subtab');
       const targetPane = document.getElementById(targetSub);
       if (targetPane) targetPane.classList.add('active');
+      if (targetSub === 'owner-sub-ai-guilds') {
+        loadOwnerAiGuilds();
+      }
       checkUnsavedChanges();
     });
   });
@@ -2268,6 +2295,175 @@
     } catch (err) {
       console.error(err);
     }
+  }
+
+  // 5. 擁有者後台：AI 伺服器授權管理
+  let cachedOwnerAiGuilds = [];
+  const ownerAiGuildsList = document.getElementById('owner-ai-guilds-list');
+  const aiGuildSearchInput = document.getElementById('ai-guild-search-input');
+  const btnRefreshAiGuilds = document.getElementById('btn-refresh-ai-guilds');
+
+  async function loadOwnerAiGuilds() {
+    if (!ownerAiGuildsList) return;
+    try {
+      const res = await fetch('/api/panel/owner/ai-guilds');
+      if (res.status === 403) return;
+      const data = await res.json();
+      if (!res.ok || !data.guilds) {
+        ownerAiGuildsList.innerHTML = '<div class="empty-rules-hint">載入伺服器授權名單失敗</div>';
+        return;
+      }
+      cachedOwnerAiGuilds = data.guilds;
+      renderOwnerAiGuilds(cachedOwnerAiGuilds);
+    } catch (err) {
+      console.error(err);
+      if (ownerAiGuildsList) {
+        ownerAiGuildsList.innerHTML = '<div class="empty-rules-hint">載入失敗，網路連線異常</div>';
+      }
+    }
+  }
+
+  function renderOwnerAiGuilds(guilds) {
+    if (!ownerAiGuildsList) return;
+
+    if (!guilds || guilds.length === 0) {
+      ownerAiGuildsList.innerHTML = '<div class="empty-rules-hint">沒有找到符合條件的伺服器。</div>';
+      return;
+    }
+
+    ownerAiGuildsList.innerHTML = '';
+    guilds.forEach((g) => {
+      const card = document.createElement('div');
+      card.className = `owner-ai-guild-card ${g.is_owner_guild ? 'is-owner-guild' : (g.is_authorized ? 'is-authorized' : '')}`;
+
+      const iconHtml = g.icon
+        ? `<img class="owner-ai-guild-icon" src="${escapeHtml(g.icon)}" alt="${escapeHtml(g.name)}" />`
+        : `<div class="owner-ai-guild-placeholder">${escapeHtml(g.name ? g.name.slice(0, 2) : 'SV')}</div>`;
+
+      let badgeHtml = '';
+      if (g.is_owner_guild) {
+        badgeHtml = '<span class="owner-ai-badge owner">👑 擁有者伺服器 (預設開通)</span>';
+      } else if (g.is_authorized) {
+        badgeHtml = '<span class="owner-ai-badge authorized">🟢 已開通封測授權</span>';
+      } else {
+        badgeHtml = '<span class="owner-ai-badge unauthorized">⚪ 未授權</span>';
+      }
+
+      let actionHtml = '';
+      if (g.is_owner_guild) {
+        actionHtml = '<span style="font-size: 0.8rem; color: #94a3b8;">永久開通</span>';
+      } else if (g.is_authorized) {
+        actionHtml = `
+          <button type="button" class="btn-ai-auth btn-revoke" data-gid="${escapeHtml(g.id)}" data-gname="${escapeHtml(g.name)}">
+            <span>🚫 撤銷授權</span>
+          </button>
+        `;
+      } else {
+        actionHtml = `
+          <button type="button" class="btn-ai-auth btn-grant" data-gid="${escapeHtml(g.id)}" data-gname="${escapeHtml(g.name)}">
+            <span>✨ 發放授權</span>
+          </button>
+        `;
+      }
+
+      const memberCountText = g.member_count ? `${g.member_count} 名成員` : '機器人所在伺服器';
+
+      card.innerHTML = `
+        <div class="owner-ai-guild-left">
+          ${iconHtml}
+          <div class="owner-ai-guild-info">
+            <div class="owner-ai-guild-title-row">
+              <span class="owner-ai-guild-name" title="${escapeHtml(g.name)}">${escapeHtml(g.name)}</span>
+              ${badgeHtml}
+            </div>
+            <div class="owner-ai-guild-meta">
+              <span>ID: <code>${escapeHtml(g.id)}</code></span>
+              <span>•</span>
+              <span>${escapeHtml(memberCountText)}</span>
+              ${g.notes ? `<span>•</span><span>備註: ${escapeHtml(g.notes)}</span>` : ''}
+            </div>
+          </div>
+        </div>
+        <div class="owner-ai-guild-right">
+          ${actionHtml}
+        </div>
+      `;
+      ownerAiGuildsList.appendChild(card);
+    });
+
+    // 綁定發放授權按鈕
+    ownerAiGuildsList.querySelectorAll('.btn-grant').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const gid = btn.getAttribute('data-gid');
+        const gname = btn.getAttribute('data-gname');
+        showConfirmModal({
+          title: '✨ 確認發放 AI 封測授權',
+          message: `確定要為伺服器「${gname}」(${gid}) 開通 AI 智慧助手封測使用權限嗎？開通後該伺服器成員將可使用 /ai 指令與 @機器人 對話。`,
+          confirmText: '確認開通',
+          cancelText: '取消',
+          onConfirm: () => handleAiGuildAuth(gid, 'authorize'),
+        });
+      });
+    });
+
+    // 綁定撤銷授權按鈕
+    ownerAiGuildsList.querySelectorAll('.btn-revoke').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const gid = btn.getAttribute('data-gid');
+        const gname = btn.getAttribute('data-gname');
+        showConfirmModal({
+          title: '⚠️ 確認撤銷 AI 封測授權',
+          message: `確定要撤銷伺服器「${gname}」(${gid}) 的 AI 封測使用權限嗎？撤銷後該伺服器將無法再使用 AI 相關功能。`,
+          confirmText: '確認撤銷',
+          cancelText: '取消',
+          onConfirm: () => handleAiGuildAuth(gid, 'revoke'),
+        });
+      });
+    });
+  }
+
+  async function handleAiGuildAuth(guildId, action) {
+    try {
+      const res = await fetch('/api/panel/owner/ai-guilds', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          guild_id: guildId,
+          action: action,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast(data.message);
+        loadOwnerAiGuilds(); // 重新整理清單
+      } else {
+        showToast(data.message || '操作失敗', 'error');
+      }
+    } catch (err) {
+      showToast('請求網路連線失敗', 'error');
+    }
+  }
+
+  if (aiGuildSearchInput) {
+    aiGuildSearchInput.addEventListener('input', (e) => {
+      const q = e.target.value.toLowerCase().trim();
+      if (!q) {
+        renderOwnerAiGuilds(cachedOwnerAiGuilds);
+        return;
+      }
+      const filtered = (cachedOwnerAiGuilds || []).filter((g) =>
+        (g.name && g.name.toLowerCase().includes(q)) ||
+        (g.id && String(g.id).includes(q))
+      );
+      renderOwnerAiGuilds(filtered);
+    });
+  }
+
+  if (btnRefreshAiGuilds) {
+    btnRefreshAiGuilds.addEventListener('click', () => {
+      loadOwnerAiGuilds();
+      showToast('已重新整理伺服器授權名單');
+    });
   }
 
   // ---------- 輔助工具函式 ----------
