@@ -336,6 +336,16 @@ class Shortener(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        # 註冊右鍵訊息 Context Menu：縮短訊息中的網址
+        self.ctx_menu = app_commands.ContextMenu(
+            name="縮短訊息中的網址",
+            callback=self.shorten_message_context,
+        )
+        self.bot.tree.add_command(self.ctx_menu)
+
+    async def cog_unload(self):
+        """卸載模組時移除 Context Menu，避免重複註冊錯誤。"""
+        self.bot.tree.remove_command(self.ctx_menu.name, type=self.ctx_menu.type)
 
     async def _handle_shorten_logic(
         self,
@@ -514,6 +524,19 @@ class Shortener(commands.Cog):
             utm_campaign=utm_campaign,
             ephemeral=ephemeral,
         )
+
+    async def shorten_message_context(self, interaction: discord.Interaction, message: discord.Message):
+        """右鍵訊息快捷縮網址：自動擷取該訊息內的第一個網址並縮短。"""
+        url = extract_first_url(message.content)
+        if not url:
+            await interaction.response.send_message(
+                "❌ 此訊息中沒有找到任何可縮短的網址！",
+                ephemeral=True,
+            )
+            return
+
+        # Context Menu 預設為私密回覆 (ephemeral=True)，避免打擾頻道其他成員
+        await self._handle_shorten_logic(interaction, url, ephemeral=True)
 
 
 async def setup(bot: commands.Bot):

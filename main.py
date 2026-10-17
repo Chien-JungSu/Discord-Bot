@@ -114,11 +114,25 @@ class MyBot(commands.Bot):
         if not synced_commands:
             print(f"ℹ️ [{scope}] 本次沒有任何指令同步成功。")
             return
-        names = [
+        slash_names = [
             cmd.name for cmd in synced_commands
             if getattr(cmd, 'type', discord.AppCommandType.chat_input) == discord.AppCommandType.chat_input
         ]
-        print(f"ℹ️ [{scope}] 已同步指令：{names}")
+        msg_menu_names = [
+            cmd.name for cmd in synced_commands
+            if getattr(cmd, 'type', discord.AppCommandType.chat_input) == discord.AppCommandType.message
+        ]
+        user_menu_names = [
+            cmd.name for cmd in synced_commands
+            if getattr(cmd, 'type', discord.AppCommandType.chat_input) == discord.AppCommandType.user
+        ]
+
+        if slash_names:
+            print(f"ℹ️ [{scope}] 已同步指令：{slash_names}")
+        if msg_menu_names:
+            print(f"ℹ️ [{scope}] 已同步右鍵訊息選單：{msg_menu_names}")
+        if user_menu_names:
+            print(f"ℹ️ [{scope}] 已同步右鍵成員選單：{user_menu_names}")
 
     async def on_connect(self):
         print("ℹ️ on_connect event fired")
