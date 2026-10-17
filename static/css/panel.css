@@ -766,16 +766,27 @@ button.dropdown-item.dropdown-owner-btn:hover span {
 
 /* 主面板內容區塊 */
 .panel-main {
+  position: relative;
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.04) 0%, rgba(15, 23, 42, 0.7) 100%);
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 28px;
   padding: 32px;
-  backdrop-filter: blur(28px) saturate(200%);
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4), inset 0 1px 1px rgba(255, 255, 255, 0.2);
   min-height: 520px;
   min-width: 0;
   max-width: 100%;
   overflow: visible;
+}
+
+.panel-main::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  backdrop-filter: blur(28px) saturate(200%);
+  -webkit-backdrop-filter: blur(28px) saturate(200%);
+  pointer-events: none;
+  z-index: -1;
 }
 
 .tab-pane {
@@ -784,12 +795,12 @@ button.dropdown-item.dropdown-owner-btn:hover span {
 
 .tab-pane.active {
   display: block;
-  animation: fadeInPane 0.3s var(--motion-smooth);
+  animation: fadeInPane 0.25s ease;
 }
 
 @keyframes fadeInPane {
-  from { opacity: 0; transform: translateY(6px); }
-  to { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 .pane-header {

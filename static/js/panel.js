@@ -473,11 +473,19 @@
 
       const rect = input.getBoundingClientRect();
       const modalBody = input.closest('.modal-body');
+      const bottomBarReserve = !modalBody && unsavedBar && unsavedBar.classList.contains('is-visible') ? 96 : 24;
       const containerBottom = modalBody
         ? modalBody.getBoundingClientRect().bottom
-        : window.innerHeight;
+        : window.innerHeight - bottomBarReserve;
+      const containerTop = modalBody
+        ? modalBody.getBoundingClientRect().top
+        : 80;
       const spaceBelow = containerBottom - rect.bottom;
-      menu.classList.toggle('flip-up', spaceBelow < 180 && rect.top > 200);
+      const spaceAbove = rect.top - containerTop;
+      const shouldFlipUp = spaceBelow < 236 && spaceAbove > spaceBelow;
+      menu.classList.toggle('flip-up', shouldFlipUp);
+      const availableSpace = shouldFlipUp ? spaceAbove : spaceBelow;
+      menu.style.maxHeight = `${Math.max(120, Math.min(220, Math.floor(availableSpace - 12)))}px`;
 
       wrap.classList.add('is-open');
       const currentLabel = getSelectedLabel();
