@@ -122,24 +122,24 @@ class LLMProvider:
 class MultiProviderLLMRouter:
     """多供應商免費 LLM 智慧路由器與自動容錯容災 (Failover) 閘道。
 
-    文字請求鏈：Groq → NVIDIA NIM → Mistral AI → Google AI Studio → Kilo Code Gateway
-    視覺圖片鏈：Google AI Studio → Mistral AI → Groq (Vision)
+    文字請求鏈：Google AI Studio → NVIDIA NIM → Mistral AI → Kilo Code Gateway
+    視覺圖片鏈：Google AI Studio → NVIDIA NIM → Mistral AI
     """
 
     def __init__(self):
         self._session: Optional[aiohttp.ClientSession] = None
         self.providers: Dict[str, LLMProvider] = {
-            "groq": LLMProvider(
-                id="groq",
-                name="Groq (LPU 極速引擎)",
-                base_url="https://api.groq.com/openai/v1",
-                env_keys=["GROQ_API_KEY"],
-                default_text_model="openai/gpt-oss-120b",
-                default_vision_model="openai/gpt-oss-120b",
-                fallback_models=["openai/gpt-oss-20b", "qwen/qwen3.8-27b"],
+            "gemini": LLMProvider(
+                id="gemini",
+                name="Google AI Studio (主要視覺/多模態)",
+                base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+                env_keys=["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+                default_text_model="gemini-2.5-flash-lite",
+                default_vision_model="gemini-2.5-flash-lite",
+                fallback_models=["gemini-flash-latest", "gemini-2.0-flash-lite"],
                 supports_vision=True,
-                rpm_limit_desc="30 RPM",
-                quota_desc="1,000 ~ 14,400 RPD (LPU 極速開源旗艦)",
+                rpm_limit_desc="15 ~ 30 RPM",
+                quota_desc="1,500 RPD (百萬超長 Context & 視覺分析)",
             ),
             "nvidia": LLMProvider(
                 id="nvidia",
@@ -165,18 +165,6 @@ class MultiProviderLLMRouter:
                 rpm_limit_desc="60 RPM",
                 quota_desc="500K TPM (支援圖文雙模態)",
             ),
-            "gemini": LLMProvider(
-                id="gemini",
-                name="Google AI Studio (主要視覺/多模態)",
-                base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-                env_keys=["GEMINI_API_KEY", "GOOGLE_API_KEY"],
-                default_text_model="gemini-flash-latest",
-                default_vision_model="gemini-flash-latest",
-                fallback_models=["gemini-2.5-flash-lite", "gemini-3-flash-preview"],
-                supports_vision=True,
-                rpm_limit_desc="15 ~ 30 RPM",
-                quota_desc="1,500 RPD (百萬超長 Context & 視覺分析)",
-            ),
             "kilo": LLMProvider(
                 id="kilo",
                 name="Kilo Code Gateway (備援通道 #3)",
@@ -192,8 +180,8 @@ class MultiProviderLLMRouter:
         }
 
         # 預設優先容錯容災鏈
-        self.text_chain: List[str] = ["groq", "nvidia", "mistral", "gemini", "kilo"]
-        self.vision_chain: List[str] = ["gemini", "nvidia", "mistral", "groq"]
+        self.text_chain: List[str] = ["gemini", "nvidia", "mistral", "kilo"]
+        self.vision_chain: List[str] = ["gemini", "nvidia", "mistral"]
 
     def reload_env_keys(self) -> None:
         """重新載入 .env 檔案並更新各提供商的 Client 連線狀態。"""
@@ -230,7 +218,7 @@ class MultiProviderLLMRouter:
         self.reload_env_keys()
         result = []
         now = time.time()
-        for pid in ["groq", "gemini", "nvidia", "mistral", "kilo"]:
+        for pid in ["gemini", "nvidia", "mistral", "kilo"]:
             p = self.providers[pid]
             is_configured = p.is_configured()
             is_cooldown = now < p.cooldown_until
@@ -346,7 +334,7 @@ class MultiProviderLLMRouter:
             return (
                 None,
                 "⚠️ **沒有可用的 AI 提供商**\n"
-                "目前沒有配置任何有效的 API Key（例如 `GROQ_API_KEY`、`GEMINI_API_KEY`、`NVIDIA_API_KEY`、`MISTRAL_API_KEY`），"
+                "目前沒有配置任何有效的 API Key（例如 `GEMINI_API_KEY`、`NVIDIA_API_KEY`、`MISTRAL_API_KEY`），"
                 "且備援通道目前無法連線。請至控制面板或主機 `.env` 配置至少一組免費金鑰！",
                 {
                     "provider": "None",
@@ -489,12 +477,16 @@ class MultiProviderLLMRouter:
 
         # 5. 若所有提供商均嘗試失敗
         total_elapsed = time.perf_counter() - start_time
-        err_msg = (
-            f"**所有免費 AI 備援通道目前皆無法回應**\n"
-            f"• **嘗試鏈條**：{' → '.join(failover_history) if failover_history else '無可用通道'}\n"
-            f"• **最後錯誤訊息**：```{last_error_details[:250]}```\n"
-            f"• **建議方式**：請確認主機 `.env` 中的各項免費 API Key 是否有效，或稍候 60 秒待提供商冷卻結束重試。"
+        is_timeout = (
+            "逾時" in last_error_details
+            or "Timeout" in last_error_details
+            or "timeout" in last_error_details
+            or any("逾時" in h for h in failover_history)
         )
+        if is_timeout:
+            err_msg = "請求逾時，請稍後再試"
+        else:
+            err_msg = "請求逾時，請稍後再試" if "401" in last_error_details or not last_error_details else "服務暫時無法回應，請稍後再試"
         return (
             None,
             err_msg,

@@ -715,7 +715,7 @@
     if (aiModelSelect) {
       const presetModels = [
         'auto',
-        'groq:openai/gpt-oss-120b',
+        'gemini:gemini-2.5-flash-lite',
         'gemini:gemini-flash-latest',
         'nvidia:meta/llama-3.2-11b-vision-instruct',
         'mistral:ministral-8b-latest',

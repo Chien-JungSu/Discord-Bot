@@ -420,7 +420,7 @@ def save_music_settings(data: dict):
 
 
 # ==============================================================================
-# AI Settings API (Multi-Provider Free LLM Architecture: Groq / Gemini / NVIDIA / Mistral / Kilo)
+# AI Settings API (Multi-Provider Free LLM Architecture: Gemini / NVIDIA / Mistral / Kilo)
 # ==============================================================================
 
 DEFAULT_AI_MODEL = "auto"
@@ -436,38 +436,32 @@ AI_PROVIDER_MODELS = [
     {
         "id": "auto",
         "provider": "auto",
-        "name": "auto",
-        "desc": "自動按優先級與速率限制智慧切換，遇 429 或故障 0 秒自動無縫容災",
+        "name": "auto (text, vision)",
+        "desc": "自動容錯容災鏈",
     },
     {
-        "id": "groq:openai/gpt-oss-120b",
-        "provider": "groq",
-        "name": "Groq · GPT-OSS 120B (LPU 極速開源旗艦)",
-        "desc": "LPU 超高速推理，開源 120B 旗艦大模型，群聊秒回",
-    },
-    {
-        "id": "gemini:gemini-flash-latest",
+        "id": "gemini:gemini-2.5-flash-lite",
         "provider": "gemini",
-        "name": "Google · Gemini Flash (圖文雙模態 & 最新穩定版)",
-        "desc": "支援 Discord 圖片與長文本分析，百萬超長上下文與精準繁體中文",
+        "name": "gemini-2.5-flash-lite (text, vision)",
+        "desc": "Google Gemini",
     },
     {
         "id": "nvidia:meta/llama-3.2-11b-vision-instruct",
         "provider": "nvidia",
-        "name": "NVIDIA NIM · Llama 3.2 11B Vision Instruct",
-        "desc": "40 RPM，同時支援文字與圖片多模態理解之高併發備援通道",
+        "name": "meta/llama-3.2-11b-vision-instruct (text, vision)",
+        "desc": "NVIDIA NIM",
     },
     {
         "id": "mistral:ministral-8b-latest",
         "provider": "mistral",
-        "name": "Mistral AI · Ministral 8B (歐洲開源旗艦)",
-        "desc": "60 RPM，歐洲頂級開源模型，繁體中文與邏輯理解優秀",
+        "name": "ministral-8b-latest (text, vision)",
+        "desc": "Mistral AI",
     },
     {
         "id": "kilo:kilo-auto/free",
         "provider": "kilo",
-        "name": "Kilo Code Gateway · 備援通道",
-        "desc": "需配置 KILO_API_KEY，作為額外備援通道",
+        "name": "kilo-auto/free (text)",
+        "desc": "Kilo Code Gateway",
     },
 ]
 
@@ -477,8 +471,8 @@ OPENROUTER_FREE_MODELS = AI_PROVIDER_MODELS
 # 各模型對話計費費率倍數（基準：ai_cost_per_1k_tokens / 1,000）
 MODEL_TOKEN_RATES = {
     "auto": 1.0,
-    "groq:openai/gpt-oss-120b": 1.0,
-    "openai/gpt-oss-120b": 1.0,
+    "gemini:gemini-2.5-flash-lite": 1.0,
+    "gemini-2.5-flash-lite": 1.0,
     "gemini:gemini-flash-latest": 1.0,
     "gemini-flash-latest": 1.0,
     "gemini:gemini-2.5-flash": 1.0,

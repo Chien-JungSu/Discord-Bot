@@ -1934,16 +1934,43 @@ select.rr-draft-role-select {
 }
 
 .owner-subpane.active {
-  display: block;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
   animation: fadeInPane 0.3s var(--motion-smooth);
 }
 
 .subpane-group-title {
-  margin: 0 0 16px;
+  margin: 18px 0 2px;
   font-size: 1.15rem;
+  font-weight: 700;
   color: #fde68a;
   border-left: 3px solid #fbbf24;
   padding-left: 10px;
+  line-height: 1.35;
+}
+
+.subpane-group-title:first-child {
+  margin-top: 0;
+}
+
+.owner-subpane .form-group {
+  gap: 8px;
+  margin-bottom: 0;
+}
+
+.owner-subpane .form-group label {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #e2e8f0;
+  line-height: 1.4;
+  margin-bottom: 0;
+}
+
+.owner-subpane .form-row-2,
+.owner-subpane .form-row-3 {
+  gap: 16px;
+  margin-bottom: 0;
 }
 
 /* 玩家金幣管理樣式 */

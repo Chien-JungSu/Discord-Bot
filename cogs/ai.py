@@ -103,7 +103,7 @@ class AIChannelActionView(discord.ui.View):
 
 
 class AI(commands.Cog):
-    """多供應商免費 LLM 智慧對話模組 (Groq / Gemini / NVIDIA / Mistral / Kilo)。
+    """多供應商免費 LLM 智慧對話模組 (Gemini / NVIDIA / Mistral / Kilo)。
 
     支援文字/視覺圖片雙模態、自動限速 429 容錯容災輪詢、每頻道 15 則滑動視窗記憶與經濟系統 AI 貨幣計費。
     """
@@ -171,7 +171,7 @@ class AI(commands.Cog):
             color=0x5865F2,
         )
 
-        # 提取模型名稱 (去除 groq: 或 nvidia: 前綴，精簡顯示如 deepseek-v4.1-flash / llama-3.2-11b-vision-instruct)
+        # 提取模型名稱 (去除 gemini: 或 nvidia: 前綴，精簡顯示如 gemini-2.5-flash-lite / llama-3.2-11b-vision-instruct)
         model_raw = str(stats.get("model") or "auto")
         if ":" in model_raw:
             model_raw = model_raw.split(":", 1)[1]
@@ -226,12 +226,11 @@ class AI(commands.Cog):
     )
     @app_commands.choices(
         provider=[
-            app_commands.Choice(name="auto", value="auto"),
-            app_commands.Choice(name="Groq (LPU 極速推理，支援 GPT-OSS 120B)", value="groq"),
-            app_commands.Choice(name="Google AI Studio (Gemini Flash 視覺/長文本)", value="gemini"),
-            app_commands.Choice(name="NVIDIA NIM (Llama 3.2 11B Vision 大容量併發)", value="nvidia"),
-            app_commands.Choice(name="Mistral AI (Ministral 8B 歐洲開源)", value="mistral"),
-            app_commands.Choice(name="Kilo Code Gateway (備援通道)", value="kilo"),
+            app_commands.Choice(name="auto (text, vision)", value="auto"),
+            app_commands.Choice(name="gemini-2.5-flash-lite (text, vision)", value="gemini"),
+            app_commands.Choice(name="meta/llama-3.2-11b-vision-instruct (text, vision)", value="nvidia"),
+            app_commands.Choice(name="ministral-8b-latest (text, vision)", value="mistral"),
+            app_commands.Choice(name="kilo-auto/free (text)", value="kilo"),
         ]
     )
     async def ai_command(
@@ -364,7 +363,8 @@ class AI(commands.Cog):
         )
 
         if error_msg or not response_text:
-            await interaction.followup.send(error_msg or "⚠️ AI 未回傳內容，請稍候重試。")
+            final_err = "請求逾時，請稍後再試" if (not error_msg or "逾時" in error_msg or "Timeout" in error_msg or "timeout" in error_msg) else error_msg
+            await interaction.followup.send(final_err)
             return
 
         # 8. 寫入頻道記憶
@@ -432,8 +432,8 @@ class AI(commands.Cog):
             description=(
                 "本系統採用動態多供應商容錯容災架構（Failover Gateway），調用時遇 `429 速率限制` 或服務端錯誤時，"
                 "**0 秒自動無縫切換**至下一順位提供商！\n\n"
-                "**文字請求鏈**：Groq ➔ NVIDIA NIM ➔ Mistral AI ➔ Google AI Studio ➔ Kilo Code\n"
-                "**圖片視覺鏈**：Google AI Studio ➔ Mistral AI ➔ Groq (Vision)"
+                "**文字請求鏈**：Google AI Studio ➔ NVIDIA NIM ➔ Mistral AI ➔ Kilo Code\n"
+                "**圖片視覺鏈**：Google AI Studio ➔ NVIDIA NIM ➔ Mistral AI"
             ),
             color=0x818cf8,
         )
@@ -567,12 +567,11 @@ class AI(commands.Cog):
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.choices(
         model=[
-            app_commands.Choice(name="auto", value="auto"),
-            app_commands.Choice(name="Groq · GPT-OSS 120B (LPU 極速開源旗艦)", value="groq:openai/gpt-oss-120b"),
-            app_commands.Choice(name="Google · Gemini Flash (圖文雙模態 & 最新穩定版)", value="gemini:gemini-flash-latest"),
-            app_commands.Choice(name="NVIDIA NIM · Llama 3.2 11B Vision (大容量圖文兼備)", value="nvidia:meta/llama-3.2-11b-vision-instruct"),
-            app_commands.Choice(name="Mistral AI · Ministral 8B (歐洲開源旗艦)", value="mistral:mistral-8b-latest"),
-            app_commands.Choice(name="Kilo Code Gateway · 備援通道", value="kilo:kilo-auto/free"),
+            app_commands.Choice(name="auto (text, vision)", value="auto"),
+            app_commands.Choice(name="gemini-2.5-flash-lite (text, vision)", value="gemini:gemini-2.5-flash-lite"),
+            app_commands.Choice(name="meta/llama-3.2-11b-vision-instruct (text, vision)", value="nvidia:meta/llama-3.2-11b-vision-instruct"),
+            app_commands.Choice(name="ministral-8b-latest (text, vision)", value="mistral:ministral-8b-latest"),
+            app_commands.Choice(name="kilo-auto/free (text)", value="kilo:kilo-auto/free"),
         ]
     )
     async def ai_settings_command(
@@ -731,7 +730,7 @@ class AI(commands.Cog):
             greeting = (
                 f"嗨 {message.author.mention}！有什麼我可以幫忙的嗎？\n"
                 "你可以直接在訊息中提及我並輸入問題、上傳圖片，或使用 `/ai` 指令開始智慧對話！\n"
-                "提示：使用 `/ai_provider` 可即時檢視 Groq、Gemini、NVIDIA、Mistral 等免費 AI 引擎的在線狀態。"
+                "提示：使用 `/ai_provider` 可即時檢視 Gemini、NVIDIA、Mistral 等免費 AI 引擎的在線狀態。"
             )
             try:
                 await message.reply(greeting, mention_author=False)
@@ -802,7 +801,8 @@ class AI(commands.Cog):
                 )
 
                 if error_msg or not response_text:
-                    await message.reply(error_msg or "⚠️ AI 未能產生回覆內容，請稍候重試。", mention_author=False)
+                    final_err = "請求逾時，請稍後再試" if (not error_msg or "逾時" in error_msg or "Timeout" in error_msg or "timeout" in error_msg) else error_msg
+                    await message.reply(final_err, mention_author=False)
                     return
 
                 # 記錄對話歷史
