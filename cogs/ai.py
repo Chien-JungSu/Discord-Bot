@@ -159,18 +159,13 @@ class AI(commands.Cog):
         image_url: Optional[str] = None,
     ) -> discord.Embed:
         """依照簡潔優雅風格 (圖二) 建立 AI 回覆 Embed：
-        無贅餘標題與欄位，僅保留純淨 AI 回覆，底部 Footer 緊湊呈現計費統計、模型與耗時。
-        格式範例：0.00/C | I 33C/0.00 | O 120C/0.00 | TC 0.00 | Pay Nicko | deepseek-v4.1-flash | 4.91s
+        無贅餘標題與欄位，僅保留純淨 AI 回覆，底部以分隔線與 -# 子文字呈現計費統計、模型與耗時。
+        格式範例：
+        [AI 回覆內容]
+
+        ---
+        -# 0.00/C | I 33C/0.00 | O 120C/0.00 | TC 0.00 | Pay Nicko | deepseek-v4.1-flash | 4.91s
         """
-        # 內容保護 (Embed description 上限 4096 字元，首段取至多 3900 字元)
-        desc = response_text if len(response_text) <= 3900 else f"{response_text[:3897]}..."
-
-        # 乾淨高質感的 Discord Blurple 邊框 (與圖二相同)
-        embed = discord.Embed(
-            description=desc,
-            color=0x5865F2,
-        )
-
         # 提取模型名稱 (去除 gemini: 或 nvidia: 前綴，精簡顯示如 gemini-2.5-flash-lite / llama-3.2-11b-vision-instruct)
         model_raw = str(stats.get("model") or "auto")
         if ":" in model_raw:
@@ -205,8 +200,23 @@ class AI(commands.Cog):
             f"O {completion_tokens}C/{output_cost_str} | TC {total_cost_str} | "
             f"Pay {clean_payer} | {clean_model} | {thinking_time:.2f}s"
         )
+        footer_block = f"\n\n---\n-# {footer_text}"
 
-        embed.set_footer(text=footer_text)
+        # 內容保護 (Embed description 上限 4096 字元，預留分隔線與 footer 空間)
+        max_content_len = 4096 - len(footer_block)
+        clean_response = (response_text or "").rstrip()
+        if not clean_response:
+            clean_response = "（無回覆內容）"
+        elif len(clean_response) > max_content_len:
+            clean_response = f"{clean_response[:max_content_len - 3]}..."
+
+        desc = f"{clean_response}{footer_block}"
+
+        # 乾淨高質感的 Discord Blurple 邊框 (與圖二相同)
+        embed = discord.Embed(
+            description=desc,
+            color=0x5865F2,
+        )
 
         if image_url:
             embed.set_thumbnail(url=image_url)
@@ -382,8 +392,11 @@ class AI(commands.Cog):
         payer_name = payer_member.display_name if payer_member else (interaction.user.display_name or interaction.user.name)
 
         # 10. 組裝簡約 Embed (如圖二排版)
+        chunks = split_message_chunks(response_text, max_chars=3800)
+        first_chunk = chunks[0] if chunks else response_text
+
         embed = self._build_ai_embed(
-            response_text=response_text,
+            response_text=first_chunk,
             prompt=clean_prompt,
             stats=stats,
             cost=cost,
@@ -394,7 +407,6 @@ class AI(commands.Cog):
             image_url=img_url,
         )
 
-        chunks = split_message_chunks(response_text, max_chars=3900)
         await interaction.followup.send(embed=embed)
         if len(chunks) > 1:
             for extra_chunk in chunks[1:]:
@@ -819,8 +831,11 @@ class AI(commands.Cog):
                 payer_member = message.guild.get_member(payer_id) if message.guild else None
                 payer_name = payer_member.display_name if payer_member else (message.author.display_name or message.author.name)
 
+                chunks = split_message_chunks(response_text, max_chars=3800)
+                first_chunk = chunks[0] if chunks else response_text
+
                 embed = self._build_ai_embed(
-                    response_text=response_text,
+                    response_text=first_chunk,
                     prompt=clean_content,
                     stats=stats,
                     cost=cost,
@@ -831,7 +846,6 @@ class AI(commands.Cog):
                     image_url=img_url,
                 )
 
-                chunks = split_message_chunks(response_text, max_chars=3900)
                 await message.reply(embed=embed, mention_author=False)
                 if len(chunks) > 1:
                     for extra_chunk in chunks[1:]:
