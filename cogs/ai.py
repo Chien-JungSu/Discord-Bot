@@ -103,7 +103,7 @@ class AIChannelActionView(discord.ui.View):
 
 
 class AI(commands.Cog):
-    """多供應商免費 LLM 智慧對話模組 (Gemini / NVIDIA / Mistral / Kilo)。
+    """多供應商免費 LLM 智慧對話模組 (Gemini / NVIDIA / Mistral)。
 
     支援文字/視覺圖片雙模態、自動限速 429 容錯容災輪詢、每頻道 15 則滑動視窗記憶與經濟系統 AI 貨幣計費。
     """
@@ -237,10 +237,10 @@ class AI(commands.Cog):
     @app_commands.choices(
         provider=[
             app_commands.Choice(name="auto (text, vision)", value="auto"),
-            app_commands.Choice(name="gemini-2.5-flash-lite (text, vision)", value="gemini"),
+            app_commands.Choice(name="gemini-flash-latest (text, vision)", value="gemini"),
+            app_commands.Choice(name="gemma-4-31b-it (text, vision)", value="gemma"),
             app_commands.Choice(name="meta/llama-3.2-11b-vision-instruct (text, vision)", value="nvidia"),
             app_commands.Choice(name="ministral-8b-latest (text, vision)", value="mistral"),
-            app_commands.Choice(name="kilo-auto/free (text)", value="kilo"),
         ]
     )
     async def ai_command(
@@ -349,7 +349,10 @@ class AI(commands.Cog):
         preferred_p = provider if (provider and provider != "auto") else None
         configured_model = str(cfg.get("model") or "auto")
         preferred_m = None
-        if not preferred_p and configured_model != "auto":
+        if preferred_p == "gemma":
+            preferred_p = "gemini"
+            preferred_m = "gemma-4-31b-it"
+        elif not preferred_p and configured_model != "auto":
             if ":" in configured_model:
                 parts = configured_model.split(":", 1)
                 preferred_p = parts[0]
@@ -444,7 +447,7 @@ class AI(commands.Cog):
             description=(
                 "本系統採用動態多供應商容錯容災架構（Failover Gateway），調用時遇 `429 速率限制` 或服務端錯誤時，"
                 "**0 秒自動無縫切換**至下一順位提供商！\n\n"
-                "**文字請求鏈**：Google AI Studio ➔ NVIDIA NIM ➔ Mistral AI ➔ Kilo Code\n"
+                "**文字請求鏈**：Google AI Studio ➔ NVIDIA NIM ➔ Mistral AI\n"
                 "**圖片視覺鏈**：Google AI Studio ➔ NVIDIA NIM ➔ Mistral AI"
             ),
             color=0x818cf8,
@@ -580,10 +583,10 @@ class AI(commands.Cog):
     @app_commands.choices(
         model=[
             app_commands.Choice(name="auto (text, vision)", value="auto"),
-            app_commands.Choice(name="gemini-2.5-flash-lite (text, vision)", value="gemini:gemini-2.5-flash-lite"),
+            app_commands.Choice(name="gemini-flash-latest (text, vision)", value="gemini:gemini-flash-latest"),
+            app_commands.Choice(name="gemma-4-31b-it (text, vision)", value="gemini:gemma-4-31b-it"),
             app_commands.Choice(name="meta/llama-3.2-11b-vision-instruct (text, vision)", value="nvidia:meta/llama-3.2-11b-vision-instruct"),
             app_commands.Choice(name="ministral-8b-latest (text, vision)", value="mistral:ministral-8b-latest"),
-            app_commands.Choice(name="kilo-auto/free (text)", value="kilo:kilo-auto/free"),
         ]
     )
     async def ai_settings_command(

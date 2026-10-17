@@ -360,20 +360,34 @@ def _parse_github_api_commit(item: dict[str, Any]) -> Optional[dict[str, Any]]:
     )
 
 
+def _is_cache_commit(commit: dict[str, Any]) -> bool:
+    """判斷該 commit 是否為維護 commits_cache.json 的提交，以在網頁 /commit 頁面中自動忽略。"""
+    subject = str(commit.get('subject') or '').lower()
+    display_subject = str(commit.get('display_subject') or '').lower()
+    body = str(commit.get('body') or '').lower()
+    return (
+        'commits_cache' in subject
+        or 'commits_cache' in display_subject
+        or 'commits_cache' in body
+    )
+
+
 def _fetch_commits_from_local_git(limit: int = 10) -> list[dict[str, Any]]:
-    """嘗試從本機 .git 目錄執行 git log 取得 commit 紀錄。"""
+    """嘗試從本機 .git 目錄執行 git log 取得 commit 紀錄（自動忽略 commits_cache.json 相關提交）。"""
     git_dir = os.path.join(BASE_DIR, '.git')
     # 若本機非 git 儲存庫（如雲端主機/容器部屬未攜帶 .git），直接返回空清單，避免拋出 fatal 錯誤
     if not os.path.exists(git_dir):
         return []
 
     try:
+        # 讀取較多筆數以確保過濾 commits_cache 後仍有足夠數量的有效 commit
+        fetch_limit = max(50, limit * 4)
         res = subprocess.run(
             [
                 'git',
                 'log',
                 '-n',
-                str(limit),
+                str(fetch_limit),
                 '--format=%H%x1f%h%x1f%s%x1f%an%x1f%ad%x1f%aI%x1f%b%x1e',
                 '--date=format:%Y-%m-%d %H:%M:%S',
             ],
@@ -391,17 +405,20 @@ def _fetch_commits_from_local_git(limit: int = 10) -> list[dict[str, Any]]:
             if not record.strip():
                 continue
             item = _parse_commit_record(record)
-            if item:
+            if item and not _is_cache_commit(item):
                 commits.append(item)
+                if len(commits) >= limit:
+                    break
         return commits
     except Exception:
         return []
 
 
 def _fetch_commits_from_github_api(limit: int = 10) -> list[dict[str, Any]]:
-    """當伺服器無本機 .git 目錄時，透過 GitHub 官方公開 REST API 取得最新 commit。"""
+    """當伺服器無本機 .git 目錄時，透過 GitHub 官方公開 REST API 取得最新 commit（自動忽略 commits_cache.json）。"""
     try:
-        url = f"https://api.github.com/repos/Chien-JungSu/Discord-Bot/commits?per_page={max(1, limit)}"
+        fetch_limit = max(50, limit * 4)
+        url = f"https://api.github.com/repos/Chien-JungSu/Discord-Bot/commits?per_page={fetch_limit}"
         headers = {
             'User-Agent': 'Mozilla/5.0 (compatible; DiscordBot-CommitFetcher/1.0)',
             'Accept': 'application/vnd.github.v3+json',
@@ -417,8 +434,10 @@ def _fetch_commits_from_github_api(limit: int = 10) -> list[dict[str, Any]]:
                 commits: list[dict[str, Any]] = []
                 for item in data:
                     parsed = _parse_github_api_commit(item)
-                    if parsed:
+                    if parsed and not _is_cache_commit(parsed):
                         commits.append(parsed)
+                        if len(commits) >= limit:
+                            break
                 return commits
     except Exception:
         pass
@@ -426,13 +445,13 @@ def _fetch_commits_from_github_api(limit: int = 10) -> list[dict[str, Any]]:
 
 
 def _load_disk_cached_commits() -> list[dict[str, Any]]:
-    """從硬碟備援檔案讀取最後一次成功的 commit 快取。"""
+    """從硬碟備援檔案讀取最後一次成功的 commit 快取（自動過濾 commits_cache.json 相關項目）。"""
     if os.path.isfile(COMMITS_CACHE_FILE):
         try:
             with open(COMMITS_CACHE_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 if isinstance(data, list):
-                    return data
+                    return [c for c in data if not _is_cache_commit(c)]
         except Exception:
             pass
     return []
@@ -484,7 +503,7 @@ def get_latest_commits(limit: int = 10) -> list[dict[str, Any]]:
 @app.route('/commit')
 @app.route('/commits')
 def commits_page():
-    commits = get_latest_commits(10)
+    commits = [c for c in get_latest_commits(10) if not _is_cache_commit(c)]
     return render_template('commit.html', commits=commits)
 
 

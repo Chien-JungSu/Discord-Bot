@@ -80,11 +80,13 @@ def strip_thinking_tags(text: str) -> str:
 
 # 已停用或過期模型自動轉發對照表 (確保舊設定或資料庫殘留模型不致報 404/410)
 DEPRECATED_MODEL_MAPPING = {
-    "llama-3.3-70b-versatile": "openai/gpt-oss-120b",
+    "llama-3.3-70b-versatile": "meta/llama-3.2-11b-vision-instruct",
     "meta/llama-3.3-70b-instruct": "meta/llama-3.2-11b-vision-instruct",
-    "gemini-2.0-flash": "gemini-2.5-flash-lite",
-    "gemini-2.0-flash-exp:free": "gemini-2.5-flash-lite",
+    "gemini-2.5-flash-lite": "gemini-flash-latest",
+    "gemini-2.0-flash": "gemini-flash-latest",
+    "gemini-2.0-flash-exp:free": "gemini-flash-latest",
     "mistral-small-latest": "ministral-8b-latest",
+    "kilo-auto/free": "gemini-flash-latest",
     "openrouter/auto": "auto",
 }
 
@@ -116,7 +118,7 @@ class LLMProvider:
             if val:
                 return val
         if self.is_zero_key:
-            return "kilo-free-access"
+            return "zero-key-access"
         return ""
 
     def is_configured(self) -> bool:
@@ -147,7 +149,7 @@ class LLMProvider:
             self.client = AsyncOpenAI(
                 base_url=self.base_url,
                 api_key=api_key,
-                timeout=15.0,  # 嚴格 15 秒單次逾時限制
+                timeout=35.0,  # 寬裕 35 秒單次逾時限制
                 max_retries=0,  # 停用 SDK 內部重試，改由 Router 即時切換下游提供商
             )
         return self.client
@@ -156,7 +158,7 @@ class LLMProvider:
 class MultiProviderLLMRouter:
     """多供應商免費 LLM 智慧路由器與自動容錯容災 (Failover) 閘道。
 
-    文字請求鏈：Google AI Studio → NVIDIA NIM → Mistral AI → Kilo Code Gateway
+    文字請求鏈：Google AI Studio → NVIDIA NIM → Mistral AI
     視覺圖片鏈：Google AI Studio → NVIDIA NIM → Mistral AI
     """
 
@@ -168,9 +170,9 @@ class MultiProviderLLMRouter:
                 name="Google AI Studio (主要視覺/多模態)",
                 base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
                 env_keys=["GEMINI_API_KEY", "GOOGLE_API_KEY"],
-                default_text_model="gemini-2.5-flash-lite",
-                default_vision_model="gemini-2.5-flash-lite",
-                fallback_models=["gemini-flash-latest", "gemini-2.0-flash-lite"],
+                default_text_model="gemini-flash-latest",
+                default_vision_model="gemini-flash-latest",
+                fallback_models=["gemma-4-31b-it", "gemini-2.0-flash-lite"],
                 supports_vision=True,
                 rpm_limit_desc="15 ~ 30 RPM",
                 quota_desc="1,500 RPD (百萬超長 Context & 視覺分析)",
@@ -199,22 +201,10 @@ class MultiProviderLLMRouter:
                 rpm_limit_desc="60 RPM",
                 quota_desc="500K TPM (支援圖文雙模態)",
             ),
-            "kilo": LLMProvider(
-                id="kilo",
-                name="Kilo Code Gateway (備援通道 #3)",
-                base_url="https://api.kilo.ai/api/gateway",
-                env_keys=["KILO_API_KEY"],
-                default_text_model="kilo-auto/free",
-                default_vision_model=None,
-                supports_vision=False,
-                is_zero_key=False,
-                rpm_limit_desc="200 次/小時",
-                quota_desc="需配置 KILO_API_KEY 備援通道",
-            ),
         }
 
         # 預設優先容錯容災鏈
-        self.text_chain: List[str] = ["gemini", "nvidia", "mistral", "kilo"]
+        self.text_chain: List[str] = ["gemini", "nvidia", "mistral"]
         self.vision_chain: List[str] = ["gemini", "nvidia", "mistral"]
 
     def reload_env_keys(self) -> None:
@@ -252,7 +242,7 @@ class MultiProviderLLMRouter:
         self.reload_env_keys()
         result = []
         now = time.time()
-        for pid in ["gemini", "nvidia", "mistral", "kilo"]:
+        for pid in ["gemini", "nvidia", "mistral"]:
             p = self.providers[pid]
             is_configured = p.is_configured()
             is_cooldown = now < p.cooldown_until

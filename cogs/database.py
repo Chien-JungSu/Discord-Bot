@@ -420,7 +420,7 @@ def save_music_settings(data: dict):
 
 
 # ==============================================================================
-# AI Settings API (Multi-Provider Free LLM Architecture: Gemini / NVIDIA / Mistral / Kilo)
+# AI Settings API (Multi-Provider Free LLM Architecture: Gemini / NVIDIA / Mistral)
 # ==============================================================================
 
 DEFAULT_AI_MODEL = "auto"
@@ -440,10 +440,16 @@ AI_PROVIDER_MODELS = [
         "desc": "自動容錯容災鏈",
     },
     {
-        "id": "gemini:gemini-2.5-flash-lite",
+        "id": "gemini:gemini-flash-latest",
         "provider": "gemini",
-        "name": "gemini-2.5-flash-lite (text, vision)",
-        "desc": "Google Gemini",
+        "name": "gemini-flash-latest (text, vision)",
+        "desc": "Google Gemini (預設)",
+    },
+    {
+        "id": "gemini:gemma-4-31b-it",
+        "provider": "gemini",
+        "name": "gemma-4-31b-it (text, vision)",
+        "desc": "Google Gemma (備援)",
     },
     {
         "id": "nvidia:meta/llama-3.2-11b-vision-instruct",
@@ -457,12 +463,6 @@ AI_PROVIDER_MODELS = [
         "name": "ministral-8b-latest (text, vision)",
         "desc": "Mistral AI",
     },
-    {
-        "id": "kilo:kilo-auto/free",
-        "provider": "kilo",
-        "name": "kilo-auto/free (text)",
-        "desc": "Kilo Code Gateway",
-    },
 ]
 
 # 向下相容別名
@@ -471,18 +471,18 @@ OPENROUTER_FREE_MODELS = AI_PROVIDER_MODELS
 # 各模型對話計費費率倍數（基準：ai_cost_per_1k_tokens / 1,000）
 MODEL_TOKEN_RATES = {
     "auto": 1.0,
-    "gemini:gemini-2.5-flash-lite": 1.0,
-    "gemini-2.5-flash-lite": 1.0,
     "gemini:gemini-flash-latest": 1.0,
     "gemini-flash-latest": 1.0,
+    "gemini:gemma-4-31b-it": 1.0,
+    "gemma-4-31b-it": 1.0,
+    "gemini:gemini-2.5-flash-lite": 1.0,
+    "gemini-2.5-flash-lite": 1.0,
     "gemini:gemini-2.5-flash": 1.0,
     "gemini-2.5-flash": 1.0,
     "nvidia:meta/llama-3.2-11b-vision-instruct": 1.0,
     "meta/llama-3.2-11b-vision-instruct": 1.0,
     "mistral:ministral-8b-latest": 1.0,
     "ministral-8b-latest": 1.0,
-    "kilo:kilo-auto/free": 1.0,
-    "kilo-auto/free": 1.0,
     # 相容舊版模型名稱
     "groq:llama-3.3-70b-versatile": 1.0,
     "llama-3.3-70b-versatile": 1.0,

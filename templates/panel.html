@@ -432,7 +432,7 @@
             <div class="tag">AI Module</div>
             <h2>AI 智慧助手與多供應商配置</h2>
             <p class="pane-desc">
-              整合 Google AI Studio、NVIDIA NIM、Mistral AI 與 Kilo Code Gateway 等超高免費配額端點，具備動態容錯容災（Failover）與圖文雙模態解析能力。
+              整合 Google AI Studio、NVIDIA NIM 與 Mistral AI 等超高免費配額端點，具備動態容錯容災（Failover）與圖文雙模態解析能力。
             </p>
           </div>
 
@@ -460,16 +460,16 @@
               <label for="select-ai-model">預設免費 AI 引擎 (Multi-Provider LLM)</label>
               <select id="select-ai-model" class="form-control">
                 <option value="auto">auto (text, vision)</option>
-                <option value="gemini:gemini-2.5-flash-lite">gemini-2.5-flash-lite (text, vision)</option>
+                <option value="gemini:gemini-flash-latest">gemini-flash-latest (text, vision)</option>
+                <option value="gemini:gemma-4-31b-it">gemma-4-31b-it (text, vision)</option>
                 <option value="nvidia:meta/llama-3.2-11b-vision-instruct">meta/llama-3.2-11b-vision-instruct (text, vision)</option>
                 <option value="mistral:ministral-8b-latest">ministral-8b-latest (text, vision)</option>
-                <option value="kilo:kilo-auto/free">kilo-auto/free (text)</option>
                 <option value="custom">自訂模型</option>
               </select>
               <div id="ai-custom-model-wrap" style="display: none; margin-top: 8px;">
-                <input type="text" id="ai-custom-model-input" class="form-control" placeholder="輸入自訂模型 ID，例如：gemini-2.5-flash-lite" />
+                <input type="text" id="ai-custom-model-input" class="form-control" placeholder="輸入自訂模型 ID，例如：gemini-flash-latest" />
               </div>
-              <small class="form-hint">多供應商閘道支援 Google AI Studio、NVIDIA NIM、Mistral AI 與 Kilo Code 免費通道。</small>
+              <small class="form-hint">多供應商閘道支援 Google AI Studio、NVIDIA NIM 與 Mistral AI 免費通道。</small>
             </div>
 
             <div class="form-group">
