@@ -103,6 +103,8 @@ DEPRECATED_MODEL_MAPPING = {
     "gemini-2.0-flash": "gemini-flash-latest",
     "gemini-2.0-flash-exp:free": "gemini-flash-latest",
     "mistral-small-latest": "ministral-8b-latest",
+    "gemma-4-31b-it": "gemini-flash-latest",
+    "gemini:gemma-4-31b-it": "gemini-flash-latest",
     "kilo-auto/free": "gemini-flash-latest",
     "openrouter/auto": "auto",
 }
@@ -189,7 +191,7 @@ class MultiProviderLLMRouter:
                 env_keys=["GEMINI_API_KEY", "GOOGLE_API_KEY"],
                 default_text_model="gemini-flash-latest",
                 default_vision_model="gemini-flash-latest",
-                fallback_models=["gemma-4-31b-it", "gemini-2.0-flash-lite"],
+                fallback_models=["gemini-2.5-flash", "gemini-2.0-flash-lite"],
                 supports_vision=True,
                 rpm_limit_desc="15 ~ 30 RPM",
                 quota_desc="1,500 RPD (百萬超長 Context & 視覺分析)",

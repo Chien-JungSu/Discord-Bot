@@ -447,12 +447,6 @@ AI_PROVIDER_MODELS = [
         "desc": "Google Gemini (預設)",
     },
     {
-        "id": "gemini:gemma-4-31b-it",
-        "provider": "gemini",
-        "name": "gemma-4-31b-it (text, vision)",
-        "desc": "Google Gemma (備援)",
-    },
-    {
         "id": "nvidia:meta/llama-3.2-11b-vision-instruct",
         "provider": "nvidia",
         "name": "meta/llama-3.2-11b-vision-instruct (text, vision)",

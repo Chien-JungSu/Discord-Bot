@@ -200,7 +200,8 @@ class AI(commands.Cog):
             f"O {completion_tokens}C/{output_cost_str} | TC {total_cost_str} | "
             f"Pay {clean_payer} | {clean_model} | {thinking_time:.2f}s"
         )
-        footer_block = f"\n\n---\n-# {footer_text}"
+        divider = "─" * 36
+        footer_block = f"\n\n-# {divider}\n-# {footer_text}"
 
         # 內容保護 (Embed description 上限 4096 字元，預留分隔線與 footer 空間)
         max_content_len = 4096 - len(footer_block)
@@ -238,7 +239,6 @@ class AI(commands.Cog):
         provider=[
             app_commands.Choice(name="auto (text, vision)", value="auto"),
             app_commands.Choice(name="gemini-flash-latest (text, vision)", value="gemini"),
-            app_commands.Choice(name="gemma-4-31b-it (text, vision)", value="gemma"),
             app_commands.Choice(name="meta/llama-3.2-11b-vision-instruct (text, vision)", value="nvidia"),
             app_commands.Choice(name="ministral-8b-latest (text, vision)", value="mistral"),
         ]
@@ -349,10 +349,7 @@ class AI(commands.Cog):
         preferred_p = provider if (provider and provider != "auto") else None
         configured_model = str(cfg.get("model") or "auto")
         preferred_m = None
-        if preferred_p == "gemma":
-            preferred_p = "gemini"
-            preferred_m = "gemma-4-31b-it"
-        elif not preferred_p and configured_model != "auto":
+        if not preferred_p and configured_model != "auto":
             if ":" in configured_model:
                 parts = configured_model.split(":", 1)
                 preferred_p = parts[0]
@@ -584,7 +581,6 @@ class AI(commands.Cog):
         model=[
             app_commands.Choice(name="auto (text, vision)", value="auto"),
             app_commands.Choice(name="gemini-flash-latest (text, vision)", value="gemini:gemini-flash-latest"),
-            app_commands.Choice(name="gemma-4-31b-it (text, vision)", value="gemini:gemma-4-31b-it"),
             app_commands.Choice(name="meta/llama-3.2-11b-vision-instruct (text, vision)", value="nvidia:meta/llama-3.2-11b-vision-instruct"),
             app_commands.Choice(name="ministral-8b-latest (text, vision)", value="mistral:ministral-8b-latest"),
         ]

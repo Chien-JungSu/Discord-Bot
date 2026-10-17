@@ -716,7 +716,6 @@
       const presetModels = [
         'auto',
         'gemini:gemini-flash-latest',
-        'gemini:gemma-4-31b-it',
         'nvidia:meta/llama-3.2-11b-vision-instruct',
         'mistral:ministral-8b-latest',
       ];
