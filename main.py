@@ -114,7 +114,10 @@ class MyBot(commands.Bot):
         if not synced_commands:
             print(f"ℹ️ [{scope}] 本次沒有任何指令同步成功。")
             return
-        names = [cmd.name for cmd in synced_commands]
+        names = [
+            cmd.name for cmd in synced_commands
+            if getattr(cmd, 'type', discord.AppCommandType.chat_input) == discord.AppCommandType.chat_input
+        ]
         print(f"ℹ️ [{scope}] 已同步指令：{names}")
 
     async def on_connect(self):
