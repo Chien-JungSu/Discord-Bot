@@ -100,6 +100,7 @@ INITIAL_EXTENSIONS = [
     'cogs.tts',           # /tts 文字轉語音 (gTTS)
     'cogs.shortener',     # /shorten /reurl 短網址產生器 (reurl.cc API)
     'cogs.economy',       # /economy_daily /economy_hourly /economy_balance /economy_leaderboard /economy_pay /economy_slots /economy_gamble /economy_blackjack /economy_scratch /economy_admin 經濟系統
+    'cogs.ai',            # /ai /ai_config 智慧對話 (OpenRouter 免費模型)
 ]
 
 

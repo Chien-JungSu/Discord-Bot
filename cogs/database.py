@@ -135,6 +135,19 @@ def init_db():
             );
             """)
 
+            # 10. AI 智慧助手設定表 (OpenRouter 免費模型與個人化設定)
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS ai_settings (
+                guild_id TEXT PRIMARY KEY,
+                is_enabled INTEGER NOT NULL DEFAULT 1,
+                model TEXT NOT NULL DEFAULT 'openrouter/auto',
+                instruction TEXT,
+                channel_id INTEGER,
+                temperature REAL NOT NULL DEFAULT 0.7,
+                max_tokens INTEGER NOT NULL DEFAULT 1000
+            );
+            """)
+
             conn.commit()
 
             # ---------- 自動遷移既有 JSON 資料 ----------
@@ -376,6 +389,164 @@ def save_music_settings(data: dict):
                     INSERT INTO music_settings (guild_id, music_channel_id)
                     VALUES (?, ?)
                     """, (str(gid), val.get('music_channel_id')))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+# ==============================================================================
+# AI Settings API (OpenRouter Free Models & Personalization)
+# ==============================================================================
+
+DEFAULT_AI_MODEL = "openrouter/auto"
+DEFAULT_AI_INSTRUCTION = (
+    "你是由「炙彗」開發的 Discord 智慧 AI 助手「炙彗JI器人」。"
+    "請使用親切、禮貌且帶有一點幽默感的繁體中文回答問題，排版清晰美觀，善用條列式或粗體突顯重點。"
+)
+DEFAULT_AI_TEMPERATURE = 0.7
+DEFAULT_AI_MAX_TOKENS = 1000
+
+# OpenRouter 官方推薦免費模型清單
+OPENROUTER_FREE_MODELS = [
+    {
+        "id": "openrouter/auto",
+        "name": "✨ openrouter/auto (自動推薦最佳免費模型)",
+        "desc": "由 OpenRouter 自動分配當前可用、品質最高的免費模型",
+    },
+    {
+        "id": "meta-llama/llama-3.3-70b-instruct:free",
+        "name": "🦙 meta-llama/llama-3.3-70b-instruct:free",
+        "desc": "Meta Llama 3.3 旗艦 70B 模型，具備強大繁體中文理解與邏輯推理能力",
+    },
+    {
+        "id": "google/gemini-2.0-flash-exp:free",
+        "name": "⚡ google/gemini-2.0-flash-exp:free",
+        "desc": "Google Gemini 2.0 Flash 實驗版，超快回應速度與精準結構化回答",
+    },
+    {
+        "id": "deepseek/deepseek-r1:free",
+        "name": "🧠 deepseek/deepseek-r1:free",
+        "desc": "DeepSeek R1 深度思考推理開源模型，擅長複雜邏輯推導與數學程式",
+    },
+    {
+        "id": "deepseek/deepseek-chat:free",
+        "name": "💬 deepseek/deepseek-chat:free",
+        "desc": "DeepSeek V3 頂級對話模型，繁體中文自然流暢且多才多藝",
+    },
+    {
+        "id": "mistralai/mistral-small-24b-instruct-2501:free",
+        "name": "🌪️ mistralai/mistral-small-24b-instruct-2501:free",
+        "desc": "Mistral Small 24B 推理與文字創作精良",
+    },
+    {
+        "id": "meta-llama/llama-3.1-8b-instruct:free",
+        "name": "🚀 meta-llama/llama-3.1-8b-instruct:free",
+        "desc": "Llama 3.1 8B 輕量快速且穩定",
+    },
+    {
+        "id": "qwen/qwen-2.5-72b-instruct:free",
+        "name": "🌐 qwen/qwen-2.5-72b-instruct:free",
+        "desc": "阿里通義千問 Qwen 2.5 72B，中文語意與長文創作能力卓越",
+    },
+]
+
+
+def load_ai_settings() -> dict:
+    """讀取所有伺服器的 AI 設定。"""
+    init_db()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT guild_id, is_enabled, model, instruction, channel_id, temperature, max_tokens FROM ai_settings;"
+            )
+            res = {}
+            for row in cursor.fetchall():
+                res[str(row['guild_id'])] = {
+                    'is_enabled': bool(row['is_enabled']),
+                    'model': row['model'] or DEFAULT_AI_MODEL,
+                    'instruction': row['instruction'] if row['instruction'] is not None else DEFAULT_AI_INSTRUCTION,
+                    'channel_id': row['channel_id'],
+                    'temperature': float(row['temperature']) if row['temperature'] is not None else DEFAULT_AI_TEMPERATURE,
+                    'max_tokens': int(row['max_tokens']) if row['max_tokens'] is not None else DEFAULT_AI_MAX_TOKENS,
+                }
+            return res
+        finally:
+            conn.close()
+
+
+def get_guild_ai_settings(guild_id: str) -> dict:
+    """取得特定伺服器的 AI 設定（若未特別設定則套用系統預設）。"""
+    all_settings = load_ai_settings()
+    if str(guild_id) in all_settings:
+        return all_settings[str(guild_id)]
+    return {
+        'is_enabled': True,
+        'model': DEFAULT_AI_MODEL,
+        'instruction': DEFAULT_AI_INSTRUCTION,
+        'channel_id': None,
+        'temperature': DEFAULT_AI_TEMPERATURE,
+        'max_tokens': DEFAULT_AI_MAX_TOKENS,
+    }
+
+
+def save_guild_ai_settings(guild_id: str, settings: dict) -> None:
+    """儲存或更新指定伺服器的 AI 設定。"""
+    init_db()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            is_enabled = 1 if settings.get('is_enabled', True) else 0
+            model = str(settings.get('model') or DEFAULT_AI_MODEL).strip()
+            instruction = settings.get('instruction')
+            if instruction is None:
+                instruction = DEFAULT_AI_INSTRUCTION
+            else:
+                instruction = str(instruction).strip()
+
+            channel_id = settings.get('channel_id')
+            if channel_id:
+                try:
+                    channel_id = int(channel_id)
+                except (ValueError, TypeError):
+                    channel_id = None
+            else:
+                channel_id = None
+
+            try:
+                temperature = float(settings.get('temperature', DEFAULT_AI_TEMPERATURE))
+                temperature = max(0.0, min(1.0, temperature))
+            except (ValueError, TypeError):
+                temperature = DEFAULT_AI_TEMPERATURE
+
+            try:
+                max_tokens = int(settings.get('max_tokens', DEFAULT_AI_MAX_TOKENS))
+                max_tokens = max(100, min(2000, max_tokens))
+            except (ValueError, TypeError):
+                max_tokens = DEFAULT_AI_MAX_TOKENS
+
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO ai_settings (guild_id, is_enabled, model, instruction, channel_id, temperature, max_tokens)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (str(guild_id), is_enabled, model, instruction, channel_id, temperature, max_tokens),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def delete_guild_ai_settings(guild_id: str) -> None:
+    """清除伺服器 AI 設定（還原為預設值）。"""
+    init_db()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM ai_settings WHERE guild_id = ?;", (str(guild_id),))
             conn.commit()
         finally:
             conn.close()

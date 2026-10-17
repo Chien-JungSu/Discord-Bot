@@ -141,6 +141,7 @@
   const savedFormState = {
     welcome: null,
     music: null,
+    ai: null,
     ownerEconomy: null,
   };
 
@@ -197,6 +198,7 @@
     }
     const fWelcome = document.getElementById('form-welcome');
     const fMusic = document.getElementById('form-music');
+    const fAi = document.getElementById('form-ai');
     const fOwnerEcon = document.getElementById('form-owner-economy');
 
     const isOwnerMode = viewServerSettings.classList.contains('owner-mode');
@@ -206,7 +208,8 @@
     } else {
       dirty =
         isFormDirty(fWelcome, savedFormState.welcome) ||
-        isFormDirty(fMusic, savedFormState.music);
+        isFormDirty(fMusic, savedFormState.music) ||
+        isFormDirty(fAi, savedFormState.ai);
     }
     setUnsavedBarVisible(dirty);
   }
@@ -352,7 +355,7 @@
       currentReactionRoles = data.reaction_roles_messages || [];
 
       // 1. 填入下拉選單 (歡迎頻道、身分組等)
-      populateDropdowns(data.welcome, data.music);
+      populateDropdowns(data.welcome, data.music, data.ai);
 
       // 2. 渲染自動回覆規則清單
       renderAutoReplyRules(data.auto_reply_rules || []);
@@ -604,6 +607,7 @@
       'select-role-channel',
       'select-auto-role',
       'select-music-channel',
+      'select-ai-channel',
       'modal-rule-channel',
       'modal-rr-channel',
       'modal-rr-new-role',
@@ -617,12 +621,13 @@
     });
   }
 
-  function populateDropdowns(welcomeCfg = {}, musicCfg = {}) {
+  function populateDropdowns(welcomeCfg = {}, musicCfg = {}, aiCfg = {}) {
     const welcomeSelect = document.getElementById('select-welcome-channel');
     const rulesSelect = document.getElementById('select-rules-channel');
     const roleSelect = document.getElementById('select-role-channel');
     const autoRoleSelect = document.getElementById('select-auto-role');
     const musicSelect = document.getElementById('select-music-channel');
+    const aiChannelSelect = document.getElementById('select-ai-channel');
     const modalRuleChannelSelect = document.getElementById('modal-rule-channel');
     const modalRrChannelSelect = document.getElementById('modal-rr-channel');
 
@@ -642,6 +647,7 @@
     fillChannels(rulesSelect, welcomeCfg.rules_channel_id, '未指定（略過提及）');
     fillChannels(roleSelect, welcomeCfg.role_channel_id, '未指定（略過提及）');
     fillChannels(musicSelect, musicCfg.music_channel_id, '未綁定（所有頻道皆可使用）');
+    fillChannels(aiChannelSelect, aiCfg.channel_id, '未綁定（所有文字頻道皆可使用）');
     fillChannels(modalRuleChannelSelect, '', '全伺服器所有文字頻道生效');
     fillChannels(modalRrChannelSelect, welcomeCfg.role_channel_id || '', '請選擇要發送領取訊息的文字頻道');
 
@@ -656,9 +662,46 @@
       });
     }
 
+    // 填入 AI 智慧助手表單
+    const aiEnabled = document.getElementById('ai-enabled');
+    const aiModelSelect = document.getElementById('select-ai-model');
+    const aiCustomWrap = document.getElementById('ai-custom-model-wrap');
+    const aiCustomInput = document.getElementById('ai-custom-model-input');
+    const aiInstruction = document.getElementById('ai-instruction');
+    const aiTemp = document.getElementById('ai-temperature');
+    const aiTokens = document.getElementById('ai-max-tokens');
+
+    if (aiEnabled) aiEnabled.checked = aiCfg.is_enabled !== false;
+    if (aiModelSelect) {
+      const presetModels = [
+        'openrouter/auto',
+        'meta-llama/llama-3.3-70b-instruct:free',
+        'google/gemini-2.0-flash-exp:free',
+        'deepseek/deepseek-r1:free',
+        'deepseek/deepseek-chat:free',
+        'mistralai/mistral-small-24b-instruct-2501:free',
+        'meta-llama/llama-3.1-8b-instruct:free',
+        'qwen/qwen-2.5-72b-instruct:free',
+      ];
+      const modelVal = aiCfg.model || 'openrouter/auto';
+      if (presetModels.includes(modelVal)) {
+        aiModelSelect.value = modelVal;
+        if (aiCustomWrap) aiCustomWrap.style.display = 'none';
+        if (aiCustomInput) aiCustomInput.value = '';
+      } else {
+        aiModelSelect.value = 'custom';
+        if (aiCustomWrap) aiCustomWrap.style.display = 'block';
+        if (aiCustomInput) aiCustomInput.value = modelVal;
+      }
+    }
+    if (aiInstruction) aiInstruction.value = aiCfg.instruction || '';
+    if (aiTemp) aiTemp.value = aiCfg.temperature !== undefined ? aiCfg.temperature : 0.7;
+    if (aiTokens) aiTokens.value = aiCfg.max_tokens !== undefined ? aiCfg.max_tokens : 1000;
+
     refreshAllSearchableSelects();
     savedFormState.welcome = getFormState(document.getElementById('form-welcome'));
     savedFormState.music = getFormState(document.getElementById('form-music'));
+    savedFormState.ai = getFormState(document.getElementById('form-ai'));
     checkUnsavedChanges();
   }
 
@@ -803,6 +846,112 @@
               checkUnsavedChanges();
             } else {
               showToast(data.message || '操作失敗', 'error');
+            }
+          } catch (err) {
+            showToast('請求發生網路錯誤', 'error');
+          }
+        },
+      });
+    });
+  }
+
+  // ---------- AI 智慧助手與人設自訂 (AI Module) ----------
+  const formAi = document.getElementById('form-ai');
+  const selectAiModel = document.getElementById('select-ai-model');
+  const aiCustomWrap = document.getElementById('ai-custom-model-wrap');
+
+  if (selectAiModel && aiCustomWrap) {
+    selectAiModel.addEventListener('change', () => {
+      if (selectAiModel.value === 'custom') {
+        aiCustomWrap.style.display = 'block';
+        const inp = document.getElementById('ai-custom-model-input');
+        if (inp) inp.focus();
+      } else {
+        aiCustomWrap.style.display = 'none';
+      }
+      checkUnsavedChanges();
+    });
+  }
+
+  if (formAi) {
+    formAi.addEventListener('change', (e) => {
+      if (e.target && e.target.classList && e.target.classList.contains('searchable-select-input')) return;
+      checkUnsavedChanges();
+    });
+    formAi.addEventListener('input', (e) => {
+      if (e.target && e.target.classList && e.target.classList.contains('searchable-select-input')) return;
+      checkUnsavedChanges();
+    });
+    formAi.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (!currentGuildId) return;
+
+      const modelSelectVal = document.getElementById('select-ai-model').value;
+      const customModelVal = (document.getElementById('ai-custom-model-input').value || '').trim();
+      const finalModel = modelSelectVal === 'custom' ? (customModelVal || 'openrouter/auto') : modelSelectVal;
+
+      const payload = {
+        action: 'save',
+        is_enabled: document.getElementById('ai-enabled').checked,
+        model: finalModel,
+        channel_id: document.getElementById('select-ai-channel').value || null,
+        instruction: document.getElementById('ai-instruction').value,
+        temperature: parseFloat(document.getElementById('ai-temperature').value) || 0.7,
+        max_tokens: parseInt(document.getElementById('ai-max-tokens').value) || 1000,
+      };
+
+      try {
+        const res = await fetch(`/api/panel/guild/${currentGuildId}/ai`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          savedFormState.ai = getFormState(formAi);
+          checkUnsavedChanges();
+          showToast(data.message || 'AI 設定已成功儲存！');
+        } else {
+          showToast(data.message || '儲存失敗', 'error');
+        }
+      } catch (err) {
+        showToast('儲存請求發生網路錯誤', 'error');
+      }
+    });
+  }
+
+  const btnResetAi = document.getElementById('btn-reset-ai');
+  if (btnResetAi) {
+    btnResetAi.addEventListener('click', () => {
+      if (!currentGuildId) return;
+      showConfirmModal({
+        title: '⚠️ 確認重設 AI 設定',
+        message: '確定要將此伺服器的「AI 智慧助手與人設」還原為系統預設值嗎？自訂的人設指令將會被清除。',
+        confirmText: '確認重設',
+        cancelText: '取消',
+        onConfirm: async () => {
+          try {
+            const res = await fetch(`/api/panel/guild/${currentGuildId}/ai`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'reset' }),
+            });
+            const data = await res.json();
+            if (res.ok && data.ai) {
+              const ai = data.ai;
+              document.getElementById('ai-enabled').checked = ai.is_enabled;
+              document.getElementById('select-ai-model').value = ai.model || 'openrouter/auto';
+              if (aiCustomWrap) aiCustomWrap.style.display = 'none';
+              document.getElementById('select-ai-channel').value = ai.channel_id || '';
+              document.getElementById('ai-instruction').value = ai.instruction || '';
+              document.getElementById('ai-temperature').value = ai.temperature !== undefined ? ai.temperature : 0.7;
+              document.getElementById('ai-max-tokens').value = ai.max_tokens !== undefined ? ai.max_tokens : 1000;
+              refreshAllSearchableSelects();
+              savedFormState.ai = getFormState(formAi);
+              checkUnsavedChanges();
+              showToast(data.message || '已還原為預設設定');
+            } else {
+              showToast(data.message || '重設失敗', 'error');
             }
           } catch (err) {
             showToast('請求發生網路錯誤', 'error');
@@ -1812,6 +1961,13 @@
           formMusic.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
         }
       }
+      if (formAi && isFormDirty(formAi, savedFormState.ai)) {
+        if (typeof formAi.requestSubmit === 'function') {
+          formAi.requestSubmit();
+        } else {
+          formAi.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        }
+      }
     });
   }
 
@@ -1828,6 +1984,14 @@
         }
         if (formMusic && savedFormState.music) {
           applyFormState(formMusic, savedFormState.music);
+        }
+        if (formAi && savedFormState.ai) {
+          applyFormState(formAi, savedFormState.ai);
+          const sel = document.getElementById('select-ai-model');
+          const wrap = document.getElementById('ai-custom-model-wrap');
+          if (sel && wrap) {
+            wrap.style.display = sel.value === 'custom' ? 'block' : 'none';
+          }
         }
         refreshAllSearchableSelects();
       }

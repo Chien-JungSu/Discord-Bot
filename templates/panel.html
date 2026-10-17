@@ -286,6 +286,10 @@
             <span class="tab-icon">🎭</span>
             <span>表符身分組配置</span>
           </button>
+          <button class="nav-tab" data-tab="tab-ai">
+            <span class="tab-icon">🤖</span>
+            <span>AI 智慧助手設定</span>
+          </button>
           <button class="nav-tab" data-tab="tab-commands">
             <span class="tab-icon">📜</span>
             <span>可用指令狀態</span>
@@ -420,6 +424,81 @@
           <div id="reaction-roles-list-container" class="rr-cards-list">
             <div class="empty-rules-hint">載入中...</div>
           </div>
+        </div>
+
+        <!-- Tab: AI 智慧助手與人設自訂 -->
+        <div id="tab-ai" class="tab-pane">
+          <div class="pane-header">
+            <div class="tag">AI Module</div>
+            <h2>🤖 AI 智慧助手與人設自訂</h2>
+            <p class="pane-desc">
+              串接 OpenRouter 免費模型（Free Models），可在此自訂伺服器專屬的 AI 人設指令（System Instruction）、預設模型、專屬對話頻道與創意度。
+            </p>
+          </div>
+
+          <form id="form-ai" class="panel-form">
+            <div class="form-group checkbox-group">
+              <label class="custom-checkbox-label">
+                <input type="checkbox" id="ai-enabled" checked />
+                <span>啟用 AI 智慧問答功能（包含 <code>/ai</code> 指令與 <code>@機器人</code> 提及對話）</span>
+              </label>
+            </div>
+
+            <div class="form-group">
+              <label for="select-ai-model">🤖 預設免費 AI 模型 (OpenRouter Free Model)</label>
+              <select id="select-ai-model" class="form-control">
+                <option value="openrouter/auto">✨ openrouter/auto (自動推薦最佳免費模型，推薦)</option>
+                <option value="meta-llama/llama-3.3-70b-instruct:free">🦙 meta-llama/llama-3.3-70b-instruct:free (Llama 3.3 70B)</option>
+                <option value="google/gemini-2.0-flash-exp:free">⚡ google/gemini-2.0-flash-exp:free (Gemini 2.0 Flash)</option>
+                <option value="deepseek/deepseek-r1:free">🧠 deepseek/deepseek-r1:free (DeepSeek R1 推理模型)</option>
+                <option value="deepseek/deepseek-chat:free">💬 deepseek/deepseek-chat:free (DeepSeek V3)</option>
+                <option value="mistralai/mistral-small-24b-instruct-2501:free">🌪️ mistralai/mistral-small-24b-instruct-2501:free (Mistral Small 24B)</option>
+                <option value="meta-llama/llama-3.1-8b-instruct:free">🚀 meta-llama/llama-3.1-8b-instruct:free (Llama 3.1 8B 輕量快速)</option>
+                <option value="qwen/qwen-2.5-72b-instruct:free">🌐 qwen/qwen-2.5-72b-instruct:free (通義千問 Qwen 2.5 72B)</option>
+                <option value="custom">✏️ 自訂模型名稱 (輸入 OpenRouter 支援的模型 ID)</option>
+              </select>
+              <div id="ai-custom-model-wrap" style="display: none; margin-top: 8px;">
+                <input type="text" id="ai-custom-model-input" class="form-control" placeholder="輸入模型 ID，例如：nousresearch/hermes-3-llama-3.1-405b:free" />
+              </div>
+              <small class="form-hint">所有模型均串接自 <a href="https://openrouter.ai/openrouter/free" target="_blank" rel="noreferrer">OpenRouter Free Models</a>。</small>
+            </div>
+
+            <div class="form-group">
+              <label for="select-ai-channel">📢 專屬 AI 對話頻道 (AI Channel，可選)</label>
+              <select id="select-ai-channel" class="form-control">
+                <option value="">-- 未綁定（所有文字頻道皆可使用） --</option>
+              </select>
+              <small class="form-hint">設定後，成員僅能在該文字頻道使用 <code>/ai</code> 或標註機器人發問，保持其他頻道安靜。</small>
+            </div>
+
+            <div class="form-group">
+              <label for="ai-instruction">🎭 AI 人設指令 (System Instruction)</label>
+              <textarea id="ai-instruction" class="form-control" rows="4" placeholder="設定 AI 的角色設定、說話語氣、知識背景或回答規範..."></textarea>
+              <small class="form-hint">這段指令將作為 System Prompt 注入每次對話中，引導 AI 展現特定的性格與回答風格。</small>
+            </div>
+
+            <div class="form-row-2">
+              <div class="form-group">
+                <label for="ai-temperature">🌡️ 創意度 / 隨機度 (Temperature: 0.0 ~ 1.0)</label>
+                <input type="number" step="0.05" min="0" max="1" id="ai-temperature" class="form-control" value="0.7" />
+                <small class="form-hint">數值愈低回答愈嚴謹穩定，數值愈高回答愈生動豐富。預設 0.7。</small>
+              </div>
+              <div class="form-group">
+                <label for="ai-max-tokens">📏 最大回覆字數限制 (Max Tokens: 100 ~ 2000)</label>
+                <input type="number" min="100" max="2000" id="ai-max-tokens" class="form-control" value="1000" />
+                <small class="form-hint">限制單次回答的最大生成長度，避免過長超出 Discord 訊息上限。預設 1000。</small>
+              </div>
+            </div>
+
+            <div class="form-actions">
+              <button type="submit" class="btn btn-save-setting">
+                <span>儲存設定</span>
+              </button>
+              <button type="button" id="btn-reset-ai" class="btn btn-clear-setting">
+                <span>重設為預設值</span>
+              </button>
+            </div>
+          </form>
         </div>
 
         <!-- Tab 5: 可用指令清單 -->

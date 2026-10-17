@@ -30,6 +30,7 @@ load_dotenv(os.path.join(BASE_DIR, '.env'))
 from cogs.database import (
     get_daily_api_usage,
     get_economy_user,
+    get_guild_ai_settings,
     init_db,
     load_auto_reply_settings,
     load_economy_config,
@@ -38,6 +39,8 @@ from cogs.database import (
     load_welcome_settings,
     save_auto_reply_settings,
     save_economy_config,
+    save_guild_ai_settings,
+    delete_guild_ai_settings,
     save_music_settings,
     save_reaction_roles,
     save_welcome_settings,
@@ -566,6 +569,8 @@ def get_guild_data(guild_id: str):
         {"name": "/economy_gamble", "description": "擲硬幣或骰子賭金幣", "category": "Economy", "permission": "所有成員"},
         {"name": "/economy_blackjack", "description": "21點小遊戲挑戰莊家", "category": "Economy", "permission": "所有成員"},
         {"name": "/economy_scratch", "description": "九宮格刮刮樂小遊戲", "category": "Economy", "permission": "所有成員"},
+        {"name": "/ai", "description": "向 OpenRouter 免費 AI 模型發問與智慧對話", "category": "AI", "permission": "所有成員"},
+        {"name": "/ai_config", "description": "查看伺服器當前 AI 人設與模型配置", "category": "AI", "permission": "所有成員"},
     ]
 
     # 關鍵防護：管理員專用指令 (owner_guild_only) 絕對不對一般使用者顯示，且僅在擁有者檢視專屬伺服器時附加
@@ -575,6 +580,8 @@ def get_guild_data(guild_id: str):
             {"name": "/reload_cogs", "description": "線上熱重載指定 Cog 模組並同步指令樹", "category": "Owner / System", "permission": "管理員", "owner_guild_only": True},
             {"name": "/economy_admin", "description": "開啟經濟系統參數控制面板與管理使用者金幣", "category": "Owner / Economy", "permission": "管理員", "owner_guild_only": True},
         ])
+
+    ai_cfg = get_guild_ai_settings(str(guild_id))
 
     return jsonify({
         'status': 'ok',
@@ -593,9 +600,77 @@ def get_guild_data(guild_id: str):
         'music': {
             'music_channel_id': str(music_cfg.get('music_channel_id') or ''),
         },
+        'ai': {
+            'is_enabled': bool(ai_cfg.get('is_enabled', True)),
+            'model': str(ai_cfg.get('model') or 'openrouter/auto'),
+            'instruction': str(ai_cfg.get('instruction') or ''),
+            'channel_id': str(ai_cfg.get('channel_id') or ''),
+            'temperature': float(ai_cfg.get('temperature', 0.7)),
+            'max_tokens': int(ai_cfg.get('max_tokens', 1000)),
+        },
         'auto_reply_rules': auto_reply_rules,
         'reaction_roles_messages': reaction_messages,
         'commands': commands_list,
+    })
+
+
+@panel_bp.route('/api/panel/guild/<guild_id>/ai', methods=['POST'])
+def save_guild_ai(guild_id: str):
+    """儲存或重設伺服器的 AI 智慧助手與人設配置 (OpenRouter)。"""
+    if not can_manage_guild(guild_id):
+        return jsonify({'status': 'error', 'message': '權限不足'}), 403
+
+    payload = request.get_json(silent=True) or {}
+    action = payload.get('action', 'save')
+
+    if action in ('clear', 'reset'):
+        delete_guild_ai_settings(str(guild_id))
+        _sync_cog_settings('AI')
+        updated = get_guild_ai_settings(str(guild_id))
+        return jsonify({
+            'status': 'ok',
+            'message': 'AI 設定已成功重設為系統預設值！',
+            'ai': {
+                'is_enabled': bool(updated.get('is_enabled', True)),
+                'model': str(updated.get('model') or 'openrouter/auto'),
+                'instruction': str(updated.get('instruction') or ''),
+                'channel_id': str(updated.get('channel_id') or ''),
+                'temperature': float(updated.get('temperature', 0.7)),
+                'max_tokens': int(updated.get('max_tokens', 1000)),
+            },
+        })
+
+    is_enabled = bool(payload.get('is_enabled', True))
+    model = str(payload.get('model') or '').strip()
+    instruction = payload.get('instruction')
+    channel_id = payload.get('channel_id')
+    temperature = payload.get('temperature')
+    max_tokens = payload.get('max_tokens')
+
+    settings = {
+        'is_enabled': is_enabled,
+        'model': model,
+        'instruction': instruction,
+        'channel_id': channel_id,
+        'temperature': temperature,
+        'max_tokens': max_tokens,
+    }
+
+    save_guild_ai_settings(str(guild_id), settings)
+    _sync_cog_settings('AI')
+    updated = get_guild_ai_settings(str(guild_id))
+
+    return jsonify({
+        'status': 'ok',
+        'message': 'AI 智慧助手與人設個人化設定已成功儲存！',
+        'ai': {
+            'is_enabled': bool(updated.get('is_enabled', True)),
+            'model': str(updated.get('model') or 'openrouter/auto'),
+            'instruction': str(updated.get('instruction') or ''),
+            'channel_id': str(updated.get('channel_id') or ''),
+            'temperature': float(updated.get('temperature', 0.7)),
+            'max_tokens': int(updated.get('max_tokens', 1000)),
+        },
     })
 
 
