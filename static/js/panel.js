@@ -253,6 +253,247 @@
     }
   }
 
+  // ---------- 可輸入即時搜尋下拉選單 (Searchable Combobox) ----------
+  function enhanceSearchableSelect(selectEl) {
+    if (!selectEl) return;
+    if (typeof selectEl._searchableSync === 'function') {
+      selectEl._searchableSync();
+      return;
+    }
+
+    const wrap = document.createElement('div');
+    wrap.className = 'searchable-select-wrap';
+    selectEl.parentNode.insertBefore(wrap, selectEl);
+    wrap.appendChild(selectEl);
+    selectEl.style.display = 'none';
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'form-control searchable-select-input';
+    input.autocomplete = 'off';
+    input.spellcheck = false;
+
+    const menu = document.createElement('div');
+    menu.className = 'searchable-select-menu';
+
+    wrap.appendChild(input);
+    wrap.appendChild(menu);
+
+    if (selectEl.id) {
+      const assocLabel = document.querySelector(`label[for="${selectEl.id}"]`);
+      if (assocLabel) {
+        assocLabel.addEventListener('click', (e) => {
+          e.preventDefault();
+          input.focus();
+        });
+      }
+    }
+
+    let highlightedIndex = -1;
+
+    function getSelectedLabel() {
+      const opts = Array.from(selectEl.options);
+      const found = opts.find((o) => String(o.value) === String(selectEl.value)) || opts[0];
+      return found ? found.textContent : '';
+    }
+
+    function syncDisplayFromSelect() {
+      const label = getSelectedLabel();
+      if (!wrap.classList.contains('is-open')) {
+        input.value = label;
+        input.placeholder = label || '輸入關鍵字搜尋...';
+      }
+    }
+
+    function renderMenu(query = '') {
+      const q = String(query || '').trim().toLowerCase();
+      const allOptions = Array.from(selectEl.options);
+      const filtered = q
+        ? allOptions.filter(
+            (o) =>
+              o.textContent.toLowerCase().includes(q) ||
+              String(o.value).toLowerCase().includes(q)
+          )
+        : allOptions;
+
+      menu.innerHTML = '';
+      if (filtered.length === 0) {
+        const emptyEl = document.createElement('div');
+        emptyEl.className = 'searchable-select-empty';
+        emptyEl.textContent = `找不到符合「${query.trim()}」的選項`;
+        menu.appendChild(emptyEl);
+        return;
+      }
+
+      if (highlightedIndex >= filtered.length) {
+        highlightedIndex = filtered.length - 1;
+      }
+
+      filtered.forEach((opt, i) => {
+        const item = document.createElement('div');
+        item.className = 'searchable-select-option';
+        if (String(opt.value) === String(selectEl.value)) {
+          item.classList.add('is-selected');
+        }
+        if (i === highlightedIndex) {
+          item.classList.add('is-highlighted');
+        }
+        item.dataset.value = opt.value;
+        item.textContent = opt.textContent;
+
+        item.addEventListener('mousedown', (e) => {
+          e.preventDefault();
+          selectOption(opt.value);
+        });
+
+        menu.appendChild(item);
+      });
+    }
+
+    function openMenu() {
+      document.querySelectorAll('.searchable-select-wrap.is-open').forEach((otherWrap) => {
+        if (otherWrap !== wrap) {
+          otherWrap.classList.remove('is-open');
+          const sel = otherWrap.querySelector('select');
+          if (sel && typeof sel._searchableSync === 'function') {
+            sel._searchableSync();
+          }
+        }
+      });
+
+      const rect = input.getBoundingClientRect();
+      const modalBody = input.closest('.modal-body');
+      const containerBottom = modalBody
+        ? modalBody.getBoundingClientRect().bottom
+        : window.innerHeight;
+      const spaceBelow = containerBottom - rect.bottom;
+      menu.classList.toggle('flip-up', spaceBelow < 180 && rect.top > 200);
+
+      wrap.classList.add('is-open');
+      const currentLabel = getSelectedLabel();
+      input.placeholder = currentLabel || '輸入關鍵字搜尋...';
+      input.value = '';
+      highlightedIndex = -1;
+      renderMenu('');
+
+      const selectedItem = menu.querySelector('.searchable-select-option.is-selected');
+      if (selectedItem && selectedItem.scrollIntoView) {
+        selectedItem.scrollIntoView({ block: 'nearest' });
+      }
+    }
+
+    function closeMenu() {
+      if (!wrap.classList.contains('is-open')) return;
+      wrap.classList.remove('is-open');
+      syncDisplayFromSelect();
+    }
+
+    function selectOption(val) {
+      selectEl.value = val;
+      selectEl.dispatchEvent(new Event('change', { bubbles: true }));
+      closeMenu();
+      input.blur();
+    }
+
+    input.addEventListener('focus', () => {
+      if (!wrap.classList.contains('is-open')) {
+        openMenu();
+      }
+    });
+
+    input.addEventListener('click', () => {
+      if (!wrap.classList.contains('is-open')) {
+        openMenu();
+      }
+    });
+
+    input.addEventListener('input', () => {
+      if (!wrap.classList.contains('is-open')) {
+        wrap.classList.add('is-open');
+      }
+      highlightedIndex = 0;
+      renderMenu(input.value);
+    });
+
+    input.addEventListener('keydown', (e) => {
+      const items = menu.querySelectorAll('.searchable-select-option');
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        if (!wrap.classList.contains('is-open')) {
+          openMenu();
+          return;
+        }
+        if (items.length > 0) {
+          highlightedIndex = (highlightedIndex + 1) % items.length;
+          items.forEach((el, idx) => el.classList.toggle('is-highlighted', idx === highlightedIndex));
+          if (items[highlightedIndex] && items[highlightedIndex].scrollIntoView) {
+            items[highlightedIndex].scrollIntoView({ block: 'nearest' });
+          }
+        }
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (!wrap.classList.contains('is-open')) {
+          openMenu();
+          return;
+        }
+        if (items.length > 0) {
+          highlightedIndex = (highlightedIndex - 1 + items.length) % items.length;
+          items.forEach((el, idx) => el.classList.toggle('is-highlighted', idx === highlightedIndex));
+          if (items[highlightedIndex] && items[highlightedIndex].scrollIntoView) {
+            items[highlightedIndex].scrollIntoView({ block: 'nearest' });
+          }
+        }
+      } else if (e.key === 'Enter') {
+        if (wrap.classList.contains('is-open')) {
+          e.preventDefault();
+          const target = items[highlightedIndex >= 0 ? highlightedIndex : 0];
+          if (target) {
+            selectOption(target.dataset.value);
+          } else {
+            closeMenu();
+            input.blur();
+          }
+        }
+      } else if (e.key === 'Escape') {
+        if (wrap.classList.contains('is-open')) {
+          e.preventDefault();
+          e.stopPropagation();
+          closeMenu();
+          input.blur();
+        }
+      }
+    });
+
+    input.addEventListener('blur', () => {
+      setTimeout(() => {
+        closeMenu();
+      }, 120);
+    });
+
+    selectEl._searchableSync = syncDisplayFromSelect;
+    syncDisplayFromSelect();
+  }
+
+  function refreshAllSearchableSelects() {
+    const ids = [
+      'select-welcome-channel',
+      'select-rules-channel',
+      'select-role-channel',
+      'select-auto-role',
+      'select-music-channel',
+      'modal-rule-channel',
+      'modal-rr-channel',
+      'modal-rr-new-role',
+    ];
+    ids.forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) enhanceSearchableSelect(el);
+    });
+    document.querySelectorAll('.rr-draft-role-select').forEach((el) => {
+      enhanceSearchableSelect(el);
+    });
+  }
+
   function populateDropdowns(welcomeCfg = {}, musicCfg = {}) {
     const welcomeSelect = document.getElementById('select-welcome-channel');
     const rulesSelect = document.getElementById('select-rules-channel');
@@ -291,6 +532,8 @@
         autoRoleSelect.appendChild(opt);
       });
     }
+
+    refreshAllSearchableSelects();
   }
 
   // ---------- 歡迎訊息設定儲存與清除 ----------
@@ -349,6 +592,7 @@
               document.getElementById('select-rules-channel').value = '';
               document.getElementById('select-role-channel').value = '';
               document.getElementById('select-auto-role').value = '';
+              refreshAllSearchableSelects();
             } else {
               showToast(data.message || '清除失敗', 'error');
             }
@@ -406,6 +650,7 @@
             if (res.ok) {
               showToast(data.message || '已解除頻道綁定');
               document.getElementById('select-music-channel').value = '';
+              refreshAllSearchableSelects();
             } else {
               showToast(data.message || '操作失敗', 'error');
             }
@@ -598,6 +843,7 @@
     }
 
     renderRuleReplyBlocks();
+    refreshAllSearchableSelects();
     modalAutoReply.style.display = 'flex';
   }
 
@@ -906,6 +1152,8 @@
         renderRrDraftPairs();
       });
     });
+
+    refreshAllSearchableSelects();
   }
 
   function populateRrModalRoleAndEmojis() {
@@ -918,6 +1166,7 @@
         modalRrNewRole.appendChild(opt);
       });
     }
+    refreshAllSearchableSelects();
 
     if (modalRrEmojiPicker && modalRrEmojiPickerWrap) {
       // 收集伺服器自訂表符以及現有設定中的自訂表符
@@ -991,6 +1240,7 @@
       if (modalRrNewEmoji) modalRrNewEmoji.value = '';
       if (modalRrNewRole) modalRrNewRole.value = '';
       renderRrDraftPairs();
+      refreshAllSearchableSelects();
     });
   }
 
