@@ -101,3 +101,4 @@ class ChannelConversationMemoryManager:
 
 # 全域單例對話記憶體實例
 memory_manager = ChannelConversationMemoryManager(max_history=15)
+

@@ -321,11 +321,27 @@ class AI(commands.Cog):
 
         # 7. 呼叫 Multi-Provider Router 執行生成
         preferred_p = provider if (provider and provider != "auto") else None
+        configured_model = str(cfg.get("model") or "auto")
+        preferred_m = None
+        if not preferred_p and configured_model != "auto":
+            if ":" in configured_model:
+                parts = configured_model.split(":", 1)
+                preferred_p = parts[0]
+                preferred_m = parts[1]
+            else:
+                preferred_m = configured_model
+        elif preferred_p and configured_model != "auto":
+            if ":" in configured_model:
+                parts = configured_model.split(":", 1)
+                if parts[0] == preferred_p:
+                    preferred_m = parts[1]
+
         response_text, error_msg, stats = await router.generate_chat_completion(
             context_messages,
             system_instruction=instruction,
             image_url=img_url,
             preferred_provider_id=preferred_p,
+            preferred_model=preferred_m,
             temperature=temperature,
             max_tokens=max_tokens,
         )
@@ -741,6 +757,18 @@ class AI(commands.Cog):
         user_name = message.author.display_name or message.author.name
         context_messages.append({"role": "user", "content": clean_content or "請分析這張圖片"})
 
+        # 解析伺服器預設模型與提供商
+        configured_model = str(cfg.get("model") or "auto")
+        configured_p = None
+        configured_m = None
+        if configured_model != "auto":
+            if ":" in configured_model:
+                parts = configured_model.split(":", 1)
+                configured_p = parts[0]
+                configured_m = parts[1]
+            else:
+                configured_m = configured_model
+
         # 打字動態與調用 Router
         try:
             async with message.channel.typing():
@@ -748,6 +776,8 @@ class AI(commands.Cog):
                     context_messages,
                     system_instruction=instruction,
                     image_url=img_url,
+                    preferred_provider_id=configured_p,
+                    preferred_model=configured_m,
                     temperature=temperature,
                     max_tokens=max_tokens,
                 )

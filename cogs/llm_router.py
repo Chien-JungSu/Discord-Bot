@@ -16,12 +16,24 @@ from openai import (
     APITimeoutError,
     AsyncOpenAI,
     AuthenticationError,
+    NotFoundError,
     PermissionDeniedError,
     RateLimitError,
 )
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(BASE_DIR, '.env'))
+
+
+def safe_log(msg: str) -> None:
+    """安全日誌輸出函式，避免在 Windows cp950 終端因 Emoji 拋出 UnicodeEncodeError。"""
+    try:
+        print(msg)
+    except UnicodeEncodeError:
+        try:
+            print(msg.encode('ascii', errors='replace').decode('ascii'))
+        except Exception:
+            pass
 
 
 def strip_thinking_tags(text: str) -> str:
@@ -32,6 +44,17 @@ def strip_thinking_tags(text: str) -> str:
     return cleaned if cleaned else text.strip()
 
 
+# 已停用或過期模型自動轉發對照表 (確保舊設定或資料庫殘留模型不致報 404/410)
+DEPRECATED_MODEL_MAPPING = {
+    "llama-3.3-70b-versatile": "openai/gpt-oss-120b",
+    "meta/llama-3.3-70b-instruct": "meta/llama-3.2-11b-vision-instruct",
+    "gemini-2.0-flash": "gemini-flash-latest",
+    "gemini-2.0-flash-exp:free": "gemini-flash-latest",
+    "mistral-small-latest": "ministral-8b-latest",
+    "openrouter/auto": "auto",
+}
+
+
 @dataclass
 class LLMProvider:
     id: str
@@ -40,8 +63,9 @@ class LLMProvider:
     env_keys: List[str]
     default_text_model: str
     default_vision_model: Optional[str] = None
+    fallback_models: List[str] = field(default_factory=list)
     supports_vision: bool = False
-    is_zero_key: bool = False  # 是否支援無需 API Key 直接調用 (如 Kilo Code Gateway)
+    is_zero_key: bool = False  # 是否支援無需 API Key 直接調用 (如未配置則略過)
     rpm_limit_desc: str = ""
     quota_desc: str = ""
     cooldown_until: float = 0.0
@@ -110,30 +134,33 @@ class MultiProviderLLMRouter:
                 name="⚡ Groq (LPU 極速引擎)",
                 base_url="https://api.groq.com/openai/v1",
                 env_keys=["GROQ_API_KEY"],
-                default_text_model="llama-3.3-70b-versatile",
-                default_vision_model="llama-3.2-11b-vision-preview",
+                default_text_model="openai/gpt-oss-120b",
+                default_vision_model="openai/gpt-oss-120b",
+                fallback_models=["openai/gpt-oss-20b", "qwen/qwen3.8-27b"],
                 supports_vision=True,
                 rpm_limit_desc="30 RPM",
-                quota_desc="1,000 ~ 14,400 RPD (極低 LPU 延遲)",
+                quota_desc="1,000 ~ 14,400 RPD (LPU 極速開源旗艦)",
             ),
             "nvidia": LLMProvider(
                 id="nvidia",
                 name="🚀 NVIDIA NIM (大容量備援 #1)",
                 base_url="https://integrate.api.nvidia.com/v1",
                 env_keys=["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"],
-                default_text_model="meta/llama-3.3-70b-instruct",
-                default_vision_model=None,
-                supports_vision=False,
+                default_text_model="meta/llama-3.2-11b-vision-instruct",
+                default_vision_model="meta/llama-3.2-11b-vision-instruct",
+                fallback_models=["meta/llama-3.2-90b-vision-instruct", "meta/llama2-70b"],
+                supports_vision=True,
                 rpm_limit_desc="40 RPM",
-                quota_desc="10,000 RPD (高併發流量吸收)",
+                quota_desc="10,000 RPD (圖文雙模態支援)",
             ),
             "mistral": LLMProvider(
                 id="mistral",
                 name="🌪️ Mistral AI (突發與視覺備援 #2)",
                 base_url="https://api.mistral.ai/v1",
                 env_keys=["MISTRAL_API_KEY"],
-                default_text_model="mistral-small-latest",
-                default_vision_model="pixtral-12b-2409",
+                default_text_model="ministral-8b-latest",
+                default_vision_model="ministral-8b-latest",
+                fallback_models=["mistral-small-latest", "ministral-14b-latest"],
                 supports_vision=True,
                 rpm_limit_desc="60 RPM",
                 quota_desc="500K TPM (支援圖文雙模態)",
@@ -143,29 +170,30 @@ class MultiProviderLLMRouter:
                 name="🔮 Google AI Studio (主要視覺/多模態)",
                 base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
                 env_keys=["GEMINI_API_KEY", "GOOGLE_API_KEY"],
-                default_text_model="gemini-2.0-flash",
-                default_vision_model="gemini-2.0-flash",
+                default_text_model="gemini-flash-latest",
+                default_vision_model="gemini-flash-latest",
+                fallback_models=["gemini-2.5-flash", "gemini-3-flash-preview"],
                 supports_vision=True,
                 rpm_limit_desc="15 ~ 30 RPM",
                 quota_desc="1,500 RPD (百萬超長 Context & 視覺分析)",
             ),
             "kilo": LLMProvider(
                 id="kilo",
-                name="🛡️ Kilo Code Gateway (免金鑰應急備援 #3)",
+                name="🛡️ Kilo Code Gateway (備援通道 #3)",
                 base_url="https://api.kilo.ai/api/gateway",
                 env_keys=["KILO_API_KEY"],
                 default_text_model="kilo-auto/free",
                 default_vision_model=None,
                 supports_vision=False,
-                is_zero_key=True,
+                is_zero_key=False,
                 rpm_limit_desc="200 次/小時",
-                quota_desc="免填 Key 應急備援，額度耗盡時無縫兜底",
+                quota_desc="需配置 KILO_API_KEY 備援通道",
             ),
         }
 
         # 預設優先容錯容災鏈
         self.text_chain: List[str] = ["groq", "nvidia", "mistral", "gemini", "kilo"]
-        self.vision_chain: List[str] = ["gemini", "mistral", "groq"]
+        self.vision_chain: List[str] = ["gemini", "nvidia", "mistral", "groq"]
 
     def reload_env_keys(self) -> None:
         """重新載入 .env 檔案並更新各提供商的 Client 連線狀態。"""
@@ -281,6 +309,10 @@ class MultiProviderLLMRouter:
         start_time = time.perf_counter()
         is_vision = bool(image_url)
 
+        # 0. 自動對照轉發過期或停用模型 (如舊設定或資料庫殘留)
+        if preferred_model and preferred_model in DEPRECATED_MODEL_MAPPING:
+            preferred_model = DEPRECATED_MODEL_MAPPING[preferred_model]
+
         # 1. 圖片處理：嘗試將 Discord URL 轉為 Base64 Data URI
         final_image_data_uri: Optional[str] = None
         if image_url:
@@ -315,7 +347,7 @@ class MultiProviderLLMRouter:
                 None,
                 "⚠️ **沒有可用的 AI 提供商**\n"
                 "目前沒有配置任何有效的 API Key（例如 `GROQ_API_KEY`、`GEMINI_API_KEY`、`NVIDIA_API_KEY`、`MISTRAL_API_KEY`），"
-                "且應急免金鑰通道目前無法連線。請至控制面板或主機 `.env` 配置至少一組免費金鑰！",
+                "且備援通道目前無法連線。請至控制面板或主機 `.env` 配置至少一組免費金鑰！",
                 {
                     "provider": "None",
                     "model": "None",
@@ -330,90 +362,129 @@ class MultiProviderLLMRouter:
 
         # 4. 依序容錯嘗試
         for prov in candidate_providers:
-            prov_model = prov.default_vision_model if (is_vision and prov.default_vision_model) else prov.default_text_model
-            # 如果使用者指定了非預設 model 且符合該 provider
-            if preferred_model and preferred_provider_id == prov.id:
-                prov_model = preferred_model
-
             client = prov.get_client()
             attempt_start = time.perf_counter()
             prov.total_calls += 1
 
-            try:
-                # 嚴格 15.0 秒單次請求逾時
-                async with asyncio.timeout(15.0):
-                    response = await client.chat.completions.create(
-                        model=prov_model,
-                        messages=formatted_messages,
-                        temperature=temperature,
-                        max_tokens=max_tokens,
-                    )
+            # 決定優先嘗試之模型與備用模型清單
+            base_model = prov.default_vision_model if (is_vision and prov.default_vision_model) else prov.default_text_model
+            if preferred_model and preferred_provider_id == prov.id:
+                base_model = preferred_model
 
-                elapsed = time.perf_counter() - start_time
-                choice = response.choices[0] if response.choices else None
-                if not choice or not choice.message:
-                    raise ValueError(f"提供商 {prov.name} 未回傳有效 choices")
+            models_to_try = [base_model]
+            for fb in prov.fallback_models:
+                if fb not in models_to_try:
+                    models_to_try.append(fb)
 
-                raw_content = choice.message.content or ""
-                clean_content = strip_thinking_tags(raw_content)
+            provider_exhausted = False
+            for model_attempt_idx, prov_model in enumerate(models_to_try):
+                try:
+                    # 嚴格 15.0 秒單次請求逾時
+                    async with asyncio.timeout(15.0):
+                        response = await client.chat.completions.create(
+                            model=prov_model,
+                            messages=formatted_messages,
+                            temperature=temperature,
+                            max_tokens=max_tokens,
+                        )
 
-                if not clean_content:
-                    raise ValueError("AI 回傳之有效文字為空")
+                    elapsed = time.perf_counter() - start_time
+                    choice = response.choices[0] if response.choices else None
+                    if not choice or not choice.message:
+                        raise ValueError(f"提供商 {prov.name} 未回傳有效 choices")
 
-                # 讀取 Token 統計
-                usage = getattr(response, "usage", None)
-                prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
-                completion_tokens = getattr(usage, "completion_tokens", 0) or 0
-                total_tokens = getattr(usage, "total_tokens", 0) or (prompt_tokens + completion_tokens)
+                    raw_content = choice.message.content or ""
+                    clean_content = strip_thinking_tags(raw_content)
 
-                if total_tokens <= 0:
-                    total_tokens = max(1, len(clean_content) // 2 + 50)
+                    if not clean_content:
+                        raise ValueError("AI 回傳之有效文字為空")
 
-                prov.clear_cooldown()
+                    # 讀取 Token 統計
+                    usage = getattr(response, "usage", None)
+                    prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
+                    completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+                    total_tokens = getattr(usage, "total_tokens", 0) or (prompt_tokens + completion_tokens)
 
-                stats = {
-                    "provider_id": prov.id,
-                    "provider_name": prov.name,
-                    "model": prov_model,
-                    "thinking_time": elapsed,
-                    "prompt_tokens": prompt_tokens,
-                    "completion_tokens": completion_tokens,
-                    "total_tokens": total_tokens,
-                    "failover_history": failover_history,
-                    "is_multimodal": is_vision,
-                }
-                return clean_content, None, stats
+                    if total_tokens <= 0:
+                        total_tokens = max(1, len(clean_content) // 2 + 50)
 
-            except RateLimitError as rle:
-                err_str = f"HTTP 429 Rate Limit ({rle})"
-                failover_history.append(f"{prov.name} (429 觸發冷卻 60s)")
-                prov.mark_cooldown(60.0, err_str)
-                last_error_details = err_str
-                print(f"⚠️ [LLM Router] {prov.name} 遇到 429 速率限制，標記冷卻並切換下一提供商...")
-                continue
+                    prov.clear_cooldown()
 
-            except (APITimeoutError, asyncio.TimeoutError) as toe:
-                err_str = f"請求逾時 (>15.0s: {toe})"
-                failover_history.append(f"{prov.name} (逾時 15s)")
-                prov.mark_cooldown(45.0, err_str)
-                last_error_details = err_str
-                print(f"⚠️ [LLM Router] {prov.name} 請求逾時，切換下一提供商...")
-                continue
+                    stats = {
+                        "provider_id": prov.id,
+                        "provider_name": prov.name,
+                        "model": prov_model,
+                        "thinking_time": elapsed,
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": completion_tokens,
+                        "total_tokens": total_tokens,
+                        "failover_history": failover_history,
+                        "is_multimodal": is_vision,
+                    }
+                    return clean_content, None, stats
 
-            except (AuthenticationError, PermissionDeniedError) as auth_err:
-                err_str = f"金鑰無效或權限錯誤 ({auth_err})"
-                failover_history.append(f"{prov.name} (金鑰失效)")
-                prov.mark_cooldown(300.0, err_str)
-                last_error_details = err_str
-                print(f"⚠️ [LLM Router] {prov.name} 認證失敗，請檢查金鑰配置...")
-                continue
+                except (NotFoundError, APIStatusError) as status_err:
+                    status_code = getattr(status_err, 'status_code', None) or getattr(status_err, 'code', None)
+                    # 遇 404 (Model Not Found)、410 (Model Gone/Retired) 或 503 時，若仍有備用模型，嘗試下一模型
+                    if status_code in (404, 410, 503) and model_attempt_idx < len(models_to_try) - 1:
+                        safe_log(f"⚠️ [LLM Router] {prov.name} 模型 {prov_model} 暫不可用 (HTTP {status_code})，嘗試備用模型...")
+                        continue
 
-            except (APIStatusError, APIConnectionError, Exception) as gen_err:
-                err_str = f"連線或服務端錯誤 ({gen_err})"
-                failover_history.append(f"{prov.name} (錯誤: {type(gen_err).__name__})")
-                prov.mark_cooldown(45.0, err_str)
-                last_error_details = str(gen_err)
-                print(f"⚠️ [LLM Router] {prov.name} 調用失敗: {gen_err}")
+                    # 若為 429 速率限制
+                    if status_code == 429:
+                        err_str = f"HTTP 429 Rate Limit ({status_err})"
+                        failover_history.append(f"{prov.name} (429 觸發冷卻 60s)")
+                        prov.mark_cooldown(60.0, err_str)
+                        last_error_details = err_str
+                        safe_log(f"⚠️ [LLM Router] {prov.name} 遇到 429 速率限制，標記冷卻並切換下一提供商...")
+                        provider_exhausted = True
+                        break
+
+                    err_str = f"連線或服務端錯誤 (HTTP {status_code}: {status_err})"
+                    failover_history.append(f"{prov.name} (HTTP {status_code})")
+                    prov.mark_cooldown(45.0, err_str)
+                    last_error_details = str(status_err)
+                    safe_log(f"⚠️ [LLM Router] {prov.name} 調用失敗: {status_err}")
+                    provider_exhausted = True
+                    break
+
+                except RateLimitError as rle:
+                    err_str = f"HTTP 429 Rate Limit ({rle})"
+                    failover_history.append(f"{prov.name} (429 觸發冷卻 60s)")
+                    prov.mark_cooldown(60.0, err_str)
+                    last_error_details = err_str
+                    safe_log(f"⚠️ [LLM Router] {prov.name} 遇到 429 速率限制，標記冷卻並切換下一提供商...")
+                    provider_exhausted = True
+                    break
+
+                except (APITimeoutError, asyncio.TimeoutError) as toe:
+                    err_str = f"請求逾時 (>15.0s: {toe})"
+                    failover_history.append(f"{prov.name} (逾時 15s)")
+                    prov.mark_cooldown(45.0, err_str)
+                    last_error_details = err_str
+                    safe_log(f"⚠️ [LLM Router] {prov.name} 請求逾時，切換下一提供商...")
+                    provider_exhausted = True
+                    break
+
+                except (AuthenticationError, PermissionDeniedError) as auth_err:
+                    err_str = f"金鑰無效或權限錯誤 ({auth_err})"
+                    failover_history.append(f"{prov.name} (金鑰失效)")
+                    prov.mark_cooldown(300.0, err_str)
+                    last_error_details = err_str
+                    safe_log(f"⚠️ [LLM Router] {prov.name} 認證失敗，請檢查金鑰配置...")
+                    provider_exhausted = True
+                    break
+
+                except Exception as gen_err:
+                    err_str = f"連線或服務端錯誤 ({gen_err})"
+                    failover_history.append(f"{prov.name} (錯誤: {type(gen_err).__name__})")
+                    prov.mark_cooldown(45.0, err_str)
+                    last_error_details = str(gen_err)
+                    safe_log(f"⚠️ [LLM Router] {prov.name} 調用失敗: {gen_err}")
+                    provider_exhausted = True
+                    break
+
+            if provider_exhausted:
                 continue
 
         # 5. 若所有提供商均嘗試失敗
@@ -440,3 +511,4 @@ class MultiProviderLLMRouter:
 
 # 全域單例路由器實例
 router = MultiProviderLLMRouter()
+

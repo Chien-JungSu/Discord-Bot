@@ -440,34 +440,34 @@ AI_PROVIDER_MODELS = [
         "desc": "自動按優先級與速率限制智慧切換，遇 429 或故障 0 秒自動無縫容災",
     },
     {
-        "id": "groq:llama-3.3-70b-versatile",
+        "id": "groq:openai/gpt-oss-120b",
         "provider": "groq",
-        "name": "⚡ Groq · Llama 3.3 70B Versatile",
-        "desc": "LPU 超高速推理，30 RPM / 14,400 RPD，群聊互動即時秒回",
+        "name": "⚡ Groq · GPT-OSS 120B (LPU 極速開源旗艦)",
+        "desc": "LPU 超高速推理，開源 120B 旗艦大模型，群聊秒回",
     },
     {
-        "id": "gemini:gemini-2.0-flash",
+        "id": "gemini:gemini-flash-latest",
         "provider": "gemini",
-        "name": "🔮 Google · Gemini 2.0 Flash (圖文雙模態)",
-        "desc": "支援 Discord 圖片與迷因分析、百萬長上下文，超強結構化繁體中文",
+        "name": "🔮 Google · Gemini Flash (圖文雙模態 & 最新穩定版)",
+        "desc": "支援 Discord 圖片與長文本分析，百萬超長上下文與精準繁體中文",
     },
     {
-        "id": "nvidia:meta/llama-3.3-70b-instruct",
+        "id": "nvidia:meta/llama-3.2-11b-vision-instruct",
         "provider": "nvidia",
-        "name": "🚀 NVIDIA NIM · Llama 3.3 70B Instruct",
-        "desc": "40 RPM / 10,000 RPD，大容量併發備援通道",
+        "name": "🚀 NVIDIA NIM · Llama 3.2 11B Vision Instruct",
+        "desc": "40 RPM，同時支援文字與圖片多模態理解之高併發備援通道",
     },
     {
-        "id": "mistral:mistral-small-latest",
+        "id": "mistral:ministral-8b-latest",
         "provider": "mistral",
-        "name": "🌪️ Mistral AI · Mistral Small (支援圖文)",
-        "desc": "60 RPM，歐洲頂級開源模型，支援文字與圖片分析",
+        "name": "🌪️ Mistral AI · Ministral 8B (歐洲開源旗艦)",
+        "desc": "60 RPM，歐洲頂級開源模型，繁體中文與邏輯理解優秀",
     },
     {
         "id": "kilo:kilo-auto/free",
         "provider": "kilo",
-        "name": "🛡️ Kilo Code Gateway · 免金鑰應急備援 (Zero-Key)",
-        "desc": "無需配置金鑰，其餘配額耗盡時無縫自動接管",
+        "name": "🛡️ Kilo Code Gateway · 備援通道",
+        "desc": "需配置 KILO_API_KEY，作為額外備援通道",
     },
 ]
 
@@ -477,6 +477,19 @@ OPENROUTER_FREE_MODELS = AI_PROVIDER_MODELS
 # 各模型對話計費費率倍數（基準：ai_cost_per_1k_tokens / 1,000）
 MODEL_TOKEN_RATES = {
     "auto": 1.0,
+    "groq:openai/gpt-oss-120b": 1.0,
+    "openai/gpt-oss-120b": 1.0,
+    "gemini:gemini-flash-latest": 1.0,
+    "gemini-flash-latest": 1.0,
+    "gemini:gemini-2.5-flash": 1.0,
+    "gemini-2.5-flash": 1.0,
+    "nvidia:meta/llama-3.2-11b-vision-instruct": 1.0,
+    "meta/llama-3.2-11b-vision-instruct": 1.0,
+    "mistral:ministral-8b-latest": 1.0,
+    "ministral-8b-latest": 1.0,
+    "kilo:kilo-auto/free": 1.0,
+    "kilo-auto/free": 1.0,
+    # 相容舊版模型名稱
     "groq:llama-3.3-70b-versatile": 1.0,
     "llama-3.3-70b-versatile": 1.0,
     "gemini:gemini-2.0-flash": 1.0,
@@ -485,8 +498,6 @@ MODEL_TOKEN_RATES = {
     "meta/llama-3.3-70b-instruct": 1.2,
     "mistral:mistral-small-latest": 1.0,
     "mistral-small-latest": 1.0,
-    "kilo:kilo-auto/free": 0.8,
-    "kilo-auto/free": 0.8,
     "openrouter/auto": 1.0,
 }
 

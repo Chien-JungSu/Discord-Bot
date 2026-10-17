@@ -702,10 +702,10 @@
     if (aiModelSelect) {
       const presetModels = [
         'auto',
-        'groq:llama-3.3-70b-versatile',
-        'gemini:gemini-2.0-flash',
-        'nvidia:meta/llama-3.3-70b-instruct',
-        'mistral:mistral-small-latest',
+        'groq:openai/gpt-oss-120b',
+        'gemini:gemini-flash-latest',
+        'nvidia:meta/llama-3.2-11b-vision-instruct',
+        'mistral:ministral-8b-latest',
         'kilo:kilo-auto/free',
       ];
       const modelVal = aiCfg.model || 'auto';
