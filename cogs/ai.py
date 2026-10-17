@@ -7,13 +7,13 @@ import time
 import traceback
 from typing import Any, Dict, List, Optional
 
-import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 
 from cogs.database import (
+    AI_PROVIDER_MODELS,
     DEFAULT_AI_INSTRUCTION,
     DEFAULT_AI_MAX_TOKENS,
     DEFAULT_AI_MODEL,
@@ -29,27 +29,96 @@ from cogs.database import (
     set_user_ai_points,
     update_user_ai_points,
 )
+from cogs.llm_router import router
+from cogs.memory import memory_manager
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(BASE_DIR, '.env'))
 
-OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+def split_message_chunks(text: str, max_chars: int = 1900) -> List[str]:
+    """將長文本切割為不超過 max_chars 的區塊，若在程式碼區塊內斷開則自動補齊關閉與開啟 code fence。"""
+    if len(text) <= max_chars:
+        return [text]
+
+    chunks = []
+    lines = text.split("\n")
+    current_chunk = []
+    current_len = 0
+    in_code_block = False
+    code_lang = ""
+
+    for line in lines:
+        line_len = len(line) + 1  # 包含換行符
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            if not in_code_block:
+                in_code_block = True
+                code_lang = stripped[3:].strip()
+            else:
+                in_code_block = False
+                code_lang = ""
+
+        if current_len + line_len > max_chars and current_chunk:
+            if in_code_block:
+                current_chunk.append("```")
+            chunks.append("\n".join(current_chunk))
+            current_chunk = []
+            if in_code_block:
+                current_chunk.append(f"```{code_lang}")
+                current_len = len(current_chunk[0]) + 1
+            else:
+                current_len = 0
+
+        current_chunk.append(line)
+        current_len += line_len
+
+    if current_chunk:
+        chunks.append("\n".join(current_chunk))
+
+    return chunks
+
+
+class AIChannelActionView(discord.ui.View):
+    """回覆下方的互動按鈕：控制面板連結 + 一鍵清除對話記憶。"""
+
+    def __init__(self, guild_id: Optional[int], channel_id: int):
+        super().__init__(timeout=300)
+        self.guild_id = guild_id
+        self.channel_id = channel_id
+        if guild_id:
+            self.add_item(build_panel_link_button(guild_id, label="🌐 控制面板 AI 設定"))
+
+    @discord.ui.button(label="🧹 清除頻道記憶", style=discord.ButtonStyle.secondary, emoji="🧹")
+    async def clear_memory_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        count = memory_manager.clear_channel(self.channel_id)
+        button.disabled = True
+        button.label = "已清除記憶"
+        button.style = discord.ButtonStyle.danger
+        await interaction.response.edit_message(view=self)
+        await interaction.followup.send(
+            f"🧹 **已成功清除本頻道最近 {count} 則對話記憶！** 下一次對話將開啟全新上下文。",
+            ephemeral=True,
+        )
 
 
 class AI(commands.Cog):
-    """OpenRouter 免費 AI 模型整合模組，提供 /ai 指令與 @機器人 提及智慧對話功能。"""
+    """多供應商免費 LLM 智慧對話模組 (Groq / Gemini / NVIDIA / Mistral / Kilo)。
+
+    支援文字/視覺圖片雙模態、自動限速 429 容錯容災輪詢、每頻道 15 則滑動視窗記憶與經濟系統 AI 貨幣計費。
+    """
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self._session: Optional[aiohttp.ClientSession] = None
         self._settings_cache: Dict[str, Dict[str, Any]] = {}
         self.reload_settings()
 
     def reload_settings(self) -> None:
-        """重新載入所有伺服器的 AI 設定至記憶體快取（由控制面板儲存後調用同步）。"""
+        """重新載入所有伺服器的 AI 設定至記憶體快取。"""
         try:
             load_dotenv(os.path.join(BASE_DIR, '.env'), override=True)
             self._settings_cache = load_ai_settings()
+            router.reload_env_keys()
         except Exception as exc:
             print(f"⚠️ 載入 AI 設定失敗: {exc}")
             self._settings_cache = {}
@@ -73,214 +142,97 @@ class AI(commands.Cog):
         self._settings_cache[gid_str] = cfg
         return cfg
 
-    async def _get_session(self) -> aiohttp.ClientSession:
-        """取得或建立 aiohttp.ClientSession。"""
-        if self._session is None or self._session.closed:
-            timeout = aiohttp.ClientTimeout(total=45.0, connect=10.0)
-            self._session = aiohttp.ClientSession(timeout=timeout)
-        return self._session
-
     async def cog_unload(self) -> None:
-        """Cog 卸載時安全關閉 aiohttp 連線池。"""
-        if self._session and not self._session.closed:
-            await self._session.close()
+        """Cog 卸載時安全關閉 router 連線資源。"""
+        await router.close()
 
     def _build_ai_embed(
         self,
         response_text: str,
         prompt: str,
-        model: str,
         stats: dict[str, Any],
         cost: int,
         payer_id: int,
         is_guild_sponsored: bool,
         new_balance: int,
+        image_url: Optional[str] = None,
     ) -> discord.Embed:
-        """依需求建立包含模型名稱、Token消耗、思考時間與支付者的美觀 Embed 回覆。"""
+        """依需求建立包含提供商、模型名稱、Token消耗、思考時間、容災紀錄與支付者的美觀 Embed 回覆。"""
         display_question = prompt if len(prompt) <= 250 else f"{prompt[:247]}..."
         embed = discord.Embed(
             title="🤖 炙彗 AI 智慧回覆",
             description=response_text if len(response_text) <= 3900 else response_text[:3900],
             color=0x7dd3fc,
         )
-        embed.add_field(name="💬 提問", value=display_question, inline=False)
+        embed.add_field(name="💬 提問", value=display_question or "（圖片提問）", inline=False)
 
         payer_text = f"<@{payer_id}> (伺服器贊助)" if is_guild_sponsored else f"<@{payer_id}>"
+        provider_name = stats.get("provider_name", "AI Engine")
+        model_name = stats.get("model", "auto")
+        thinking_time = stats.get("thinking_time", 0.0)
+        total_tokens = stats.get("total_tokens", 0)
+        failovers = stats.get("failover_history", [])
+
         meta_lines = [
-            f"• **模型名稱**：`{model}`",
-            f"• **使用 Token 數量**：`{stats.get('total_tokens', 0):,}` (提示: {stats.get('prompt_tokens', 0):,} / 回覆: {stats.get('completion_tokens', 0):,})",
-            f"• **思考時間**：`{stats.get('thinking_time', 0.0):.2f} 秒`",
+            f"• **執行提供商**：`{provider_name}` (`{model_name}`)",
+            f"• **消耗 Tokens**：`{total_tokens:,}` (提示: {stats.get('prompt_tokens', 0):,} / 生成: {stats.get('completion_tokens', 0):,})",
+            f"• **運算耗時**：`{thinking_time:.2f} 秒`",
             f"• **扣除費用**：`{cost:,}` ⚡AI幣 (支付者: {payer_text} · 剩餘: `{new_balance:,}` 點)",
         ]
+
+        if failovers:
+            meta_lines.append(f"• **自動容災轉移**：{' ➔ '.join(failovers)}")
+
+        if image_url:
+            meta_lines.append("• **多模態模式**：🖼️ 已解析圖片內容")
+
         embed.add_field(name="📊 運算統計與計費", value="\n".join(meta_lines), inline=False)
+        if image_url:
+            embed.set_thumbnail(url=image_url)
+
         embed.set_footer(
-            text=f"模型: {model} · 串接自 OpenRouter",
+            text=f"多供應商自動容錯容災閘道 · 炙彗JI器人",
             icon_url=self.bot.user.display_avatar.url if self.bot.user else None,
         )
         return embed
 
-    async def call_openrouter(
-        self,
-        prompt: str,
-        *,
-        model: str,
-        instruction: str,
-        temperature: float,
-        max_tokens: int,
-    ) -> tuple[Optional[str], Optional[str], dict[str, Any]]:
-        """向 OpenRouter API 發送 chat completion 請求並記錄思考時間與 Token 統計。
-
-        回傳：(ai_response_text, error_message, stats_dict)
-        """
-        start_time = time.perf_counter()
-        default_stats = {
-            "prompt_tokens": max(1, len(prompt) // 2),
-            "completion_tokens": 0,
-            "total_tokens": max(1, len(prompt) // 2),
-            "thinking_time": 0.0,
-        }
-
-        api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
-        if not api_key:
-            load_dotenv(os.path.join(BASE_DIR, '.env'), override=True)
-            api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
-
-        if not api_key:
-            return (
-                None,
-                "⚠️ **伺服器尚未設定 OpenRouter API Key**\n"
-                "請伺服器擁有者在主機 `.env` 檔案中加入 `OPENROUTER_API_KEY=你的金鑰` 後重新啟動或重載機器人。\n"
-                "可至 [OpenRouter Free Models](https://openrouter.ai/openrouter/free) 免費獲取與使用！",
-                default_stats,
-            )
-
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://patricksu.nkhost.dev",
-            "X-Title": "炙彗JI器人",
-        }
-
-        messages: List[Dict[str, str]] = []
-        if instruction and instruction.strip():
-            messages.append({"role": "system", "content": instruction.strip()})
-        messages.append({"role": "user", "content": prompt})
-
-        payload = {
-            "model": model,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        }
-
-        try:
-            session = await self._get_session()
-            async with session.post(OPENROUTER_API_URL, headers=headers, json=payload) as resp:
-                elapsed = time.perf_counter() - start_time
-                status_code = resp.status
-                if status_code == 200:
-                    data = await resp.json()
-                    choices = data.get("choices") or []
-                    if not choices:
-                        return None, "⚠️ OpenRouter 未回傳任何文字內容，請稍候重試。", default_stats
-                    message = choices[0].get("message") or {}
-                    content = (message.get("content") or "").strip()
-                    if not content and message.get("reasoning"):
-                        content = str(message.get("reasoning")).strip()
-                    if not content:
-                        return None, "⚠️ AI 回應內容為空，請嘗試換個提問方式。", default_stats
-
-                    usage = data.get("usage") or {}
-                    prompt_tokens = usage.get("prompt_tokens")
-                    completion_tokens = usage.get("completion_tokens")
-                    total_tokens = usage.get("total_tokens")
-
-                    if total_tokens is None:
-                        prompt_tokens = max(1, len(prompt) // 2)
-                        completion_tokens = max(1, len(content) // 2)
-                        total_tokens = prompt_tokens + completion_tokens
-
-                    stats = {
-                        "prompt_tokens": int(prompt_tokens or 0),
-                        "completion_tokens": int(completion_tokens or 0),
-                        "total_tokens": int(total_tokens or 0),
-                        "thinking_time": elapsed,
-                    }
-                    return content, None, stats
-
-                default_stats["thinking_time"] = elapsed
-                if status_code == 401:
-                    return None, "❌ **OpenRouter 認證失敗 (401 Unauthorized)**\n請確認 `.env` 中的 `OPENROUTER_API_KEY` 是否有效正確。", default_stats
-                elif status_code == 402:
-                    return (
-                        None,
-                        "💳 **OpenRouter 帳號額度不足 / 反濫用限制 (402 Payment Required)**\n"
-                        "• **原因**：OpenRouter 針對免費模型實施反濫用安全規範，API Key 所在帳號需曾儲值過至少一次（如最低 $5 美元）以驗證帳號真實性。\n"
-                        "• **解決方式**：請前往 [OpenRouter 額度設定](https://openrouter.ai/settings/credits) 購買點數以解鎖 API 調用權限，並確認使用的 API Key 與組織 (Org) 正確無誤。\n"
-                        "• 若使用免費模型，也請確認模型名稱帶有 `:free` 標籤。",
-                        default_stats,
-                    )
-                elif status_code == 429:
-                    return None, "⏳ **OpenRouter 請求頻率過高 (429 Rate Limit)**\n當前免費模型請求次數已達短期上限，請稍候 30 秒再試！", default_stats
-                elif status_code == 404:
-                    return None, f"❌ **找不到指定模型 (404 Not Found)**\n模型 `{model}` 可能已下線或名稱有誤，建議切換為其他模型。", default_stats
-                else:
-                    err_body = await resp.text()
-                    try:
-                        err_json = await resp.json()
-                        err_msg = err_json.get("error", {}).get("message") or err_body[:200]
-                    except Exception:
-                        err_msg = err_body[:200]
-                    return None, f"⚠️ OpenRouter 回傳錯誤 (HTTP {status_code}):\n```{err_msg}```", default_stats
-
-        except asyncio.TimeoutError:
-            default_stats["thinking_time"] = time.perf_counter() - start_time
-            return None, "⏱️ **AI 回應逾時**：OpenRouter 伺服器忙碌中或正在排隊，請稍候再試。", default_stats
-        except aiohttp.ClientError as exc:
-            default_stats["thinking_time"] = time.perf_counter() - start_time
-            return None, f"🌐 **網路連線異常**：無法連線至 OpenRouter 伺服器 ({exc})。", default_stats
-        except Exception as exc:
-            traceback.print_exc()
-            default_stats["thinking_time"] = time.perf_counter() - start_time
-            return None, f"💥 **發生未預期錯誤**：`{exc}`", default_stats
-
     # ==========================================================================
-    # /ai 斜線指令
+    # /ai 斜線指令 (支援文字與圖片附件)
     # ==========================================================================
 
-    @app_commands.command(name="ai", description="向 OpenRouter 免費 AI 模型發問與智慧對話")
+    @app_commands.command(name="ai", description="向免費 AI 智慧多供應商閘道發問（支援文字與圖片雙模態）")
     @app_commands.describe(
         prompt="你想詢問 AI 的問題或對話內容",
-        model="臨時指定 OpenRouter 模型 (留空則使用本伺服器控制面板預設設定)",
+        image="可選附帶圖片（支援 PNG/JPG/WebP/GIF，自動啟用視覺多模態分析）",
+        provider="臨時指定優先使用的 AI 提供商 (預設 auto 自動容錯容災鏈)",
         system_prompt="臨時覆蓋本次回答的 AI 人設指令 (留空則使用伺服器預設)",
     )
     @app_commands.choices(
-        model=[
-            app_commands.Choice(name="✨ openrouter/auto (自動推薦最佳免費模型)", value="openrouter/auto"),
-            app_commands.Choice(name="🦙 meta-llama/llama-3.3-70b-instruct:free", value="meta-llama/llama-3.3-70b-instruct:free"),
-            app_commands.Choice(name="⚡ google/gemini-2.0-flash-exp:free", value="google/gemini-2.0-flash-exp:free"),
-            app_commands.Choice(name="🧠 deepseek/deepseek-r1:free (深度思考推理)", value="deepseek/deepseek-r1:free"),
-            app_commands.Choice(name="💬 deepseek/deepseek-chat:free (DeepSeek V3)", value="deepseek/deepseek-chat:free"),
-            app_commands.Choice(name="🌪️ mistralai/mistral-small-24b-instruct-2501:free", value="mistralai/mistral-small-24b-instruct-2501:free"),
-            app_commands.Choice(name="🚀 meta-llama/llama-3.1-8b-instruct:free (輕量快速)", value="meta-llama/llama-3.1-8b-instruct:free"),
-            app_commands.Choice(name="🌐 qwen/qwen-2.5-72b-instruct:free (通義千問)", value="qwen/qwen-2.5-72b-instruct:free"),
+        provider=[
+            app_commands.Choice(name="✨ auto (自動智慧容錯鏈：Groq → NVIDIA → Mistral → Gemini → Kilo)", value="auto"),
+            app_commands.Choice(name="⚡ Groq (LPU 極速推理，支援 Llama 3.3 70B)", value="groq"),
+            app_commands.Choice(name="🔮 Google AI Studio (Gemini 2.0 Flash 視覺/長文本)", value="gemini"),
+            app_commands.Choice(name="🚀 NVIDIA NIM (Llama 3.3 70B 大容量併發)", value="nvidia"),
+            app_commands.Choice(name="🌪️ Mistral AI (Mistral Small / Pixtral 歐洲開源)", value="mistral"),
+            app_commands.Choice(name="🛡️ Kilo Code Gateway (免金鑰應急備援)", value="kilo"),
         ]
     )
     async def ai_command(
         self,
         interaction: discord.Interaction,
         prompt: str,
-        model: Optional[str] = None,
+        image: Optional[discord.Attachment] = None,
+        provider: Optional[str] = "auto",
         system_prompt: Optional[str] = None,
     ):
         clean_prompt = prompt.strip()
-        if not clean_prompt:
-            await interaction.response.send_message("❌ 請輸入有效的提問內容！", ephemeral=True)
+        if not clean_prompt and not image:
+            await interaction.response.send_message("❌ 請輸入提問內容或上傳圖片！", ephemeral=True)
             return
 
         guild_id = interaction.guild_id
 
-        # 0. 封測階段伺服器授權檢查 (限量測試階段，預設僅開放 Owner Guild 與獲授權之伺服器)
+        # 0. 封測階段伺服器授權檢查
         if not is_guild_ai_authorized(guild_id):
             panel_view = build_panel_link_view(guild_id) if guild_id else None
             embed_unauth = discord.Embed(
@@ -288,8 +240,8 @@ class AI(commands.Cog):
                 description=(
                     "⚠️ **本伺服器尚未獲得 AI 智慧問答功能的封測使用授權。**\n\n"
                     "💡 **封測說明**：\n"
-                    "• 因目前處於初階測試階段且免費模型具備 API 請求頻率上限，目前預設僅開放給機器人擁有者伺服器。\n"
-                    "• 如需開通此功能，請聯繫機器人管理員至後台控制面板發放本伺服器的 AI 封測授權！"
+                    "• 因目前處於初階測試階段且各免費 API 具備頻率上限，目前預設僅開放給機器人擁有者伺服器。\n"
+                    "• 如需開通本伺服器權限，請聯繫機器人擁有者至後台控制面板發放封測授權！"
                 ),
                 color=0xf59e0b,
             )
@@ -312,21 +264,20 @@ class AI(commands.Cog):
         # 2. 檢查專屬頻道限制
         allowed_channel_id = cfg.get("channel_id")
         if allowed_channel_id and interaction.channel_id != allowed_channel_id:
-            ch_mention = f"<#{allowed_channel_id}>"
             await interaction.response.send_message(
-                f"🔒 本伺服器已設定 AI 專屬點歌/對話頻道，請至 {ch_mention} 使用 `/ai` 指令！",
+                f"🔒 本伺服器已設定 AI 專屬點歌/對話頻道，請至 <#{allowed_channel_id}> 使用 `/ai` 指令！",
                 ephemeral=True,
             )
             return
 
-        # 3. 檢查 AI 專屬貨幣餘額 (根據伺服器是否有指定支付者)
+        # 3. 檢查 AI 專屬貨幣餘額
         payer_id = int(cfg.get("payer_user_id") or interaction.user.id)
         is_guild_sponsored = bool(cfg.get("payer_user_id"))
         current_points = get_user_ai_points(payer_id)
 
         if current_points <= 0:
             payer_mention = f"伺服器指定贊助者 (<@{payer_id}>)" if is_guild_sponsored else f"你 (<@{payer_id}>)"
-            panel_view = build_panel_link_view(guild_id, label="🌐 前往面板查看 AI 設定") if guild_id else None
+            panel_view = build_panel_link_view(guild_id, label="🌐 查看 AI 設定") if guild_id else None
             embed_no_balance = discord.Embed(
                 title="⚡ AI 專屬貨幣餘額不足",
                 description=(
@@ -337,70 +288,186 @@ class AI(commands.Cog):
                 ),
                 color=discord.Color.red(),
             )
-            if is_guild_sponsored and interaction.user.id != payer_id:
-                embed_no_balance.set_footer(text="提示：本伺服器設定了指定支付者，請提醒該成員簽到補足 AI 貨幣！")
             await interaction.response.send_message(embed=embed_no_balance, view=panel_view, ephemeral=True)
             return
 
-        # 4. 延遲回覆 (AI 生成需數秒)
+        # 4. 延遲回覆
         await interaction.response.defer(thinking=True)
 
-        # 5. 決定模型與 System Instruction
-        target_model = model or cfg.get("model") or DEFAULT_AI_MODEL
-        target_instruction = system_prompt or cfg.get("instruction") or DEFAULT_AI_INSTRUCTION
+        # 5. 圖片 URL 提取
+        img_url = None
+        if image:
+            content_type = image.content_type or ""
+            filename = image.filename.lower()
+            if content_type.startswith("image/") or any(filename.endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp", ".gif"]):
+                img_url = image.url
+            else:
+                await interaction.followup.send("⚠️ 上傳的附件非支援的圖片格式 (僅支援 PNG/JPG/WebP/GIF)。", ephemeral=True)
+                return
+
+        # 6. 人設指令與對話記憶
+        channel_id = interaction.channel_id
+        instruction = system_prompt or memory_manager.get_channel_persona(
+            channel_id,
+            fallback_default=cfg.get("instruction") or DEFAULT_AI_INSTRUCTION,
+        )
         temperature = float(cfg.get("temperature", DEFAULT_AI_TEMPERATURE))
         max_tokens = int(cfg.get("max_tokens", DEFAULT_AI_MAX_TOKENS))
 
-        # 6. 調用 OpenRouter
-        response_text, error_msg, stats = await self.call_openrouter(
-            clean_prompt,
-            model=target_model,
-            instruction=target_instruction,
+        # 取得歷史上下文並加入當前提問
+        context_messages = memory_manager.get_context_messages(channel_id)
+        user_name = interaction.user.display_name or interaction.user.name
+        context_messages.append({"role": "user", "content": clean_prompt or "請分析圖片"})
+
+        # 7. 呼叫 Multi-Provider Router 執行生成
+        preferred_p = provider if (provider and provider != "auto") else None
+        response_text, error_msg, stats = await router.generate_chat_completion(
+            context_messages,
+            system_instruction=instruction,
+            image_url=img_url,
+            preferred_provider_id=preferred_p,
             temperature=temperature,
             max_tokens=max_tokens,
         )
 
-        panel_view = build_panel_link_view(guild_id, label="🌐 前往面板自訂 AI 人設") if guild_id else None
+        action_view = AIChannelActionView(guild_id, channel_id)
 
-        if error_msg:
-            await interaction.followup.send(error_msg, view=panel_view)
+        if error_msg or not response_text:
+            await interaction.followup.send(error_msg or "⚠️ AI 未回傳內容，請稍候重試。", view=action_view)
             return
 
-        # 7. 計算消耗並扣除 AI 專屬貨幣
-        cost = calculate_ai_token_cost(target_model, stats["total_tokens"])
+        # 8. 寫入頻道記憶
+        memory_manager.add_user_message(channel_id, user_name, clean_prompt or "[圖片提問]")
+        memory_manager.add_assistant_message(channel_id, response_text)
+
+        # 9. 經濟系統計費扣款
+        cost = calculate_ai_token_cost(stats.get("model", "auto"), stats.get("total_tokens", 0))
         ok, new_balance = update_user_ai_points(payer_id, -cost, allow_negative=False)
         if not ok:
             set_user_ai_points(payer_id, 0)
             new_balance = 0
 
-        # 8. 組裝美觀 Embed 回覆 (附帶模型名稱、Token數量、思考時間、支付者)
+        # 10. 組裝 Embed 與分段發送
         embed = self._build_ai_embed(
             response_text=response_text,
             prompt=clean_prompt,
-            model=target_model,
             stats=stats,
             cost=cost,
             payer_id=payer_id,
             is_guild_sponsored=is_guild_sponsored,
             new_balance=new_balance,
+            image_url=img_url,
         )
 
-        if len(response_text) <= 3900:
-            await interaction.followup.send(embed=embed, view=panel_view)
+        chunks = split_message_chunks(response_text, max_chars=3900)
+        await interaction.followup.send(embed=embed, view=action_view)
+        if len(chunks) > 1:
+            for extra_chunk in chunks[1:]:
+                sub_chunks = split_message_chunks(extra_chunk, max_chars=1900)
+                for sc in sub_chunks:
+                    await interaction.followup.send(sc)
+
+    # ==========================================================================
+    # /reset 與 /ai_reset: 清除頻道對話記憶
+    # ==========================================================================
+
+    @app_commands.command(name="ai_reset", description="🧹 清除當前文字頻道或討論串的最近 15 則對話上下文記憶")
+    async def ai_reset_command(self, interaction: discord.Interaction):
+        count = memory_manager.clear_channel(interaction.channel_id)
+        embed = discord.Embed(
+            title="🧹 頻道記憶已清除",
+            description=f"已成功清除本頻道最近 **{count}** 則對話記憶！下次發問將作為全新對話起始。",
+            color=0x38bdf8,
+        )
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="reset", description="🧹 [快捷] 清除當前頻道的 AI 對話記憶")
+    async def reset_shortcut_command(self, interaction: discord.Interaction):
+        await self.ai_reset_command(interaction)
+
+    # ==========================================================================
+    # /provider 與 /ai_provider: 檢視提供商在線狀態與容災鏈
+    # ==========================================================================
+
+    @app_commands.command(name="ai_provider", description="📊 查看多供應商免費 AI 狀態、容錯容災鏈與即時冷卻倒數")
+    async def ai_provider_command(self, interaction: discord.Interaction):
+        statuses = router.get_providers_status()
+        embed = discord.Embed(
+            title="🌐 多供應商免費 AI 網關狀態監控",
+            description=(
+                "本系統採用動態多供應商容錯容災架構（Failover Gateway），調用時遇 `429 速率限制` 或服務端錯誤時，"
+                "**0 秒自動無縫切換**至下一順位提供商！\n\n"
+                "**🔁 文字請求鏈**：Groq ➔ NVIDIA NIM ➔ Mistral AI ➔ Google AI Studio ➔ Kilo Code\n"
+                "**🖼️ 圖片視覺鏈**：Google AI Studio ➔ Mistral AI ➔ Groq (Vision)"
+            ),
+            color=0x818cf8,
+        )
+
+        for s in statuses:
+            lines = [
+                f"• **狀態**：{s['status_label']}",
+                f"• **速率上限**：`{s['rpm_limit']}`",
+                f"• **免費額度**：{s['quota']}",
+                f"• **預設模型**：`{s['default_text_model']}`",
+            ]
+            if s['supports_vision']:
+                lines.append(f"• **視覺模型**：`{s['default_vision_model']}` (支援圖片分析)")
+            if s['last_error']:
+                lines.append(f"• **最近事件**：`{s['last_error'][:60]}`")
+            embed.add_field(name=s['name'], value="\n".join(lines), inline=False)
+
+        embed.set_footer(text="動態容災智慧輪詢架構 · 炙彗JI器人")
+        view = build_panel_link_view(interaction.guild_id, label="🌐 前往後台檢視 AI 配置") if interaction.guild_id else None
+        await interaction.response.send_message(embed=embed, view=view)
+
+    @app_commands.command(name="provider", description="📊 [快捷] 查看多供應商免費 AI 狀態與冷卻資訊")
+    async def provider_shortcut_command(self, interaction: discord.Interaction):
+        await self.ai_provider_command(interaction)
+
+    # ==========================================================================
+    # /persona 與 /ai_persona: 設定或清除頻道自訂人設
+    # ==========================================================================
+
+    @app_commands.command(name="ai_persona", description="🎭 設定或重設當前頻道的專屬 AI 人設指令 (System Instruction)")
+    @app_commands.describe(
+        instruction="為當前頻道自訂的人設指令 (留空且 clear=True 則還原為伺服器預設)",
+        clear="設為 True 則清除頻道專屬人設，恢復使用本伺服器控制面板預設人設",
+    )
+    async def ai_persona_command(
+        self,
+        interaction: discord.Interaction,
+        instruction: Optional[str] = None,
+        clear: Optional[bool] = False,
+    ):
+        channel_id = interaction.channel_id
+        if clear:
+            memory_manager.reset_channel_persona(channel_id)
+            await interaction.response.send_message("✅ 已清除本頻道的專屬人設，恢復套用伺服器預設人設！")
+            return
+
+        if instruction and instruction.strip():
+            memory_manager.set_channel_persona(channel_id, instruction.strip())
+            embed = discord.Embed(
+                title="🎭 頻道專屬人設已更新",
+                description=f"本頻道後續對話將使用以下自訂人設：\n```\n{instruction.strip()}\n```",
+                color=0xa855f7,
+            )
+            embed.set_footer(text="提示：可使用 /ai_persona clear:True 隨時還原")
+            await interaction.response.send_message(embed=embed)
         else:
-            await interaction.followup.send(embed=embed, view=panel_view)
-            # 超出字元以分段追加發送
-            remaining = response_text[3900:]
-            while remaining:
-                chunk = remaining[:1900]
-                remaining = remaining[1900:]
-                await interaction.followup.send(chunk)
+            cur_persona = memory_manager.get_channel_persona(channel_id, fallback_default="（未設定，套用伺服器預設）")
+            await interaction.response.send_message(f"ℹ️ **當前頻道自訂人設**：\n```{cur_persona}```")
+
+    @app_commands.command(name="persona", description="🎭 [快捷] 查看或設定當前頻道 AI 人設")
+    @app_commands.describe(instruction="為當前頻道自訂的人設指令", clear="設為 True 則清除頻道專屬人設")
+    async def persona_shortcut_command(self, interaction: discord.Interaction, instruction: Optional[str] = None, clear: Optional[bool] = False):
+        await self.ai_persona_command(interaction, instruction, clear)
 
     # ==========================================================================
-    # /ai_config 斜線指令：快速檢視當前伺服器 AI 配置
+    # /ai_config 斜線指令：快速檢視當前伺服器配置
     # ==========================================================================
 
-    @app_commands.command(name="ai_config", description="查看當前伺服器的 AI 智慧助手與人設配置狀態")
+    @app_commands.command(name="ai_config", description="查看當前伺服器的 AI 智慧助手與多供應商配置狀態")
     async def ai_config_command(self, interaction: discord.Interaction):
         guild_id = interaction.guild_id
         cfg = self._get_guild_cfg(guild_id)
@@ -427,32 +494,32 @@ class AI(commands.Cog):
 
         embed = discord.Embed(
             title="⚙️ 伺服器 AI 智慧助手配置狀態",
-            description="管理員可隨時透過 `/ai_settings` 指令或點擊下方按鈕前往「網頁控制面板」即時自訂 AI 人設、預設模型與指定支付者！",
+            description="管理員可隨時透過 `/ai_settings` 指令或點擊下方按鈕前往「網頁控制面板」即時自訂 AI 人設、預設模式與指定支付者！",
             color=0xa78bfa,
         )
         embed.add_field(name="封測授權狀態", value=auth_text, inline=True)
         embed.add_field(name="功能狀態", value=status_text, inline=True)
-        embed.add_field(name="預設模型", value=f"`{model_name}`", inline=True)
+        embed.add_field(name="預設引擎", value=f"`{model_name}`", inline=True)
         embed.add_field(name="限定頻道", value=channel_text, inline=True)
         embed.add_field(name="💳 指定支付者", value=payer_text, inline=True)
         embed.add_field(name="創意度 (Temperature)", value=f"`{temp}`", inline=True)
         embed.add_field(name="最大長度 (Max Tokens)", value=f"`{tokens}`", inline=True)
         embed.add_field(name="目前人設指令 (Instruction)", value=f"```\n{inst_preview}\n```", inline=False)
-        embed.set_footer(text="OpenRouter 免費模型整合 · 炙彗JI器人")
+        embed.set_footer(text="Multi-Provider Failover Gateway · 炙彗JI器人")
 
         view = build_panel_link_view(guild_id, label="🌐 前往控制面板自訂 AI 人設") if guild_id else None
         await interaction.response.send_message(embed=embed, view=view)
 
     # ==========================================================================
-    # /ai_settings 斜線指令：伺服器管理員自訂模型、人設與指定 AI 貨幣支付者
+    # /ai_settings 斜線指令：伺服器管理員自訂
     # ==========================================================================
 
     @app_commands.command(
         name="ai_settings",
-        description="⚙️ [管理員] 設定本伺服器的預設 AI 模型、人設指令與指定 AI 貨幣支付者",
+        description="⚙️ [管理員] 設定本伺服器的預設 AI 提供商/模型、人設指令與指定 AI 貨幣支付者",
     )
     @app_commands.describe(
-        model="選擇本伺服器預設使用的 AI 模型",
+        model="選擇本伺服器預設使用的 AI 提供商與模型",
         instruction="自訂本伺服器的 AI 人設指令 (System Instruction)",
         payer="指定承擔本伺服器所有 AI 對話費用的成員 (選填，不填則保持現狀)",
         clear_payer="設為 True 則解除指定支付者（恢復由每位提問者自行支付）",
@@ -465,14 +532,12 @@ class AI(commands.Cog):
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.choices(
         model=[
-            app_commands.Choice(name="✨ openrouter/auto (自動推薦最佳免費模型)", value="openrouter/auto"),
-            app_commands.Choice(name="🦙 meta-llama/llama-3.3-70b-instruct:free", value="meta-llama/llama-3.3-70b-instruct:free"),
-            app_commands.Choice(name="⚡ google/gemini-2.0-flash-exp:free", value="google/gemini-2.0-flash-exp:free"),
-            app_commands.Choice(name="🧠 deepseek/deepseek-r1:free (深度思考推理)", value="deepseek/deepseek-r1:free"),
-            app_commands.Choice(name="💬 deepseek/deepseek-chat:free (DeepSeek V3)", value="deepseek/deepseek-chat:free"),
-            app_commands.Choice(name="🌪️ mistralai/mistral-small-24b-instruct-2501:free", value="mistralai/mistral-small-24b-instruct-2501:free"),
-            app_commands.Choice(name="🚀 meta-llama/llama-3.1-8b-instruct:free (輕量快速)", value="meta-llama/llama-3.1-8b-instruct:free"),
-            app_commands.Choice(name="🌐 qwen/qwen-2.5-72b-instruct:free (通義千問)", value="qwen/qwen-2.5-72b-instruct:free"),
+            app_commands.Choice(name="✨ auto (自動智慧容錯鏈：Groq → NVIDIA → Mistral → Gemini → Kilo)", value="auto"),
+            app_commands.Choice(name="⚡ Groq · Llama 3.3 70B (極速引擎)", value="groq:llama-3.3-70b-versatile"),
+            app_commands.Choice(name="🔮 Google · Gemini 2.0 Flash (圖文雙模態)", value="gemini:gemini-2.0-flash"),
+            app_commands.Choice(name="🚀 NVIDIA NIM · Llama 3.3 70B (大容量併發)", value="nvidia:meta/llama-3.3-70b-instruct"),
+            app_commands.Choice(name="🌪️ Mistral AI · Mistral Small (歐洲開源)", value="mistral:mistral-small-latest"),
+            app_commands.Choice(name="🛡️ Kilo Code Gateway · 免金鑰應急備援", value="kilo:kilo-auto/free"),
         ]
     )
     async def ai_settings_command(
@@ -517,7 +582,7 @@ class AI(commands.Cog):
         updates = []
         if model is not None:
             cfg["model"] = model.strip()
-            updates.append(f"• **預設模型**：`{cfg['model']}`")
+            updates.append(f"• **預設引擎**：`{cfg['model']}`")
 
         if instruction is not None:
             cfg["instruction"] = instruction.strip()
@@ -570,55 +635,68 @@ class AI(commands.Cog):
         await interaction.response.send_message(embed=embed, view=view)
 
     # ==========================================================================
-    # @機器人 提及對話事件監聽器
+    # @機器人 提及 / 直接回覆 / 專屬頻道對話事件監聽器
     # ==========================================================================
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        """當成員在文字頻道標記 @機器人 時，自動以設定好的 AI 人設進行回覆並以 Embed 包裝呈現。"""
+        """當成員在文字頻道標記 @機器人、直接回覆機器人訊息或在專屬 AI 頻道發言時觸發自然對話。"""
         # 忽略機器人自身訊息或來自其他 Bot 的訊息
-        if message.author.bot or not message.guild:
+        if message.author.bot:
             return
 
         bot_user = self.bot.user
-        if not bot_user or bot_user not in message.mentions:
+        if not bot_user:
             return
 
-        # 濾除 @機器人 標註後的實際提問文字
-        content = message.content
-        content = re.sub(rf'<@!?{bot_user.id}>', '', content).strip()
+        guild = message.guild
+        guild_id = guild.id if guild else None
 
-        guild_id = message.guild.id
-
-        # 封測階段授權檢查 (未獲授權之伺服器不觸發 @機器人 智慧對話)
-        if not is_guild_ai_authorized(guild_id):
+        # 封測階段授權檢查 (未獲授權之伺服器不觸發)
+        if guild_id and not is_guild_ai_authorized(guild_id):
             return
 
         cfg = self._get_guild_cfg(guild_id)
-
-        # 檢查是否啟用
         if not cfg.get("is_enabled", True):
             return
 
-        # 檢查頻道限制
-        allowed_channel_id = cfg.get("channel_id")
-        if allowed_channel_id and message.channel.id != allowed_channel_id:
-            # 專屬頻道限制：輕量提醒
-            try:
-                await message.reply(
-                    f"🔒 本伺服器已設定 AI 專屬對話頻道，請至 <#{allowed_channel_id}> 與我聊聊天喔！",
-                    mention_author=False,
-                    delete_after=10.0,
-                )
-            except Exception:
-                pass
+        is_dm = isinstance(message.channel, discord.DMChannel)
+        is_mentioned = bot_user in message.mentions
+        is_reply_to_bot = False
+
+        if message.reference and message.reference.message_id:
+            resolved = message.reference.resolved
+            if isinstance(resolved, discord.Message) and resolved.author.id == bot_user.id:
+                is_reply_to_bot = True
+
+        dedicated_channel_id = cfg.get("channel_id")
+        is_in_dedicated_channel = dedicated_channel_id and (message.channel.id == dedicated_channel_id)
+
+        # 僅在提及機器人、回覆機器人、DM 或在專屬 AI 頻道時觸發
+        should_respond = is_mentioned or is_reply_to_bot or is_dm or is_in_dedicated_channel
+        if not should_respond:
             return
 
-        # 若僅標註機器人卻無提問文字，送出親切問候
-        if not content:
+        # 濾除 @機器人 標註後的實際文字
+        clean_content = message.content
+        if is_mentioned:
+            clean_content = re.sub(rf'<@!?{bot_user.id}>', '', clean_content).strip()
+
+        # 檢查是否有圖片附件
+        img_url = None
+        for att in message.attachments:
+            ct = att.content_type or ""
+            fn = att.filename.lower()
+            if ct.startswith("image/") or any(fn.endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp", ".gif"]):
+                img_url = att.url
+                break
+
+        # 若僅標註卻無文字亦無圖片，發送親切引導問候
+        if not clean_content and not img_url:
             greeting = (
                 f"嗨 {message.author.mention}！有什麼我可以幫忙的嗎？✨\n"
-                "你可以直接在訊息中提及我並輸入問題，或使用 `/ai` 指令開啟智慧對話！"
+                "你可以直接在訊息中提及我並輸入問題、上傳圖片，或使用 `/ai` 指令開始智慧對話！\n"
+                "💡 提示：使用 `/ai_provider` 可即時檢視 Groq、Gemini、NVIDIA、Mistral 等免費 AI 引擎的在線狀態。"
             )
             try:
                 await message.reply(greeting, mention_author=False)
@@ -626,7 +704,7 @@ class AI(commands.Cog):
                 pass
             return
 
-        # 檢查 AI 專屬貨幣餘額
+        # 檢查 AI 貨幣餘額
         payer_id = int(cfg.get("payer_user_id") or message.author.id)
         is_guild_sponsored = bool(cfg.get("payer_user_id"))
         current_points = get_user_ai_points(payer_id)
@@ -650,28 +728,42 @@ class AI(commands.Cog):
                 pass
             return
 
-        target_model = cfg.get("model") or DEFAULT_AI_MODEL
-        target_instruction = cfg.get("instruction") or DEFAULT_AI_INSTRUCTION
+        channel_id = message.channel.id
+        instruction = memory_manager.get_channel_persona(
+            channel_id,
+            fallback_default=cfg.get("instruction") or DEFAULT_AI_INSTRUCTION,
+        )
         temperature = float(cfg.get("temperature", DEFAULT_AI_TEMPERATURE))
         max_tokens = int(cfg.get("max_tokens", DEFAULT_AI_MAX_TOKENS))
 
-        # 顯示輸入中打字動態 (Typing Indicator)
+        # 構建上下文列表
+        context_messages = memory_manager.get_context_messages(channel_id)
+        user_name = message.author.display_name or message.author.name
+        context_messages.append({"role": "user", "content": clean_content or "請分析這張圖片"})
+
+        # 打字動態與調用 Router
         try:
             async with message.channel.typing():
-                response_text, error_msg, stats = await self.call_openrouter(
-                    content,
-                    model=target_model,
-                    instruction=target_instruction,
+                response_text, error_msg, stats = await router.generate_chat_completion(
+                    context_messages,
+                    system_instruction=instruction,
+                    image_url=img_url,
                     temperature=temperature,
                     max_tokens=max_tokens,
                 )
 
-                if error_msg:
-                    await message.reply(error_msg, mention_author=False)
+                action_view = AIChannelActionView(guild_id, channel_id)
+
+                if error_msg or not response_text:
+                    await message.reply(error_msg or "⚠️ AI 未能產生回覆內容，請稍候重試。", view=action_view, mention_author=False)
                     return
 
-                # 計費扣款
-                cost = calculate_ai_token_cost(target_model, stats["total_tokens"])
+                # 記錄對話歷史
+                memory_manager.add_user_message(channel_id, user_name, clean_content or "[圖片提問]")
+                memory_manager.add_assistant_message(channel_id, response_text)
+
+                # 扣款計費
+                cost = calculate_ai_token_cost(stats.get("model", "auto"), stats.get("total_tokens", 0))
                 ok, new_balance = update_user_ai_points(payer_id, -cost, allow_negative=False)
                 if not ok:
                     set_user_ai_points(payer_id, 0)
@@ -679,26 +771,25 @@ class AI(commands.Cog):
 
                 embed = self._build_ai_embed(
                     response_text=response_text,
-                    prompt=content,
-                    model=target_model,
+                    prompt=clean_content,
                     stats=stats,
                     cost=cost,
                     payer_id=payer_id,
                     is_guild_sponsored=is_guild_sponsored,
                     new_balance=new_balance,
+                    image_url=img_url,
                 )
-                panel_view = build_panel_link_view(guild_id, label="🌐 前往面板自訂 AI 人設") if guild_id else None
 
-                if len(response_text) <= 3900:
-                    await message.reply(embed=embed, view=panel_view, mention_author=False)
-                else:
-                    await message.reply(embed=embed, view=panel_view, mention_author=False)
-                    remaining = response_text[3900:]
-                    while remaining:
-                        chunk = remaining[:1900]
-                        remaining = remaining[1900:]
-                        await message.channel.send(chunk)
+                chunks = split_message_chunks(response_text, max_chars=3900)
+                await message.reply(embed=embed, view=action_view, mention_author=False)
+                if len(chunks) > 1:
+                    for extra_chunk in chunks[1:]:
+                        sub_chunks = split_message_chunks(extra_chunk, max_chars=1900)
+                        for sc in sub_chunks:
+                            await message.channel.send(sc)
+
         except Exception as exc:
+            traceback.print_exc()
             print(f"⚠️ @機器人 AI 對話處理例外: {exc}")
 
 

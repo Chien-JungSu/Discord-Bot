@@ -585,9 +585,12 @@ def get_guild_data(guild_id: str):
         {"name": "/economy_gamble", "description": "擲硬幣或骰子賭金幣", "category": "Economy", "permission": "所有成員"},
         {"name": "/economy_blackjack", "description": "21點小遊戲挑戰莊家", "category": "Economy", "permission": "所有成員"},
         {"name": "/economy_scratch", "description": "九宮格刮刮樂小遊戲", "category": "Economy", "permission": "所有成員"},
-        {"name": "/ai", "description": "向 OpenRouter 免費 AI 模型發問與智慧對話", "category": "AI", "permission": "所有成員"},
-        {"name": "/ai_config", "description": "查看伺服器當前 AI 人設與模型配置", "category": "AI", "permission": "所有成員"},
-        {"name": "/ai_settings", "description": "設定伺服器預設 AI 模型、人設指令與指定贊助支付者", "category": "AI", "permission": "管理員"},
+        {"name": "/ai", "description": "向多供應商免費 AI 智慧閘道發問（支援圖文雙模態）", "category": "AI", "permission": "所有成員"},
+        {"name": "/ai_reset", "description": "清除當前文字頻道的對話上下文記憶", "category": "AI", "permission": "所有成員"},
+        {"name": "/ai_provider", "description": "查看免費 AI 提供商狀態、即時冷卻與容災鏈", "category": "AI", "permission": "所有成員"},
+        {"name": "/ai_persona", "description": "設定或檢視當前頻道的專屬 AI 人設指令", "category": "AI", "permission": "所有成員"},
+        {"name": "/ai_config", "description": "查看伺服器當前 AI 人設與多供應商配置", "category": "AI", "permission": "所有成員"},
+        {"name": "/ai_settings", "description": "設定伺服器預設 AI 引擎、人設指令與指定贊助支付者", "category": "AI", "permission": "管理員"},
     ]
 
     # 關鍵防護：管理員專用指令 (owner_guild_only) 絕對不對一般使用者顯示，且僅在擁有者檢視專屬伺服器時附加
@@ -600,6 +603,8 @@ def get_guild_data(guild_id: str):
 
     ai_cfg = get_guild_ai_settings(str(guild_id))
     ai_authorized = is_guild_ai_authorized(str(guild_id), owner_gid)
+    from cogs.llm_router import router
+    ai_providers_status = router.get_providers_status()
 
     return jsonify({
         'status': 'ok',
@@ -623,13 +628,14 @@ def get_guild_data(guild_id: str):
         },
         'ai': {
             'is_enabled': bool(ai_cfg.get('is_enabled', True)),
-            'model': str(ai_cfg.get('model') or 'openrouter/auto'),
+            'model': str(ai_cfg.get('model') or 'auto'),
             'instruction': str(ai_cfg.get('instruction') or ''),
             'channel_id': str(ai_cfg.get('channel_id') or ''),
             'payer_user_id': str(ai_cfg.get('payer_user_id') or ''),
             'temperature': float(ai_cfg.get('temperature', 0.7)),
             'max_tokens': int(ai_cfg.get('max_tokens', 1000)),
         },
+        'ai_providers': ai_providers_status,
         'auto_reply_rules': auto_reply_rules,
         'reaction_roles_messages': reaction_messages,
         'commands': commands_list,
@@ -696,13 +702,23 @@ def save_guild_ai(guild_id: str):
         'message': 'AI 智慧助手與人設個人化設定已成功儲存！',
         'ai': {
             'is_enabled': bool(updated.get('is_enabled', True)),
-            'model': str(updated.get('model') or 'openrouter/auto'),
+            'model': str(updated.get('model') or 'auto'),
             'instruction': str(updated.get('instruction') or ''),
             'channel_id': str(updated.get('channel_id') or ''),
             'payer_user_id': str(updated.get('payer_user_id') or ''),
             'temperature': float(updated.get('temperature', 0.7)),
             'max_tokens': int(updated.get('max_tokens', 1000)),
         },
+    })
+
+
+@panel_bp.route('/api/panel/ai/providers')
+def get_ai_providers():
+    """取得所有免費 AI 提供商當前的在線與冷卻狀態。"""
+    from cogs.llm_router import router
+    return jsonify({
+        'status': 'ok',
+        'providers': router.get_providers_status(),
     })
 
 

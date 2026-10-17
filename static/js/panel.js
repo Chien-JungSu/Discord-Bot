@@ -701,16 +701,14 @@
     if (aiEnabled) aiEnabled.checked = aiCfg.is_enabled !== false;
     if (aiModelSelect) {
       const presetModels = [
-        'openrouter/auto',
-        'meta-llama/llama-3.3-70b-instruct:free',
-        'google/gemini-2.0-flash-exp:free',
-        'deepseek/deepseek-r1:free',
-        'deepseek/deepseek-chat:free',
-        'mistralai/mistral-small-24b-instruct-2501:free',
-        'meta-llama/llama-3.1-8b-instruct:free',
-        'qwen/qwen-2.5-72b-instruct:free',
+        'auto',
+        'groq:llama-3.3-70b-versatile',
+        'gemini:gemini-2.0-flash',
+        'nvidia:meta/llama-3.3-70b-instruct',
+        'mistral:mistral-small-latest',
+        'kilo:kilo-auto/free',
       ];
-      const modelVal = aiCfg.model || 'openrouter/auto';
+      const modelVal = aiCfg.model || 'auto';
       if (presetModels.includes(modelVal)) {
         aiModelSelect.value = modelVal;
         if (aiCustomWrap) aiCustomWrap.style.display = 'none';
@@ -720,6 +718,22 @@
         if (aiCustomWrap) aiCustomWrap.style.display = 'block';
         if (aiCustomInput) aiCustomInput.value = modelVal;
       }
+    }
+
+    // 更新動態容災管線各節點狀態 (在線 / 冷卻中)
+    if (Array.isArray(data.ai_providers)) {
+      data.ai_providers.forEach((p) => {
+        const stepEl = document.querySelector(`.pipeline-step[data-provider="${p.id}"]`);
+        if (stepEl) {
+          if (p.is_cooldown) {
+            stepEl.classList.add('is-cooling');
+            stepEl.title = `${p.name}：冷卻中 (剩餘約 ${p.cooldown_remaining} 秒)`;
+          } else {
+            stepEl.classList.remove('is-cooling');
+            stepEl.title = p.is_configured ? `${p.name}：正常運行中` : `${p.name}：未配置金鑰 (將自動跳過)`;
+          }
+        }
+      });
     }
     const aiPayerSelect = document.getElementById('select-ai-payer');
     if (aiPayerSelect) {
@@ -933,7 +947,7 @@
 
       const modelSelectVal = document.getElementById('select-ai-model').value;
       const customModelVal = (document.getElementById('ai-custom-model-input').value || '').trim();
-      const finalModel = modelSelectVal === 'custom' ? (customModelVal || 'openrouter/auto') : modelSelectVal;
+      const finalModel = modelSelectVal === 'custom' ? (customModelVal || 'auto') : modelSelectVal;
 
       const payerSelect = document.getElementById('select-ai-payer');
       const payload = {
@@ -987,7 +1001,7 @@
             if (res.ok && data.ai) {
               const ai = data.ai;
               document.getElementById('ai-enabled').checked = ai.is_enabled;
-              document.getElementById('select-ai-model').value = ai.model || 'openrouter/auto';
+              document.getElementById('select-ai-model').value = ai.model || 'auto';
               if (aiCustomWrap) aiCustomWrap.style.display = 'none';
               document.getElementById('select-ai-channel').value = ai.channel_id || '';
               const payerSel = document.getElementById('select-ai-payer');

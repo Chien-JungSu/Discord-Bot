@@ -420,10 +420,10 @@ def save_music_settings(data: dict):
 
 
 # ==============================================================================
-# AI Settings API (OpenRouter Free Models & Personalization)
+# AI Settings API (Multi-Provider Free LLM Architecture: Groq / Gemini / NVIDIA / Mistral / Kilo)
 # ==============================================================================
 
-DEFAULT_AI_MODEL = "openrouter/auto"
+DEFAULT_AI_MODEL = "auto"
 DEFAULT_AI_INSTRUCTION = (
     "你是由「炙彗」開發的 Discord 智慧 AI 助手「炙彗JI器人」。"
     "請使用親切、禮貌且帶有一點幽默感的繁體中文回答問題，排版清晰美觀，善用條列式或粗體突顯重點。"
@@ -431,60 +431,63 @@ DEFAULT_AI_INSTRUCTION = (
 DEFAULT_AI_TEMPERATURE = 0.7
 DEFAULT_AI_MAX_TOKENS = 1000
 
-# OpenRouter 官方推薦免費/快速模型清單
-OPENROUTER_FREE_MODELS = [
+# 多供應商免費模型與容錯容災配置清單
+AI_PROVIDER_MODELS = [
     {
-        "id": "openrouter/auto",
-        "name": "✨ openrouter/auto (自動推薦最佳免費模型)",
-        "desc": "由 OpenRouter 自動分配當前可用、品質最高的免費模型",
+        "id": "auto",
+        "provider": "auto",
+        "name": "✨ auto (智慧自動容錯鏈：Groq → NVIDIA → Mistral → Gemini → Kilo)",
+        "desc": "自動按優先級與速率限制智慧切換，遇 429 或故障 0 秒自動無縫容災",
     },
     {
-        "id": "meta-llama/llama-3.3-70b-instruct:free",
-        "name": "🦙 meta-llama/llama-3.3-70b-instruct:free",
-        "desc": "Meta Llama 3.3 旗艦 70B 模型，具備強大繁體中文理解與邏輯推理能力",
+        "id": "groq:llama-3.3-70b-versatile",
+        "provider": "groq",
+        "name": "⚡ Groq · Llama 3.3 70B Versatile",
+        "desc": "LPU 超高速推理，30 RPM / 14,400 RPD，群聊互動即時秒回",
     },
     {
-        "id": "google/gemini-2.0-flash-exp:free",
-        "name": "⚡ google/gemini-2.0-flash-exp:free",
-        "desc": "Google Gemini 2.0 Flash 實驗版，超快回應速度與精準結構化回答",
+        "id": "gemini:gemini-2.0-flash",
+        "provider": "gemini",
+        "name": "🔮 Google · Gemini 2.0 Flash (圖文雙模態)",
+        "desc": "支援 Discord 圖片與迷因分析、百萬長上下文，超強結構化繁體中文",
     },
     {
-        "id": "deepseek/deepseek-r1:free",
-        "name": "🧠 deepseek/deepseek-r1:free",
-        "desc": "DeepSeek R1 深度思考推理開源模型，擅長複雜邏輯推導與數學程式",
+        "id": "nvidia:meta/llama-3.3-70b-instruct",
+        "provider": "nvidia",
+        "name": "🚀 NVIDIA NIM · Llama 3.3 70B Instruct",
+        "desc": "40 RPM / 10,000 RPD，大容量併發備援通道",
     },
     {
-        "id": "deepseek/deepseek-chat:free",
-        "name": "💬 deepseek/deepseek-chat:free",
-        "desc": "DeepSeek V3 頂級對話模型，繁體中文自然流暢且多才多藝",
+        "id": "mistral:mistral-small-latest",
+        "provider": "mistral",
+        "name": "🌪️ Mistral AI · Mistral Small (支援圖文)",
+        "desc": "60 RPM，歐洲頂級開源模型，支援文字與圖片分析",
     },
     {
-        "id": "mistralai/mistral-small-24b-instruct-2501:free",
-        "name": "🌪️ mistralai/mistral-small-24b-instruct-2501:free",
-        "desc": "Mistral Small 24B 推理與文字創作精良",
-    },
-    {
-        "id": "meta-llama/llama-3.1-8b-instruct:free",
-        "name": "🚀 meta-llama/llama-3.1-8b-instruct:free",
-        "desc": "Llama 3.1 8B 輕量快速且穩定",
-    },
-    {
-        "id": "qwen/qwen-2.5-72b-instruct:free",
-        "name": "🌐 qwen/qwen-2.5-72b-instruct:free",
-        "desc": "阿里通義千問 Qwen 2.5 72B，中文語意與長文創作能力卓越",
+        "id": "kilo:kilo-auto/free",
+        "provider": "kilo",
+        "name": "🛡️ Kilo Code Gateway · 免金鑰應急備援 (Zero-Key)",
+        "desc": "無需配置金鑰，其餘配額耗盡時無縫自動接管",
     },
 ]
 
+# 向下相容別名
+OPENROUTER_FREE_MODELS = AI_PROVIDER_MODELS
+
 # 各模型對話計費費率倍數（基準：ai_cost_per_1k_tokens / 1,000）
 MODEL_TOKEN_RATES = {
+    "auto": 1.0,
+    "groq:llama-3.3-70b-versatile": 1.0,
+    "llama-3.3-70b-versatile": 1.0,
+    "gemini:gemini-2.0-flash": 1.0,
+    "gemini-2.0-flash": 1.0,
+    "nvidia:meta/llama-3.3-70b-instruct": 1.2,
+    "meta/llama-3.3-70b-instruct": 1.2,
+    "mistral:mistral-small-latest": 1.0,
+    "mistral-small-latest": 1.0,
+    "kilo:kilo-auto/free": 0.8,
+    "kilo-auto/free": 0.8,
     "openrouter/auto": 1.0,
-    "deepseek/deepseek-r1:free": 1.5,
-    "deepseek/deepseek-chat:free": 1.0,
-    "google/gemini-2.0-flash-exp:free": 1.0,
-    "meta-llama/llama-3.3-70b-instruct:free": 2.0,
-    "mistralai/mistral-small-24b-instruct-2501:free": 1.0,
-    "meta-llama/llama-3.1-8b-instruct:free": 0.8,
-    "qwen/qwen-2.5-72b-instruct:free": 1.5,
 }
 
 
