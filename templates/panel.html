@@ -436,26 +436,6 @@
             </p>
           </div>
 
-          <!-- 動態容災管線視覺化卡片 -->
-          <div class="ai-pipeline-card">
-            <div class="ai-pipeline-title">
-              <span>⚡ 免費 AI 自動容錯容災鏈 (Auto Failover)</span>
-              <span class="ai-pipeline-badge">Active</span>
-            </div>
-            <div class="ai-pipeline-flow">
-              <div class="pipeline-step" data-provider="groq"><span class="step-num">1</span> ⚡ Groq (LPU)</div>
-              <div class="pipeline-arrow">➔</div>
-              <div class="pipeline-step" data-provider="nvidia"><span class="step-num">2</span> 🚀 NVIDIA NIM</div>
-              <div class="pipeline-arrow">➔</div>
-              <div class="pipeline-step" data-provider="mistral"><span class="step-num">3</span> 🌪️ Mistral AI</div>
-              <div class="pipeline-arrow">➔</div>
-              <div class="pipeline-step" data-provider="gemini"><span class="step-num">4</span> 🔮 Google Gemini</div>
-              <div class="pipeline-arrow">➔</div>
-              <div class="pipeline-step zero-key" data-provider="kilo"><span class="step-num">5</span> 🛡️ Kilo (Zero-Key)</div>
-            </div>
-            <p class="ai-pipeline-hint">遇 429 速率限制或端點逾時自動於 0 秒內無縫切換下一通道；Discord 上傳圖片時自動優先採用 Google Gemini 視覺多模態解析。</p>
-          </div>
-
           <div id="ai-unauthorized-banner" class="ai-unauth-card" style="display: none;">
             <div class="ai-unauth-header">
               <span class="ai-unauth-icon">🔒</span>
@@ -480,7 +460,7 @@
             <div class="form-group">
               <label for="select-ai-model">🤖 預設免費 AI 引擎 (Multi-Provider LLM)</label>
               <select id="select-ai-model" class="form-control">
-                <option value="auto">✨ auto (智慧自動容錯鏈：Groq → NVIDIA → Mistral → Gemini → Kilo，推薦)</option>
+                <option value="auto">auto</option>
                 <option value="groq:openai/gpt-oss-120b">⚡ Groq · GPT-OSS 120B (LPU 極速開源旗艦)</option>
                 <option value="gemini:gemini-flash-latest">🔮 Google · Gemini Flash (圖文雙模態 & 最新穩定版)</option>
                 <option value="nvidia:meta/llama-3.2-11b-vision-instruct">🚀 NVIDIA NIM · Llama 3.2 11B Vision (大容量圖文兼備)</option>

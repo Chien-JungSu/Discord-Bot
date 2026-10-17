@@ -14,6 +14,7 @@
   let currentEmojis = [];
   let currentCommands = [];
   let currentReactionRoles = [];
+  let currentGuildAiAuthorized = true;
 
   // DOM 元素快取
   const toastContainer = document.getElementById('toast-container');
@@ -342,6 +343,7 @@
   async function loadGuildData(guildId) {
     if (!guildId) return;
 
+    let data;
     try {
       const res = await fetch(`/api/panel/guild/${guildId}/data`);
       if (!res.ok) {
@@ -349,7 +351,14 @@
         showToast(err.message || '載入伺服器設定失敗', 'error');
         return;
       }
-      const data = await res.json();
+      data = await res.json();
+    } catch (netErr) {
+      console.error('Fetch guild data failed:', netErr);
+      showToast('網路連線失敗，無法讀取伺服器設定', 'error');
+      return;
+    }
+
+    try {
       currentChannels = data.channels || [];
       currentRoles = data.roles || [];
       currentMembers = data.members || [];
@@ -369,32 +378,33 @@
       // 4. 渲染指令清單 (確保 owner_guild_only 依身分嚴格隔離)
       renderCommandsTable(currentCommands);
 
-      // 5. 處理 AI 智慧助手封測授權狀態
+      // 5. 處理 AI 智慧助手封測授權狀態 (未授權時全面鎖定控制項)
       const isAiAuthorized = data.ai_authorized !== false;
+      currentGuildAiAuthorized = isAiAuthorized;
       const aiUnauthBanner = document.getElementById('ai-unauthorized-banner');
       if (aiUnauthBanner) {
         aiUnauthBanner.style.display = isAiAuthorized ? 'none' : 'block';
       }
       const formAi = document.getElementById('form-ai');
       if (formAi) {
+        formAi.querySelectorAll('input, select, textarea, button').forEach((el) => {
+          el.disabled = !isAiAuthorized;
+        });
+        formAi.style.opacity = isAiAuthorized ? '1' : '0.45';
+        formAi.style.pointerEvents = isAiAuthorized ? 'auto' : 'none';
         const aiSubmit = formAi.querySelector('.btn-save-setting');
         const aiReset = document.getElementById('btn-reset-ai');
         if (aiSubmit) {
           aiSubmit.disabled = !isAiAuthorized;
-          aiSubmit.style.opacity = isAiAuthorized ? '1' : '0.5';
-          aiSubmit.style.cursor = isAiAuthorized ? 'pointer' : 'not-allowed';
           aiSubmit.title = isAiAuthorized ? '' : '本伺服器尚未獲得 AI 封測授權';
         }
         if (aiReset) {
           aiReset.disabled = !isAiAuthorized;
-          aiReset.style.opacity = isAiAuthorized ? '1' : '0.5';
-          aiReset.style.cursor = isAiAuthorized ? 'pointer' : 'not-allowed';
           aiReset.title = isAiAuthorized ? '' : '本伺服器尚未獲得 AI 封測授權';
         }
       }
-    } catch (err) {
-      console.error(err);
-      showToast('網路連線失敗，無法讀取伺服器設定', 'error');
+    } catch (renderErr) {
+      console.error('UI rendering failed:', renderErr);
     }
   }
 
@@ -443,6 +453,7 @@
     }
 
     function syncDisplayFromSelect() {
+      input.disabled = Boolean(selectEl.disabled);
       const label = getSelectedLabel();
       if (!wrap.classList.contains('is-open')) {
         input.value = label;
@@ -496,6 +507,7 @@
     }
 
     function openMenu() {
+      if (selectEl.disabled || input.disabled) return;
       document.querySelectorAll('.searchable-select-wrap.is-open').forEach((otherWrap) => {
         if (otherWrap !== wrap) {
           otherWrap.classList.remove('is-open');
@@ -635,6 +647,7 @@
       'select-auto-role',
       'select-music-channel',
       'select-ai-channel',
+      'select-ai-payer',
       'modal-rule-channel',
       'modal-rr-channel',
       'modal-rr-new-role',
@@ -718,22 +731,6 @@
         if (aiCustomWrap) aiCustomWrap.style.display = 'block';
         if (aiCustomInput) aiCustomInput.value = modelVal;
       }
-    }
-
-    // 更新動態容災管線各節點狀態 (在線 / 冷卻中)
-    if (Array.isArray(data.ai_providers)) {
-      data.ai_providers.forEach((p) => {
-        const stepEl = document.querySelector(`.pipeline-step[data-provider="${p.id}"]`);
-        if (stepEl) {
-          if (p.is_cooldown) {
-            stepEl.classList.add('is-cooling');
-            stepEl.title = `${p.name}：冷卻中 (剩餘約 ${p.cooldown_remaining} 秒)`;
-          } else {
-            stepEl.classList.remove('is-cooling');
-            stepEl.title = p.is_configured ? `${p.name}：正常運行中` : `${p.name}：未配置金鑰 (將自動跳過)`;
-          }
-        }
-      });
     }
     const aiPayerSelect = document.getElementById('select-ai-payer');
     if (aiPayerSelect) {
@@ -944,6 +941,10 @@
     formAi.addEventListener('submit', async (e) => {
       e.preventDefault();
       if (!currentGuildId) return;
+      if (!currentGuildAiAuthorized) {
+        showToast('本伺服器尚未獲得 AI 封測授權，無法儲存或修改設定', 'error');
+        return;
+      }
 
       const modelSelectVal = document.getElementById('select-ai-model').value;
       const customModelVal = (document.getElementById('ai-custom-model-input').value || '').trim();
@@ -985,6 +986,10 @@
   if (btnResetAi) {
     btnResetAi.addEventListener('click', () => {
       if (!currentGuildId) return;
+      if (!currentGuildAiAuthorized) {
+        showToast('本伺服器尚未獲得 AI 封測授權，無法重設設定', 'error');
+        return;
+      }
       showConfirmModal({
         title: '⚠️ 確認重設 AI 設定',
         message: '確定要將此伺服器的「AI 智慧助手與人設」還原為系統預設值嗎？自訂的人設指令將會被清除。',

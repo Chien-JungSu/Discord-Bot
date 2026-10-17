@@ -649,7 +649,7 @@ def save_guild_ai(guild_id: str):
         return jsonify({'status': 'error', 'message': '權限不足'}), 403
 
     owner_gid = str(get_owner_guild_id() or '1477930950288478262')
-    if not is_guild_ai_authorized(str(guild_id), owner_gid) and not is_current_user_owner():
+    if not is_guild_ai_authorized(str(guild_id), owner_gid):
         return jsonify({'status': 'error', 'message': '本伺服器尚未獲得 AI 功能封測授權，無法修改 AI 設定'}), 403
 
     payload = request.get_json(silent=True) or {}
@@ -664,7 +664,7 @@ def save_guild_ai(guild_id: str):
             'message': 'AI 設定已成功重設為系統預設值！',
             'ai': {
                 'is_enabled': bool(updated.get('is_enabled', True)),
-                'model': str(updated.get('model') or 'openrouter/auto'),
+                'model': str(updated.get('model') or 'auto'),
                 'instruction': str(updated.get('instruction') or ''),
                 'channel_id': str(updated.get('channel_id') or ''),
                 'payer_user_id': str(updated.get('payer_user_id') or ''),
