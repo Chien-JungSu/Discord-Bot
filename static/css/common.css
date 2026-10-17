@@ -727,10 +727,10 @@ code:hover {
   display: block;
 }
 
-/* 點開後出現的下拉彈出選單 */
+/* 點開後出現的下拉彈出選單 (預留與頂部 Bar 外框的間距，避免與頂 Bar 下邊緣重疊) */
 .topbar-user-dropdown {
   position: absolute;
-  top: calc(100% + 10px);
+  top: calc(100% + 20px);
   right: 0;
   width: 220px;
   background: rgba(15, 23, 42, 0.95);
@@ -808,22 +808,80 @@ code:hover {
   transition: all 0.18s ease;
 }
 
+a.dropdown-item.dropdown-panel-link,
+a.dropdown-item.dropdown-panel-link:link,
+a.dropdown-item.dropdown-panel-link:visited,
 .dropdown-panel-link {
-  color: var(--primary);
+  color: var(--primary) !important;
 }
 
+a.dropdown-item.dropdown-panel-link:hover,
+a.dropdown-item.dropdown-panel-link:visited:hover,
 .dropdown-panel-link:hover {
   background: rgba(125, 211, 252, 0.12);
-  color: #ffffff;
+  color: #ffffff !important;
 }
 
-.dropdown-logout-btn {
-  color: #f87171;
+.dropdown-item.dropdown-owner-btn,
+button.dropdown-item.dropdown-owner-btn {
+  width: 100%;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  color: #fbbf24 !important;
 }
 
+.dropdown-item.dropdown-owner-btn svg,
+.dropdown-item.dropdown-owner-btn span,
+button.dropdown-item.dropdown-owner-btn svg,
+button.dropdown-item.dropdown-owner-btn span {
+  color: #fbbf24 !important;
+  fill: currentColor;
+}
+
+.dropdown-item.dropdown-owner-btn:hover,
+button.dropdown-item.dropdown-owner-btn:hover {
+  background: rgba(251, 191, 36, 0.15);
+  color: #fde68a !important;
+}
+
+.dropdown-item.dropdown-owner-btn:hover svg,
+.dropdown-item.dropdown-owner-btn:hover span,
+button.dropdown-item.dropdown-owner-btn:hover svg,
+button.dropdown-item.dropdown-owner-btn:hover span {
+  color: #fde68a !important;
+}
+
+a.dropdown-item.dropdown-logout-btn,
+a.dropdown-item.dropdown-logout-btn:link,
+a.dropdown-item.dropdown-logout-btn:visited,
+.dropdown-logout-btn,
+.dropdown-logout-btn:visited {
+  color: #f87171 !important;
+}
+
+a.dropdown-item.dropdown-logout-btn svg,
+a.dropdown-item.dropdown-logout-btn span,
+.dropdown-logout-btn svg,
+.dropdown-logout-btn span {
+  color: #f87171 !important;
+  fill: currentColor;
+}
+
+a.dropdown-item.dropdown-logout-btn:hover,
+a.dropdown-item.dropdown-logout-btn:visited:hover,
 .dropdown-logout-btn:hover {
   background: rgba(248, 113, 113, 0.16);
-  color: #ffffff;
+  color: #fca5a5 !important;
+}
+
+a.dropdown-item.dropdown-logout-btn:hover svg,
+a.dropdown-item.dropdown-logout-btn:hover span,
+.dropdown-logout-btn:hover svg,
+.dropdown-logout-btn:hover span {
+  color: #fca5a5 !important;
 }
 
 /* 全站導航下拉選單 (Site Nav Drawer) */
@@ -846,11 +904,11 @@ code:hover {
 
 .site-nav-drawer {
   position: fixed;
-  top: 80px;
+  top: 86px;
   left: max(16px, calc((100% - 1040px) / 2));
   width: 280px;
   max-width: calc(100vw - 32px);
-  max-height: calc(100vh - 96px);
+  max-height: calc(100vh - 102px);
   overflow-y: auto;
   background: rgba(15, 23, 42, 0.94);
   border: 1px solid rgba(255, 255, 255, 0.14);

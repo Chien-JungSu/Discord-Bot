@@ -153,11 +153,23 @@
     let isPinned = false;
 
     function syncSidebarTriggerPosition() {
-      if (!docsSidebar || !sidebarTrigger) return;
-      const rect = docsSidebar.getBoundingClientRect();
-      if (rect.height > 0) {
-        const centerY = Math.round(rect.top + rect.height / 2);
-        sidebarTrigger.style.top = `${centerY}px`;
+      if (!docsSidebar) return;
+      const topbar = document.getElementById('site-topbar');
+      const baseTop = window.innerWidth <= 768 ? 88 : 96;
+      let targetTop = baseTop;
+      if (topbar) {
+        const topbarRect = topbar.getBoundingClientRect();
+        targetTop = Math.max(baseTop, Math.round(topbarRect.bottom + 14));
+      }
+      docsSidebar.style.top = `${targetTop}px`;
+      docsSidebar.style.maxHeight = `calc(100dvh - ${targetTop + 16}px)`;
+
+      if (sidebarTrigger) {
+        const rect = docsSidebar.getBoundingClientRect();
+        if (rect.height > 0) {
+          const centerY = Math.round(rect.top + rect.height / 2);
+          sidebarTrigger.style.top = `${centerY}px`;
+        }
       }
     }
 
@@ -330,6 +342,7 @@
     }
 
     syncSidebarTriggerPosition();
+    window.addEventListener('scroll', syncSidebarTriggerPosition, { passive: true });
     window.addEventListener('resize', syncSidebarTriggerPosition);
     window.addEventListener('orientationchange', syncSidebarTriggerPosition);
   }

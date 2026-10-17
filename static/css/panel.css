@@ -341,19 +341,30 @@
   color: var(--muted);
 }
 
-/* ---------- 頂部下拉頭像中「管理員設定」按鈕 ---------- */
+/* ---------- 頂部下拉頭像中「管理員設定」按鈕 (與 BOT OWNER 金黃色一致) ---------- */
 button.dropdown-item.dropdown-owner-btn {
   width: 100%;
   background: transparent;
   border: none;
   cursor: pointer;
   text-align: left;
-  color: #38bdf8;
+  color: #fbbf24 !important;
+}
+
+button.dropdown-item.dropdown-owner-btn svg,
+button.dropdown-item.dropdown-owner-btn span {
+  color: #fbbf24 !important;
+  fill: currentColor;
 }
 
 button.dropdown-item.dropdown-owner-btn:hover {
-  background: rgba(56, 189, 248, 0.14);
-  color: #ffffff;
+  background: rgba(251, 191, 36, 0.15);
+  color: #fde68a !important;
+}
+
+button.dropdown-item.dropdown-owner-btn:hover svg,
+button.dropdown-item.dropdown-owner-btn:hover span {
+  color: #fde68a !important;
 }
 
 /* ---------- 伺服器選擇獨立畫面 (Server Selection View) ---------- */

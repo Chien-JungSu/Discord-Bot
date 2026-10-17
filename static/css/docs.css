@@ -121,11 +121,12 @@ main {
 
 .docs-sidebar {
   position: fixed;
-  top: 80px;
+  top: 96px;
   left: 0;
   width: 290px;
   max-width: calc(100vw - 32px);
-  max-height: calc(100vh - 96px);
+  max-height: calc(100vh - 116px);
+  max-height: calc(100dvh - 116px);
   background: rgba(15, 23, 42, 0.95);
   border: 1px solid rgba(255, 255, 255, 0.15);
   border-left: none;
@@ -572,10 +573,11 @@ main {
   }
 
   .docs-sidebar {
-    top: 76px;
+    top: 88px;
     left: 0;
     width: min(290px, calc(100vw - 20px));
-    max-height: calc(100vh - 90px);
+    max-height: calc(100vh - 104px);
+    max-height: calc(100dvh - 104px);
     border-top-left-radius: 0;
     border-bottom-left-radius: 0;
     border-top-right-radius: 16px;
