@@ -544,6 +544,26 @@ def test_chinese_font_loading():
     assert width >= 55, f"中文字串寬度異常 ({width}px)，可能缺字型造成豆腐塊"
 
 
+def test_kaomoji_rendering():
+    """驗證各國罕見符號與顏文字 (如 ٩(•̀ㅂ•́)و✧、( ⸝⸝> ᴗ <⸝⸝ )) 支援度。"""
+    from cogs.table_renderer import extract_and_render_markdown_tables
+
+    kaomoji_table = (
+        "| 序號 | 狀態 | 代表顏文字 | 說明 |\n"
+        "| :--- | :--- | :--- | :--- |\n"
+        "| 1 | 開心 | ( ≧ ∇ ≦ )/ | 充滿元氣 |\n"
+        "| 2 | 眼神死 | ( ¬_¬ ) | 神秘Bug |\n"
+        "| 3 | 害羞 | ( ⸝⸝> ᴗ <⸝⸝ ) | 小扭呢 |\n"
+        "| 4 | 思考 | ٩(•̀ㅂ•́)و✧ | 解決難題 |\n"
+        "| 5 | 睏倦 | ( ¯ ꒳ ¯ ) ノ³ | 靈魂出竅 |\n"
+    )
+
+    clean_text, files = extract_and_render_markdown_tables(kaomoji_table)
+    assert len(files) == 1
+    assert files[0].filename == "table_1.png"
+    assert len(files[0].fp.getvalue()) > 5000
+
+
 def test_resolve_error_view_and_deduplication():
     """驗證 Fallback 逾時/失敗通報去重與已解決按鈕狀態。"""
     from cogs.ai import _unresolved_ai_error_keys, ResolveErrorView

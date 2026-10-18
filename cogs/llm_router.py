@@ -189,7 +189,7 @@ class MultiProviderLLMRouter:
                 name="Google AI Studio (主要視覺/多模態)",
                 base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
                 env_keys=["GEMINI_API_KEY", "GOOGLE_API_KEY"],
-                default_text_model="gemini-flash-latest",
+                default_text_model="gemini-3.5-flash-lite",
                 default_vision_model="gemini-flash-latest",
                 fallback_models=["gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash-lite"],
                 supports_vision=True,
