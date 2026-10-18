@@ -468,6 +468,7 @@ class MultiProviderLLMRouter:
         preferred_model: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 4000,
+        user_name: Optional[str] = None,
     ) -> Tuple[Optional[str], Optional[str], Dict[str, Any]]:
         """執行跨提供商智慧容錯對話請求。
         
@@ -490,6 +491,23 @@ class MultiProviderLLMRouter:
 
         # 2. 構建請求訊息列表
         formatted_messages: List[Dict[str, Any]] = []
+
+        user_guidance = ""
+        if user_name and user_name.strip():
+            u_clean = user_name.strip()
+            user_guidance = (
+                f"\n\n【當前對話者辨識準則】\n"
+                f"- 當前正在向你提問並等待回覆的使用者是：【{u_clean}】。\n"
+                f"- 本文字頻道為 Discord 多人聊天群組，歷史對話中包含其他不同成員的發言紀錄（格式為「[成員暱稱]: 訊息內容」）。\n"
+                f"- 請務必針對當前發問者【{u_clean}】進行回答，切勿將其誤認為聊天紀錄中的其他成員（如先前發言者）；若回答中提及對方稱呼，請務必使用「{u_clean}」，嚴禁張冠李戴或套用其他人的名字。"
+            )
+        else:
+            user_guidance = (
+                "\n\n【多人群聊辨識準則】\n"
+                "- 本頻道為 Discord 多人聊天群組，使用者訊息格式皆為「[成員暱稱]: 訊息內容」。\n"
+                "- 請針對最後一則訊息的發問者進行回覆，切勿與歷史紀錄中其他使用者的身份與名字相互混淆。"
+            )
+
         anti_roleplay_rule = (
             "\n\n【格式約束】\n"
             "- 請直接針對使用者訊息進行自然對話回答。\n"
@@ -497,7 +515,7 @@ class MultiProviderLLMRouter:
             "- 嚴禁主動覆誦、確認或列出自己的系統人設與身份設定。"
         )
         base_instruction = (system_instruction or "").strip()
-        full_system_instruction = (base_instruction + anti_roleplay_rule).strip() if base_instruction else anti_roleplay_rule.strip()
+        full_system_instruction = (base_instruction + user_guidance + anti_roleplay_rule).strip()
         formatted_messages.append({"role": "system", "content": full_system_instruction})
 
         for msg in messages:

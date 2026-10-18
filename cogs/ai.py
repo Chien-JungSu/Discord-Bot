@@ -809,7 +809,8 @@ class AI(commands.Cog):
         # 取得歷史上下文並加入當前提問
         context_messages = memory_manager.get_context_messages(channel_id)
         user_name = interaction.user.display_name or interaction.user.name
-        context_messages.append({"role": "user", "content": clean_prompt or "請分析圖片"})
+        prompt_text = clean_prompt or "請分析圖片"
+        context_messages.append({"role": "user", "content": f"[{user_name}]: {prompt_text}"})
 
         # 7. 呼叫 Multi-Provider Router 執行生成
         preferred_p = provider if (provider and provider != "auto") else None
@@ -836,6 +837,7 @@ class AI(commands.Cog):
             preferred_model=preferred_m,
             temperature=temperature,
             max_tokens=max_tokens,
+            user_name=user_name,
         )
 
         if error_msg or not response_text:
@@ -1296,7 +1298,8 @@ class AI(commands.Cog):
                     "content": f"[引述 {ref_author} 的訊息]: {ref_text}"
                 })
 
-        context_messages.append({"role": "user", "content": clean_content or "請分析這張圖片"})
+        prompt_text = clean_content or "請分析這張圖片"
+        context_messages.append({"role": "user", "content": f"[{user_name}]: {prompt_text}"})
 
         # 解析伺服器預設模型與提供商
         configured_model = str(cfg.get("model") or "auto")
@@ -1321,6 +1324,7 @@ class AI(commands.Cog):
                     preferred_model=configured_m,
                     temperature=temperature,
                     max_tokens=max_tokens,
+                    user_name=user_name,
                 )
 
                 if error_msg or not response_text:
