@@ -533,6 +533,17 @@ def test_table_to_image_extractor():
     assert len(normal_files) == 0
 
 
+def test_chinese_font_loading():
+    """驗證繁體中文字型載入與字元寬度計算，確保無豆腐塊。"""
+    from cogs.table_renderer import get_font
+    font = get_font(16, bold=False)
+    assert font is not None
+    # 4 個繁體中文字元在 16px 下寬度應約為 64px 左右 (非缺少字型時的 20px 豆腐塊)
+    bbox = font.getbbox("繁體中文")
+    width = bbox[2] - bbox[0]
+    assert width >= 55, f"中文字串寬度異常 ({width}px)，可能缺字型造成豆腐塊"
+
+
 def test_resolve_error_view_and_deduplication():
     """驗證 Fallback 逾時/失敗通報去重與已解決按鈕狀態。"""
     from cogs.ai import _unresolved_ai_error_keys, ResolveErrorView

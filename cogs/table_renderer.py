@@ -11,23 +11,54 @@ from PIL import Image, ImageDraw, ImageFont
 DELIM_PATTERN = re.compile(r'^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$')
 
 
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_FONTS_DIR = os.path.join(BASE_DIR, 'static', 'fonts')
+BUNDLED_FONT = os.path.join(PROJECT_FONTS_DIR, 'wqy-microhei.ttc')
+
+
 def get_font(size: int = 16, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    """尋找並載入系統繁體/簡體中文字型，支援 Windows 與 Linux。"""
+    """尋找並載入支援繁體/簡體中文的中文字型，支援 Windows、Linux (如 Render/Docker) 與 macOS。"""
     candidates = [
+        # Windows 微軟正黑體 (繁體中文最佳相容)
         'C:/Windows/Fonts/msjhbd.ttc' if bold else 'C:/Windows/Fonts/msjh.ttc',
+        # 專案自帶開源微米黑字型 (確保 Render / Linux 雲端環境 100% 繁簡中文正常顯示)
+        BUNDLED_FONT,
+        # Windows 微軟雅黑
         'C:/Windows/Fonts/msyhbd.ttc' if bold else 'C:/Windows/Fonts/msyh.ttc',
+        # Linux Noto Sans CJK
         '/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc' if bold else '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+        '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
+        # Linux 文泉驛微米黑 / 正黑
         '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
+        '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc',
+        # Linux Droid Sans Fallback
+        '/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf',
+        # macOS 蘋方 / 黑體
+        '/System/Library/Fonts/PingFang.ttc',
+        '/System/Library/Fonts/STHeiti Light.ttc',
+        # Windows 新細明體 / 宋體
         'C:/Windows/Fonts/mingliu.ttc',
-        'C:/Windows/Fonts/segoeui.ttf',
-        'C:/Windows/Fonts/arial.ttf',
+        'C:/Windows/Fonts/simsun.ttc',
     ]
     for path in candidates:
-        if os.path.exists(path):
+        if path and os.path.exists(path):
             try:
                 return ImageFont.truetype(path, size)
             except Exception:
                 continue
+
+    # 若上述皆未找到且自帶字型檔案遺失，嘗試線上自動下載微米黑字型
+    if not os.path.exists(BUNDLED_FONT):
+        try:
+            import urllib.request
+            os.makedirs(PROJECT_FONTS_DIR, exist_ok=True)
+            url = 'https://github.com/anthonyfok/fonts-wqy-microhei/raw/master/wqy-microhei.ttc'
+            urllib.request.urlretrieve(url, BUNDLED_FONT)
+            if os.path.exists(BUNDLED_FONT):
+                return ImageFont.truetype(BUNDLED_FONT, size)
+        except Exception as dl_err:
+            print(f"⚠️ 中文字型自動下載失敗: {dl_err}")
+
     try:
         return ImageFont.load_default()
     except Exception:
