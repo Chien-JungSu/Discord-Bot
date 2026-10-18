@@ -2537,6 +2537,19 @@
     const form = document.getElementById('form-owner-bot-defaults');
     if (!form) return;
 
+    const btnSave = document.getElementById('btn-save-bot-defaults');
+    const btnApply = document.getElementById('btn-apply-defaults-all');
+    const origSaveHtml = btnSave ? btnSave.innerHTML : '';
+    const origApplyHtml = btnApply ? btnApply.innerHTML : '';
+
+    if (applyToAll && btnApply) {
+      btnApply.disabled = true;
+      btnApply.innerHTML = '<span>⚡ 套用中...</span>';
+    } else if (!applyToAll && btnSave) {
+      btnSave.disabled = true;
+      btnSave.innerHTML = '<span>⏳ 儲存中...</span>';
+    }
+
     const payload = {
       ai_is_enabled: document.getElementById('bot-default-ai-enabled')?.checked ?? true,
       ai_model: document.getElementById('bot-default-ai-model')?.value || 'auto',
@@ -2554,20 +2567,52 @@
       });
       const data = await res.json();
       if (res.ok && data.status === 'ok') {
-        showToast(data.message || '機器人全域預設設定已儲存！');
         savedFormState.ownerBotDefaults = getFormState(form);
         checkUnsavedChanges();
+        showToast(data.message || '機器人全域預設設定已成功儲存！', 'success');
+
+        if (applyToAll && btnApply) {
+          btnApply.innerHTML = '<span>✅ 已套用至所有伺服器！</span>';
+          setTimeout(() => {
+            btnApply.innerHTML = origApplyHtml;
+            btnApply.disabled = false;
+          }, 2000);
+        } else if (btnSave) {
+          btnSave.innerHTML = '<span>✅ 儲存成功！</span>';
+          setTimeout(() => {
+            btnSave.innerHTML = origSaveHtml;
+            btnSave.disabled = false;
+          }, 2000);
+        }
       } else {
-        showToast(`儲存失敗: ${data.message || '未知錯誤'}`, true);
+        showToast(`儲存失敗: ${data.message || '未知錯誤'}`, 'error');
+        if (btnSave) {
+          btnSave.innerHTML = origSaveHtml;
+          btnSave.disabled = false;
+        }
+        if (btnApply) {
+          btnApply.innerHTML = origApplyHtml;
+          btnApply.disabled = false;
+        }
       }
     } catch (err) {
       console.error('儲存機器人預設設定出錯:', err);
-      showToast('網路連線或伺服器回應錯誤', true);
+      showToast('網路連線或伺服器回應錯誤', 'error');
+      if (btnSave) {
+        btnSave.innerHTML = origSaveHtml;
+        btnSave.disabled = false;
+      }
+      if (btnApply) {
+        btnApply.innerHTML = origApplyHtml;
+        btnApply.disabled = false;
+      }
     }
   }
 
   const formOwnerBotDefaults = document.getElementById('form-owner-bot-defaults');
   if (formOwnerBotDefaults) {
+    formOwnerBotDefaults.addEventListener('input', checkUnsavedChanges);
+    formOwnerBotDefaults.addEventListener('change', checkUnsavedChanges);
     formOwnerBotDefaults.addEventListener('submit', (e) => {
       e.preventDefault();
       submitOwnerBotDefaults(false);
@@ -2577,9 +2622,15 @@
   const btnApplyDefaultsAll = document.getElementById('btn-apply-defaults-all');
   if (btnApplyDefaultsAll) {
     btnApplyDefaultsAll.addEventListener('click', () => {
-      if (confirm('確定要將此預設設定覆蓋套用至機器人已加入的所有伺服器嗎？\n此動作將更新所有伺服器的 AI 啟用狀態、模型與人設提示詞。')) {
-        submitOwnerBotDefaults(true);
-      }
+      showConfirmModal({
+        title: '⚡ 確認一鍵套用至所有伺服器',
+        message: '確定要將此預設設定強制覆蓋套用至機器人已加入的所有伺服器嗎？\n此動作將立即更新所有伺服器的 AI 啟用狀態、模型與人設提示詞。',
+        confirmText: '確認同步套用',
+        cancelText: '取消',
+        onConfirm: async () => {
+          await submitOwnerBotDefaults(true);
+        },
+      });
     });
   }
 

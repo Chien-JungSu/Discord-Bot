@@ -262,3 +262,4 @@ def extract_and_render_markdown_tables(text: str) -> Tuple[str, List[discord.Fil
             i += 1
 
     return '\n'.join(output_lines), files
+
