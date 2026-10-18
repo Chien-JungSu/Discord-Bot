@@ -1926,7 +1926,7 @@ select.rr-draft-role-select {
 /* ---------- 管理員設定專用樣式（按類別劃分子類別） ---------- */
 .admin-categories-wrapper {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
   gap: 16px;
   margin-bottom: 28px;
 }
@@ -1974,6 +1974,7 @@ select.rr-draft-role-select {
   font-weight: 700;
   cursor: pointer;
   transition: all 0.2s ease;
+  white-space: nowrap;
 }
 
 .owner-subtab-btn:hover {
@@ -2044,7 +2045,26 @@ select.rr-draft-role-select {
 .search-user-row {
   display: flex;
   gap: 12px;
+  align-items: center;
   margin-bottom: 20px;
+}
+
+.search-user-row input.form-control,
+.search-user-row .form-control {
+  flex: 1;
+  min-width: 0;
+  height: 44px;
+}
+
+.search-user-row .btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+  height: 44px;
+  padding: 0 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
 }
 
 .user-detail-card {
@@ -2085,6 +2105,24 @@ select.rr-draft-role-select {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
+  align-items: center;
+}
+
+.modify-row input.form-control,
+.modify-row .form-control {
+  flex: 1 1 180px;
+  min-width: 140px;
+  height: 42px;
+}
+
+.modify-row .btn {
+  white-space: nowrap;
+  flex-shrink: 0;
+  height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
 }
 
 /* 模組熱重載卡片網格 */
@@ -2905,14 +2943,61 @@ body.has-unsaved-changes.has-back-to-top .toast-container {
     grid-template-columns: 1fr;
   }
 
+  /* 管理員設定專用行動版排版優化：防止帳戶查詢、餘額修改等控制項被窄螢幕擠壓與斷行 */
+  .admin-categories-wrapper {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .admin-category-card {
+    padding: 12px 14px;
+  }
+
+  .user-manage-box {
+    padding: 16px 14px;
+    border-radius: 16px;
+  }
+
+  .user-detail-card {
+    padding: 14px 12px;
+    border-radius: 14px;
+  }
+
+  .search-user-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+
+  .search-user-row input.form-control,
+  .search-user-row .form-control,
+  .search-user-row .btn {
+    width: 100%;
+    height: 44px;
+  }
+
+  .user-stat-grid {
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+
+  .stat-item {
+    padding: 10px 12px;
+  }
+
   .modify-row {
     flex-direction: column;
     align-items: stretch;
+    gap: 10px;
   }
 
-  .modify-row input,
+  .modify-row input.form-control,
+  .modify-row .form-control,
   .modify-row .btn {
     width: 100%;
+    height: 42px;
   }
 
   /* 手機版指令清單：改為雙行卡片式結構，徹底解決表格欄位擠壓與直書斷行問題 */
