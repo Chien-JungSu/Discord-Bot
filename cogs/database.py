@@ -430,7 +430,7 @@ DEFAULT_AI_INSTRUCTION = (
     "【對話準則】直接開始自然回答，嚴禁在開頭添加「xxx的我」等動作或心理前綴，亦切勿主動背誦自身身份設定。"
 )
 DEFAULT_AI_TEMPERATURE = 0.7
-DEFAULT_AI_MAX_TOKENS = 3000
+DEFAULT_AI_MAX_TOKENS = 4000
 
 # 多供應商免費模型與容錯容災配置清單
 AI_PROVIDER_MODELS = [

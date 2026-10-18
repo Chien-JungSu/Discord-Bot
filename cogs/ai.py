@@ -5,6 +5,7 @@ import os
 import re
 import time
 import traceback
+import unicodedata
 from typing import Any, Dict, List, Optional
 
 import discord
@@ -36,7 +37,167 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(BASE_DIR, '.env'))
 
 
-def split_message_chunks(text: str, max_chars: int = 1900) -> List[str]:
+def get_char_width(c: str) -> int:
+    """計算單一字元之視覺顯示寬度（支援中日韓 CJK 全形與常見 Emoji）。"""
+    w = unicodedata.east_asian_width(c)
+    if w in ('F', 'W'):
+        return 2
+    if ord(c) > 0x1F000 or c in ('✅', '❌', '⚠️', '⚡', '⭐', '🔥', '✨'):
+        return 2
+    return 1
+
+
+def get_str_width(s: str) -> int:
+    """計算字串於等寬字型下的總顯示寬度。"""
+    return sum(get_char_width(c) for c in s)
+
+
+def pad_string(s: str, width: int, align: str = 'left') -> str:
+    """以顯示寬度進行精確補空白對齊（避免中英夾雜時長度錯位）。"""
+    pad = max(0, width - get_str_width(s))
+    if align == 'right':
+        return ' ' * pad + s
+    elif align == 'center':
+        l = pad // 2
+        r = pad - l
+        return ' ' * l + s + ' ' * r
+    return s + ' ' * pad
+
+
+def strip_cell_markdown(s: str) -> str:
+    """移除 Markdown 單元格內之粗體、斜體與程式碼標籤，確保等寬表格純淨排版。"""
+    s = re.sub(r'\*\*(.*?)\*\*', r'\1', s)
+    s = re.sub(r'\*(.*?)\*', r'\1', s)
+    s = re.sub(r'`(.*?)`', r'\1', s)
+    return s.strip()
+
+
+DELIM_PATTERN = re.compile(r'^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$')
+
+
+def format_markdown_tables(text: str) -> str:
+    """自動偵測並將文字中的 Markdown 表格排版為等寬對齊的 Unicode 邊框表格。"""
+    if not text or '|' not in text:
+        return text
+
+    lines = text.split('\n')
+    output_lines: List[str] = []
+    i = 0
+    in_code_block = False
+
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+
+        if stripped.startswith('```'):
+            in_code_block = not in_code_block
+            output_lines.append(line)
+            i += 1
+            continue
+
+        if in_code_block:
+            output_lines.append(line)
+            i += 1
+            continue
+
+        if '|' in line and (i + 1 < len(lines)) and DELIM_PATTERN.match(lines[i + 1]):
+            header_line = line
+            delim_line = lines[i + 1]
+            data_lines = []
+            j = i + 2
+            while j < len(lines) and '|' in lines[j] and lines[j].strip():
+                data_lines.append(lines[j])
+                j += 1
+
+            def split_row(l: str) -> List[str]:
+                s = l.strip()
+                if s.startswith('|'):
+                    s = s[1:]
+                if s.endswith('|'):
+                    s = s[:-1]
+                return [strip_cell_markdown(c) for c in s.split('|')]
+
+            headers = split_row(header_line)
+            delims = split_row(delim_line)
+            aligns = []
+            for d in delims:
+                d = d.strip()
+                if d.startswith(':') and d.endswith(':'):
+                    aligns.append('center')
+                elif d.endswith(':'):
+                    aligns.append('right')
+                else:
+                    aligns.append('left')
+
+            rows = [split_row(dl) for dl in data_lines]
+            col_count = len(headers)
+            for r in rows:
+                while len(r) < col_count:
+                    r.append('')
+            while len(aligns) < col_count:
+                aligns.append('left')
+
+            col_widths = [get_str_width(h) for h in headers]
+            for r in rows:
+                for idx_c, cell in enumerate(r[:col_count]):
+                    col_widths[idx_c] = max(col_widths[idx_c], get_str_width(cell))
+            col_widths = [max(w, 2) for w in col_widths]
+
+            top = '┌─' + '─┬─'.join('─' * w for w in col_widths) + '─┐'
+            head = '│ ' + ' │ '.join(pad_string(h, col_widths[idx_c], aligns[idx_c]) for idx_c, h in enumerate(headers)) + ' │'
+            mid = '├─' + '─┼─'.join('─' * w for w in col_widths) + '─┤'
+            data_strs = [
+                '│ ' + ' │ '.join(pad_string(r[idx_c], col_widths[idx_c], aligns[idx_c]) for idx_c in range(col_count)) + ' │'
+                for r in rows
+            ]
+            bot = '└─' + '─┴─'.join('─' * w for w in col_widths) + '─┘'
+            formatted_box = '```text\n' + '\n'.join([top, head, mid] + data_strs + [bot]) + '\n```'
+            output_lines.append(formatted_box)
+            i = j
+        else:
+            output_lines.append(line)
+            i += 1
+
+    return '\n'.join(output_lines)
+
+
+HORIZONTAL_RULE_PATTERN = re.compile(r'^[ \t]*([-_*─])(?:[ \t]*\1){2,}[ \t]*$')
+
+
+def split_text_by_markdown_separators(text: str) -> List[str]:
+    """將文本以不在程式碼區塊內的 markdown 分隔線 (---, ***, ___ 等) 切分成多個文字區塊。"""
+    if not text:
+        return []
+
+    lines = text.split("\n")
+    segments: List[str] = []
+    current_lines: List[str] = []
+    in_code_block = False
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_code_block = not in_code_block
+            current_lines.append(line)
+            continue
+
+        if not in_code_block and HORIZONTAL_RULE_PATTERN.match(line):
+            seg_text = "\n".join(current_lines).strip()
+            if seg_text:
+                segments.append(seg_text)
+            current_lines = []
+        else:
+            current_lines.append(line)
+
+    if current_lines:
+        seg_text = "\n".join(current_lines).strip()
+        if seg_text:
+            segments.append(seg_text)
+
+    return segments if segments else [text.strip()]
+
+
+def split_message_chunks(text: str, max_chars: int = 3500) -> List[str]:
     """將長文本切割為不超過 max_chars 的區塊，若在程式碼區塊內斷開則自動補齊關閉與開啟 code fence。"""
     if len(text) <= max_chars:
         return [text]
@@ -58,6 +219,19 @@ def split_message_chunks(text: str, max_chars: int = 1900) -> List[str]:
             else:
                 in_code_block = False
                 code_lang = ""
+
+        # 單行長度本身超出限制的極端狀況
+        if line_len > max_chars:
+            if current_chunk:
+                if in_code_block:
+                    current_chunk.append("```")
+                chunks.append("\n".join(current_chunk))
+                current_chunk = []
+                current_len = 0
+            for start_idx in range(0, len(line), max_chars - 20):
+                sub_part = line[start_idx:start_idx + max_chars - 20]
+                chunks.append(sub_part)
+            continue
 
         if current_len + line_len > max_chars and current_chunk:
             if in_code_block:
@@ -146,39 +320,25 @@ class AI(commands.Cog):
         """Cog 卸載時安全關閉 router 連線資源。"""
         await router.close()
 
-    def _build_ai_embed(
+    def _format_ai_footer(
         self,
-        response_text: str,
-        prompt: str,
-        stats: dict[str, Any],
+        stats: Dict[str, Any],
         cost: int,
-        payer_id: int,
-        is_guild_sponsored: bool,
-        new_balance: int,
         payer_name: str = "User",
-        image_url: Optional[str] = None,
-    ) -> discord.Embed:
-        """依照簡潔優雅風格 (圖二) 建立 AI 回覆 Embed：
-        無贅餘標題與欄位，僅保留純淨 AI 回覆，底部以分隔線與 -# 子文字呈現計費統計、模型與耗時。
-        格式範例：
-        [AI 回覆內容]
-
-        ---
-        -# 0.00/C | I 33C/0.00 | O 120C/0.00 | TC 0.00 | Pay Nicko | deepseek-v4.1-flash | 4.91s
+    ) -> str:
+        """依照圖二簡約風格格式化 AI 回覆底部統計字串：
+        -# 0.00/C | I 33C/0.00 | O 120C/0.00 | TC 0.00 | Pay Nicko | gemini-flash-latest | 4.91s
         """
-        # 提取模型名稱 (去除 gemini: 或 nvidia: 前綴，精簡顯示如 gemini-2.5-flash-lite / llama-3.2-11b-vision-instruct)
         model_raw = str(stats.get("model") or "auto")
         if ":" in model_raw:
             model_raw = model_raw.split(":", 1)[1]
         clean_model = model_raw.split("/")[-1] if "/" in model_raw else model_raw
 
-        # 提取 Token 統計與耗時
         prompt_tokens = stats.get("prompt_tokens", 0) or 0
         completion_tokens = stats.get("completion_tokens", 0) or 0
         total_tokens = stats.get("total_tokens", 0) or (prompt_tokens + completion_tokens)
         thinking_time = float(stats.get("thinking_time", 0.0) or 0.0)
 
-        # 格式化單位費率、輸入/輸出費用與總費用 (完全對齊圖二 0.00/C 格式)
         if total_tokens > 0 and cost > 0:
             unit_rate = (cost / total_tokens) * 1000
             p_ratio = prompt_tokens / total_tokens if total_tokens > 0 else 0.5
@@ -195,62 +355,144 @@ class AI(commands.Cog):
             total_cost_str = f"{float(cost):.2f}"
 
         clean_payer = payer_name.replace("|", "").strip() or "User"
-        footer_text = (
+        return (
             f"{unit_rate_str} | I {prompt_tokens}C/{input_cost_str} | "
             f"O {completion_tokens}C/{output_cost_str} | TC {total_cost_str} | "
             f"Pay {clean_payer} | {clean_model} | {thinking_time:.2f}s"
         )
-        divider = "─" * 36
-        footer_block = f"\n\n-# {divider}\n-# {footer_text}"
-
-        # 內容保護 (Embed description 上限 4096 字元，預留分隔線與 footer 空間)
-        max_content_len = 4096 - len(footer_block)
-        clean_response = strip_roleplay_prefix(strip_thinking_tags(response_text or "")).rstrip()
-        if not clean_response:
-            clean_response = "（無回覆內容）"
-        elif len(clean_response) > max_content_len:
-            clean_response = f"{clean_response[:max_content_len - 3]}..."
-
-        desc = f"{clean_response}{footer_block}"
-
-        # 乾淨高質感的 Discord Blurple 邊框 (與圖二相同)
-        embed = discord.Embed(
-            description=desc,
-            color=0x5865F2,
-        )
-
-        if image_url:
-            embed.set_thumbnail(url=image_url)
-
-        return embed, footer_text, clean_response
 
     def _build_ai_components_v2_view(
         self,
         clean_response: str,
-        footer_text: str,
+        footer_text: Optional[str] = None,
         image_url: Optional[str] = None,
         color: int = 0x5865F2,
     ) -> ui.LayoutView:
         """依照圖二風格使用 Discord Components V2 建構容器、真實不可選取實體橫線與 Footer：
-        [AI 回覆內容]
-        ──────────────────────────── (Discord 原生 Separator 元件，實體水平分隔線，滑鼠無法選取)
-        -# 0.00/C | I 33C/0.00 | O 120C/0.00 | TC 0.00 | Pay Nicko | deepseek-v4.1-flash | 4.91s
+        - 自動將 AI 輸出的「---」分隔線轉為 Discord 原生 ui.Separator
+        - 若有 footer_text，在容器最底端加上分隔線與 -# footer (僅在最後一則 container 顯示)
         """
         view = ui.LayoutView()
         safe_response = clean_response[:3850] if len(clean_response) > 3850 else (clean_response or "（無回覆內容）")
-        top_text = ui.TextDisplay(safe_response)
-        separator = ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small)
-        bottom_text = ui.TextDisplay(f"-# {footer_text}")
 
-        if image_url:
-            thumbnail = ui.Thumbnail(image_url)
-            content_section = ui.Section(top_text, accessory=thumbnail)
-            container = ui.Container(content_section, separator, bottom_text, accent_color=color)
-        else:
-            container = ui.Container(top_text, separator, bottom_text, accent_color=color)
+        # 1. 依據 markdown 分隔線 (---) 切分內容區塊，自動轉換為 Separator
+        segments = split_text_by_markdown_separators(safe_response)
+        if not segments:
+            segments = [safe_response]
 
+        # 限制單一 container 內最多 15 個段落，避免超過 Discord 組件數量上限
+        if len(segments) > 15:
+            merged_last = "\n\n---\n\n".join(segments[14:])
+            segments = segments[:14] + [merged_last]
+
+        container_children: List[discord.ui.Item] = []
+
+        for idx, seg in enumerate(segments):
+            safe_seg = seg[:3850] if len(seg) > 3850 else seg
+            text_item = ui.TextDisplay(safe_seg)
+
+            if idx == 0 and image_url:
+                thumbnail = ui.Thumbnail(image_url)
+                container_children.append(ui.Section(text_item, accessory=thumbnail))
+            else:
+                container_children.append(text_item)
+
+            # 若非最後一個段落，插入原生 Separator
+            if idx < len(segments) - 1:
+                container_children.append(ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small))
+
+        # 2. 若有傳入 footer_text (僅在最後一則 container 附加)，在最底端插入分隔線與 footer
+        if footer_text and footer_text.strip():
+            container_children.append(ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small))
+            container_children.append(ui.TextDisplay(f"-# {footer_text.strip()}"))
+
+        container = ui.Container(*container_children, accent_color=color)
         view.add_item(container)
         return view
+
+    def _build_ai_embed(
+        self,
+        response_text: str,
+        footer_text: Optional[str] = None,
+        image_url: Optional[str] = None,
+        color: int = 0x5865F2,
+    ) -> discord.Embed:
+        """傳統 Embed 降級回退方法（若 Components V2 渲染例外時使用）。"""
+        clean_response = response_text.rstrip()
+        if not clean_response:
+            clean_response = "（無回覆內容）"
+
+        if footer_text and footer_text.strip():
+            divider = "─" * 36
+            footer_block = f"\n\n-# {divider}\n-# {footer_text.strip()}"
+            max_len = 4096 - len(footer_block)
+            if len(clean_response) > max_len:
+                clean_response = f"{clean_response[:max_len - 3]}..."
+            desc = f"{clean_response}{footer_block}"
+        else:
+            if len(clean_response) > 4096:
+                clean_response = f"{clean_response[:4093]}..."
+            desc = clean_response
+
+        embed = discord.Embed(description=desc, color=color)
+        if image_url:
+            embed.set_thumbnail(url=image_url)
+        return embed
+
+    async def _send_ai_response_chunks(
+        self,
+        target: Any,
+        clean_response: str,
+        footer_text: str,
+        image_url: Optional[str] = None,
+        is_interaction: bool = True,
+    ) -> None:
+        """超出字數/Token上限自動切割訊息並分成多個 container 發送，footer 永遠放在最後一則 container，不打斷回答。"""
+        chunks = split_message_chunks(clean_response, max_chars=3500)
+        if not chunks:
+            chunks = ["（無回覆內容）"]
+
+        total_chunks = len(chunks)
+
+        for idx, chunk in enumerate(chunks):
+            is_first = (idx == 0)
+            is_last = (idx == total_chunks - 1)
+            # 關鍵：footer 永遠放在訊息尾端（最後一則 container）！
+            cur_footer = footer_text if is_last else None
+            cur_image = image_url if is_first else None
+
+            # 優先嘗試 Components V2 LayoutView
+            sent_v2 = False
+            try:
+                layout_view = self._build_ai_components_v2_view(
+                    clean_response=chunk,
+                    footer_text=cur_footer,
+                    image_url=cur_image,
+                )
+                if is_interaction:
+                    await target.followup.send(view=layout_view)
+                else:
+                    if is_first:
+                        await target.reply(view=layout_view, mention_author=False)
+                    else:
+                        await target.channel.send(view=layout_view)
+                sent_v2 = True
+            except Exception as v2_err:
+                print(f"⚠️ Components V2 渲染例外，降級為傳統 Embed 發送: {v2_err}")
+
+            if not sent_v2:
+                fallback_embed = self._build_ai_embed(
+                    response_text=chunk,
+                    footer_text=cur_footer,
+                    image_url=cur_image,
+                )
+                if is_interaction:
+                    await target.followup.send(embed=fallback_embed)
+                else:
+                    if is_first:
+                        await target.reply(embed=fallback_embed, mention_author=False)
+                    else:
+                        await target.channel.send(embed=fallback_embed)
 
     # ==========================================================================
     # /ai 斜線指令 (支援文字與圖片附件)
@@ -419,41 +661,17 @@ class AI(commands.Cog):
         payer_member = interaction.guild.get_member(payer_id) if interaction.guild else None
         payer_name = payer_member.display_name if payer_member else (interaction.user.display_name or interaction.user.name)
 
-        # 10. 組裝 Components V2 / 簡約 Embed (完全對齊圖二原生不可選取實體橫線排版)
-        chunks = split_message_chunks(response_text, max_chars=3800)
-        first_chunk = chunks[0] if chunks else response_text
+        # 10. 排版表格、清理格式並發送多 Container 回覆 (超過上限自動切割，footer 永遠在末端)
+        clean_response = format_markdown_tables(strip_roleplay_prefix(strip_thinking_tags(response_text or "")))
+        footer_text = self._format_ai_footer(stats=stats, cost=cost, payer_name=payer_name)
 
-        embed, footer_text, clean_first_chunk = self._build_ai_embed(
-            response_text=first_chunk,
-            prompt=clean_prompt,
-            stats=stats,
-            cost=cost,
-            payer_id=payer_id,
-            is_guild_sponsored=is_guild_sponsored,
-            new_balance=new_balance,
-            payer_name=payer_name,
+        await self._send_ai_response_chunks(
+            target=interaction,
+            clean_response=clean_response,
+            footer_text=footer_text,
             image_url=img_url,
+            is_interaction=True,
         )
-
-        sent_v2 = False
-        try:
-            layout_view = self._build_ai_components_v2_view(
-                clean_response=clean_first_chunk,
-                footer_text=footer_text,
-                image_url=img_url,
-            )
-            await interaction.followup.send(view=layout_view)
-            sent_v2 = True
-        except Exception as v2_err:
-            print(f"⚠️ Components V2 渲染例外，降級為傳統 Embed 發送: {v2_err}")
-
-        if not sent_v2:
-            await interaction.followup.send(embed=embed)
-        if len(chunks) > 1:
-            for extra_chunk in chunks[1:]:
-                sub_chunks = split_message_chunks(extra_chunk, max_chars=1900)
-                for sc in sub_chunks:
-                    await interaction.followup.send(sc)
 
     # ==========================================================================
     # /reset 與 /ai_reset: 清除頻道對話記憶
@@ -871,40 +1089,17 @@ class AI(commands.Cog):
                 payer_member = message.guild.get_member(payer_id) if message.guild else None
                 payer_name = payer_member.display_name if payer_member else (message.author.display_name or message.author.name)
 
-                chunks = split_message_chunks(response_text, max_chars=3800)
-                first_chunk = chunks[0] if chunks else response_text
+                # 排版表格、清理格式並發送多 Container 回覆 (超過上限自動切割，footer 永遠在末端)
+                clean_response = format_markdown_tables(strip_roleplay_prefix(strip_thinking_tags(response_text or "")))
+                footer_text = self._format_ai_footer(stats=stats, cost=cost, payer_name=payer_name)
 
-                embed, footer_text, clean_first_chunk = self._build_ai_embed(
-                    response_text=first_chunk,
-                    prompt=clean_content,
-                    stats=stats,
-                    cost=cost,
-                    payer_id=payer_id,
-                    is_guild_sponsored=is_guild_sponsored,
-                    new_balance=new_balance,
-                    payer_name=payer_name,
+                await self._send_ai_response_chunks(
+                    target=message,
+                    clean_response=clean_response,
+                    footer_text=footer_text,
                     image_url=img_url,
+                    is_interaction=False,
                 )
-
-                sent_v2 = False
-                try:
-                    layout_view = self._build_ai_components_v2_view(
-                        clean_response=clean_first_chunk,
-                        footer_text=footer_text,
-                        image_url=img_url,
-                    )
-                    await message.reply(view=layout_view, mention_author=False)
-                    sent_v2 = True
-                except Exception as v2_err:
-                    print(f"⚠️ Components V2 渲染例外，降級為傳統 Embed 發送: {v2_err}")
-
-                if not sent_v2:
-                    await message.reply(embed=embed, mention_author=False)
-                if len(chunks) > 1:
-                    for extra_chunk in chunks[1:]:
-                        sub_chunks = split_message_chunks(extra_chunk, max_chars=1900)
-                        for sc in sub_chunks:
-                            await message.channel.send(sc)
 
         except Exception as exc:
             traceback.print_exc()

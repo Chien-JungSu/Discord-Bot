@@ -457,7 +457,7 @@ class MultiProviderLLMRouter:
         preferred_provider_id: Optional[str] = None,
         preferred_model: Optional[str] = None,
         temperature: float = 0.7,
-        max_tokens: int = 3000,
+        max_tokens: int = 4000,
     ) -> Tuple[Optional[str], Optional[str], Dict[str, Any]]:
         """執行跨提供商智慧容錯對話請求。
         
