@@ -162,6 +162,14 @@ def init_db():
             );
             """)
 
+            # 12. 機器人全域預設設定表 (適用所有伺服器的通用預設值)
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS bot_default_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            """)
+
             # ---------- 自動欄位安全遷移 (Migration) ----------
             cursor.execute("PRAGMA table_info(economy_users);")
             econ_cols = [r["name"] if isinstance(r, sqlite3.Row) else r[1] for r in cursor.fetchall()]
@@ -533,18 +541,108 @@ def load_ai_settings() -> dict:
             conn.close()
 
 
+def get_bot_default_settings() -> dict:
+    """取得機器人全域預設設定（適用於所有未個別設定之伺服器）。"""
+    init_db()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT key, value FROM bot_default_settings;")
+            raw = {row['key']: row['value'] for row in cursor.fetchall()}
+
+            is_enabled_val = raw.get('ai_is_enabled', '1')
+            is_enabled = (is_enabled_val == '1' or str(is_enabled_val).lower() == 'true')
+            model = raw.get('ai_model', DEFAULT_AI_MODEL)
+            instruction = raw.get('ai_instruction', DEFAULT_AI_INSTRUCTION)
+            try:
+                temperature = float(raw.get('ai_temperature', DEFAULT_AI_TEMPERATURE))
+            except (ValueError, TypeError):
+                temperature = DEFAULT_AI_TEMPERATURE
+            try:
+                max_tokens = int(raw.get('ai_max_tokens', DEFAULT_AI_MAX_TOKENS))
+            except (ValueError, TypeError):
+                max_tokens = DEFAULT_AI_MAX_TOKENS
+
+            return {
+                'ai_is_enabled': is_enabled,
+                'ai_model': model,
+                'ai_instruction': instruction,
+                'ai_temperature': temperature,
+                'ai_max_tokens': max_tokens,
+            }
+        finally:
+            conn.close()
+
+
+def save_bot_default_settings(data: dict, apply_to_all_guilds: bool = False) -> dict:
+    """儲存機器人全域預設設定，並可選擇一鍵同步覆寫套用至所有伺服器。"""
+    init_db()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+
+            ai_is_enabled = '1' if data.get('ai_is_enabled', True) else '0'
+            ai_model = str(data.get('ai_model') or DEFAULT_AI_MODEL).strip()
+            ai_instruction = str(data.get('ai_instruction') if data.get('ai_instruction') is not None else DEFAULT_AI_INSTRUCTION).strip()
+
+            try:
+                ai_temp = max(0.0, min(2.0, float(data.get('ai_temperature', DEFAULT_AI_TEMPERATURE))))
+            except (ValueError, TypeError):
+                ai_temp = DEFAULT_AI_TEMPERATURE
+
+            try:
+                ai_tokens = max(500, min(4000, int(data.get('ai_max_tokens', DEFAULT_AI_MAX_TOKENS))))
+            except (ValueError, TypeError):
+                ai_tokens = DEFAULT_AI_MAX_TOKENS
+
+            settings_to_save = {
+                'ai_is_enabled': ai_is_enabled,
+                'ai_model': ai_model,
+                'ai_instruction': ai_instruction,
+                'ai_temperature': str(ai_temp),
+                'ai_max_tokens': str(ai_tokens),
+            }
+
+            for k, v in settings_to_save.items():
+                cursor.execute("""
+                INSERT OR REPLACE INTO bot_default_settings (key, value)
+                VALUES (?, ?)
+                """, (k, v))
+
+            if apply_to_all_guilds:
+                # 一鍵套用至所有已儲存設定之伺服器
+                cursor.execute("""
+                UPDATE ai_settings
+                SET is_enabled = ?, model = ?, instruction = ?, temperature = ?, max_tokens = ?
+                """, (
+                    1 if ai_is_enabled == '1' else 0,
+                    ai_model,
+                    ai_instruction,
+                    ai_temp,
+                    ai_tokens,
+                ))
+
+            conn.commit()
+            return get_bot_default_settings()
+        finally:
+            conn.close()
+
+
 def get_guild_ai_settings(guild_id: str) -> dict:
-    """取得特定伺服器的 AI 設定（若未特別設定則套用系統預設）。"""
+    """取得特定伺服器的 AI 設定（若未特別設定則自動套用全域預設）。"""
     all_settings = load_ai_settings()
     if str(guild_id) in all_settings:
         return all_settings[str(guild_id)]
+    defaults = get_bot_default_settings()
     return {
-        'is_enabled': True,
-        'model': DEFAULT_AI_MODEL,
-        'instruction': DEFAULT_AI_INSTRUCTION,
+        'is_enabled': defaults['ai_is_enabled'],
+        'model': defaults['ai_model'],
+        'instruction': defaults['ai_instruction'],
         'channel_id': None,
-        'temperature': DEFAULT_AI_TEMPERATURE,
-        'max_tokens': DEFAULT_AI_MAX_TOKENS,
+        'temperature': defaults['ai_temperature'],
+        'max_tokens': defaults['ai_max_tokens'],
         'payer_user_id': None,
     }
 

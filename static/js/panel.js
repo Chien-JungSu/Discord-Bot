@@ -145,6 +145,7 @@
     music: null,
     ai: null,
     ownerEconomy: null,
+    ownerBotDefaults: null,
   };
 
   function getFormState(formEl) {
@@ -206,7 +207,9 @@
     const isOwnerMode = viewServerSettings.classList.contains('owner-mode');
     let dirty = false;
     if (isOwnerMode) {
-      dirty = isFormDirty(fOwnerEcon, savedFormState.ownerEconomy);
+      const fBotDef = document.getElementById('form-owner-bot-defaults');
+      dirty = isFormDirty(fOwnerEcon, savedFormState.ownerEconomy) ||
+              isFormDirty(fBotDef, savedFormState.ownerBotDefaults);
     } else {
       dirty =
         isFormDirty(fWelcome, savedFormState.welcome) ||
@@ -289,6 +292,7 @@
       loadOwnerCogsList();
       loadOwnerApiQuota();
       loadOwnerAiGuilds();
+      loadOwnerBotDefaults();
     }
     checkUnsavedChanges();
   }
@@ -1931,6 +1935,9 @@
       if (targetSub === 'owner-sub-ai-guilds') {
         loadOwnerAiGuilds();
       }
+      if (targetSub === 'owner-sub-bot-defaults') {
+        loadOwnerBotDefaults();
+      }
       checkUnsavedChanges();
     });
   });
@@ -2013,6 +2020,14 @@
             formOwnerEconomy.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
           }
         }
+        const fBotDef = document.getElementById('form-owner-bot-defaults');
+        if (fBotDef && isFormDirty(fBotDef, savedFormState.ownerBotDefaults)) {
+          if (typeof fBotDef.requestSubmit === 'function') {
+            fBotDef.requestSubmit();
+          } else {
+            fBotDef.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+          }
+        }
         return;
       }
 
@@ -2046,6 +2061,10 @@
       if (isOwnerMode) {
         if (formOwnerEconomy && savedFormState.ownerEconomy) {
           applyFormState(formOwnerEconomy, savedFormState.ownerEconomy);
+        }
+        const fBotDef = document.getElementById('form-owner-bot-defaults');
+        if (fBotDef && savedFormState.ownerBotDefaults) {
+          applyFormState(fBotDef, savedFormState.ownerBotDefaults);
         }
       } else {
         if (formWelcome && savedFormState.welcome) {
@@ -2480,6 +2499,87 @@
     btnRefreshAiGuilds.addEventListener('click', () => {
       loadOwnerAiGuilds();
       showToast('已重新整理伺服器授權名單');
+    });
+  }
+
+  // 5. 機器人全域預設設定 (Bot Defaults)
+  async function loadOwnerBotDefaults() {
+    const form = document.getElementById('form-owner-bot-defaults');
+    if (!form) return;
+
+    try {
+      const res = await fetch('/api/panel/owner/bot-defaults');
+      if (res.status === 403) return;
+      const data = await res.json();
+      if (!res.ok || !data.defaults) return;
+
+      const defs = data.defaults;
+      const chkEnabled = document.getElementById('bot-default-ai-enabled');
+      const selModel = document.getElementById('bot-default-ai-model');
+      const inTemp = document.getElementById('bot-default-ai-temperature');
+      const inTokens = document.getElementById('bot-default-ai-max-tokens');
+      const txtInst = document.getElementById('bot-default-ai-instruction');
+
+      if (chkEnabled) chkEnabled.checked = Boolean(defs.ai_is_enabled);
+      if (selModel && defs.ai_model) selModel.value = defs.ai_model;
+      if (inTemp && defs.ai_temperature !== undefined) inTemp.value = defs.ai_temperature;
+      if (inTokens && defs.ai_max_tokens !== undefined) inTokens.value = defs.ai_max_tokens;
+      if (txtInst && defs.ai_instruction !== undefined) txtInst.value = defs.ai_instruction;
+
+      savedFormState.ownerBotDefaults = getFormState(form);
+      checkUnsavedChanges();
+    } catch (err) {
+      console.error('載入機器人預設設定失敗:', err);
+    }
+  }
+
+  async function submitOwnerBotDefaults(applyToAll = false) {
+    const form = document.getElementById('form-owner-bot-defaults');
+    if (!form) return;
+
+    const payload = {
+      ai_is_enabled: document.getElementById('bot-default-ai-enabled')?.checked ?? true,
+      ai_model: document.getElementById('bot-default-ai-model')?.value || 'auto',
+      ai_temperature: parseFloat(document.getElementById('bot-default-ai-temperature')?.value || '0.7'),
+      ai_max_tokens: parseInt(document.getElementById('bot-default-ai-max-tokens')?.value || '4000', 10),
+      ai_instruction: document.getElementById('bot-default-ai-instruction')?.value || '',
+      apply_to_all: applyToAll,
+    };
+
+    try {
+      const res = await fetch('/api/panel/owner/bot-defaults', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (res.ok && data.status === 'ok') {
+        showToast(data.message || '機器人全域預設設定已儲存！');
+        savedFormState.ownerBotDefaults = getFormState(form);
+        checkUnsavedChanges();
+      } else {
+        showToast(`儲存失敗: ${data.message || '未知錯誤'}`, true);
+      }
+    } catch (err) {
+      console.error('儲存機器人預設設定出錯:', err);
+      showToast('網路連線或伺服器回應錯誤', true);
+    }
+  }
+
+  const formOwnerBotDefaults = document.getElementById('form-owner-bot-defaults');
+  if (formOwnerBotDefaults) {
+    formOwnerBotDefaults.addEventListener('submit', (e) => {
+      e.preventDefault();
+      submitOwnerBotDefaults(false);
+    });
+  }
+
+  const btnApplyDefaultsAll = document.getElementById('btn-apply-defaults-all');
+  if (btnApplyDefaultsAll) {
+    btnApplyDefaultsAll.addEventListener('click', () => {
+      if (confirm('確定要將此預設設定覆蓋套用至機器人已加入的所有伺服器嗎？\n此動作將更新所有伺服器的 AI 啟用狀態、模型與人設提示詞。')) {
+        submitOwnerBotDefaults(true);
+      }
     });
   }
 

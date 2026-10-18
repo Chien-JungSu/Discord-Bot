@@ -28,9 +28,11 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(BASE_DIR, '.env'))
 
 from cogs.database import (
+    AI_PROVIDER_MODELS,
     authorize_guild_ai,
     delete_guild_ai_settings,
     get_ai_authorized_guilds,
+    get_bot_default_settings,
     get_daily_api_usage,
     get_economy_user,
     get_guild_ai_settings,
@@ -44,6 +46,7 @@ from cogs.database import (
     load_welcome_settings,
     revoke_guild_ai,
     save_auto_reply_settings,
+    save_bot_default_settings,
     save_economy_config,
     save_guild_ai_settings,
     save_music_settings,
@@ -1626,4 +1629,35 @@ def owner_ai_guilds():
             return jsonify({'status': 'error', 'message': '找不到該伺服器的授權紀錄或已經被撤銷'}), 404
     else:
         return jsonify({'status': 'error', 'message': f"未知的操作類型: {action}"}), 400
+
+
+@panel_bp.route('/api/panel/owner/bot-defaults', methods=['GET', 'POST'])
+def owner_bot_defaults():
+    """擁有者專屬：讀取或儲存機器人全域預設設定（適用於所有伺服器）。"""
+    if not is_current_user_owner():
+        return jsonify({'status': 'error', 'message': '權限不足'}), 403
+
+    if request.method == 'GET':
+        defaults = get_bot_default_settings()
+        return jsonify({
+            'status': 'ok',
+            'defaults': defaults,
+            'models': AI_PROVIDER_MODELS,
+        })
+
+    payload = request.get_json(silent=True) or {}
+    apply_to_all = bool(payload.get('apply_to_all', False))
+
+    updated = save_bot_default_settings(payload, apply_to_all_guilds=apply_to_all)
+    _sync_cog_settings('AI')
+
+    msg = '已成功儲存機器人全域預設設定！'
+    if apply_to_all:
+        msg += '（已同步套用覆寫至所有現有伺服器）'
+
+    return jsonify({
+        'status': 'ok',
+        'message': msg,
+        'defaults': updated,
+    })
 

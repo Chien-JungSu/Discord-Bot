@@ -599,6 +599,19 @@
                 </button>
               </div>
             </div>
+
+            <!-- 類別四：機器人全域預設設定 -->
+            <div class="admin-category-card">
+              <div class="admin-category-header">
+                <span class="admin-cat-icon">⚙️</span>
+                <span class="admin-cat-title">機器人預設設定</span>
+              </div>
+              <div class="admin-subtabs-row">
+                <button class="owner-subtab-btn" data-subtab="owner-sub-bot-defaults" type="button">
+                  <span>所有伺服器預設值</span>
+                </button>
+              </div>
+            </div>
           </div>
 
           <form id="form-owner-economy" class="panel-form">
@@ -774,7 +787,7 @@
             <div class="user-manage-box">
               <h4 class="subpane-group-title">🔍 查詢 Discord 玩家金幣與 AI 貨幣帳戶</h4>
               <div class="search-user-row">
-                <input type="text" id="manage-user-id" class="form-control" placeholder="請輸入 Discord User ID (例如: 941935836189065236)" />
+                <input type="text" id="manage-user-id" class="form-control" placeholder="輸入 Discord User ID" />
                 <button id="btn-fetch-user-balance" class="btn primary" type="button">
                   <span>查詢帳戶</span>
                 </button>
@@ -923,6 +936,63 @@
 
             <div id="owner-ai-guilds-list" class="owner-ai-guilds-list" style="margin-top: 16px;">
               <div class="empty-rules-hint">載入伺服器授權名單中...</div>
+            </div>
+          </div>
+
+          <!-- 子分頁 3-2: 機器人全域預設設定 -->
+          <div id="owner-sub-bot-defaults" class="owner-subpane">
+            <div class="user-manage-box">
+              <h4 class="subpane-group-title">⚙️ 所有伺服器通用預設設定 (Bot Global Defaults)</h4>
+              <p class="form-hint" style="margin-bottom: 20px;">
+                此處設定的值將作為<strong>所有新伺服器或未個別自訂伺服器</strong>的預設基礎。您亦可點擊「一鍵套用至所有伺服器」將目前的預設值強制覆蓋更新至所有已加入的伺服器。
+              </p>
+
+              <form id="form-owner-bot-defaults" class="panel-form">
+                <div class="form-group checkbox-group" style="margin-bottom: 20px;">
+                  <label class="custom-checkbox-label">
+                    <input type="checkbox" id="bot-default-ai-enabled" checked />
+                    <span>預設啟用 AI 智慧助手模組</span>
+                  </label>
+                  <small class="form-hint">未特別設定的伺服器是否預設啟用 /ai 指令與 @機器人 對話。</small>
+                </div>
+
+                <div class="form-row-3">
+                  <div class="form-group">
+                    <label>預設 AI 模型</label>
+                    <select id="bot-default-ai-model" class="form-control">
+                      <option value="auto">auto (自動容錯容災鏈)</option>
+                      <option value="gemini:gemini-flash-latest">gemini-flash-latest (Google Gemini)</option>
+                      <option value="nvidia:meta/llama-3.2-11b-vision-instruct">meta/llama-3.2-11b-vision-instruct (NVIDIA NIM)</option>
+                      <option value="mistral:ministral-8b-latest">ministral-8b-latest (Mistral AI)</option>
+                    </select>
+                  </div>
+
+                  <div class="form-group">
+                    <label>預設溫度 (隨機度 0.0 ~ 2.0)</label>
+                    <input type="number" id="bot-default-ai-temperature" class="form-control" min="0.0" max="2.0" step="0.1" value="0.7" required />
+                  </div>
+
+                  <div class="form-group">
+                    <label>預設最大 Tokens 上限 (500 ~ 4000)</label>
+                    <input type="number" id="bot-default-ai-max-tokens" class="form-control" min="500" max="4000" step="100" value="4000" required />
+                  </div>
+                </div>
+
+                <div class="form-group" style="margin-top: 16px;">
+                  <label>預設系統提示詞 / AI 人設指令 (System Instruction)</label>
+                  <textarea id="bot-default-ai-instruction" class="form-control" rows="5" placeholder="輸入預設的系統提示詞..."></textarea>
+                  <small class="form-hint">未自訂人設的伺服器將直接套用此預設人設。</small>
+                </div>
+
+                <div class="form-actions" style="margin-top: 24px; display: flex; gap: 14px; flex-wrap: wrap;">
+                  <button type="submit" id="btn-save-bot-defaults" class="btn btn-save-setting" style="flex: 1 1 200px;">
+                    <span>儲存為預設設定</span>
+                  </button>
+                  <button type="button" id="btn-apply-defaults-all" class="btn warning" style="flex: 1 1 200px;">
+                    <span>⚡ 一鍵套用至所有伺服器</span>
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         </div>

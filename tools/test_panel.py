@@ -436,3 +436,106 @@ def test_auto_reply_multiline_blocks_and_command_permissions():
             all_ar[guild_id] = orig_guild_ar
         save_auto_reply_settings(all_ar)
 
+
+def test_bot_default_settings_api_and_ui():
+    """驗證機器人管理員後台面板新增之『機器人預設設定』區域與後端 API。"""
+    client = app.test_client()
+
+    # 1. 未登入或非擁有者禁止存取
+    res_unauth = client.get('/api/panel/owner/bot-defaults')
+    assert res_unauth.status_code == 403
+
+    # 2. 模擬機器人擁有者登入
+    res_login = client.get('/api/auth/dev-login?role=owner')
+    assert res_login.status_code == 302
+
+    # 3. 驗證後台面板 HTML 包含機器人預設設定卡片與子分頁
+    res_page = client.get('/panel')
+    assert res_page.status_code == 200
+    html = res_page.data.decode('utf-8')
+    assert 'owner-sub-bot-defaults' in html
+    assert '機器人預設設定' in html
+    assert '所有伺服器預設值' in html
+    assert 'bot-default-ai-model' in html
+    assert 'bot-default-ai-instruction' in html
+    assert 'btn-apply-defaults-all' in html
+
+    # 4. 讀取全域預設值 API
+    res_get = client.get('/api/panel/owner/bot-defaults')
+    assert res_get.status_code == 200
+    data = res_get.get_json()
+    assert data['status'] == 'ok'
+    assert 'defaults' in data
+    assert 'models' in data
+
+    # 5. 儲存全域預設值 API
+    res_post = client.post(
+        '/api/panel/owner/bot-defaults',
+        json={
+            'ai_is_enabled': True,
+            'ai_model': 'gemini:gemini-flash-latest',
+            'ai_temperature': 0.8,
+            'ai_max_tokens': 3500,
+            'ai_instruction': '測試專用全域預設人設提示詞',
+            'apply_to_all': False,
+        },
+    )
+    assert res_post.status_code == 200
+    res_data = res_post.get_json()
+    assert res_data['status'] == 'ok'
+    assert res_data['defaults']['ai_model'] == 'gemini:gemini-flash-latest'
+    assert res_data['defaults']['ai_instruction'] == '測試專用全域預設人設提示詞'
+
+    # 6. 驗證 cogs.database.get_bot_default_settings 回傳最新設定
+    from cogs.database import get_bot_default_settings
+    current_defaults = get_bot_default_settings()
+    assert current_defaults['ai_model'] == 'gemini:gemini-flash-latest'
+    assert current_defaults['ai_instruction'] == '測試專用全域預設人設提示詞'
+
+
+def test_table_to_image_extractor():
+    """驗證 Markdown 表格抓取與轉製為圖片功能。"""
+    from cogs.table_renderer import extract_and_render_markdown_tables
+
+    sample_response = (
+        "沒問題！既然你說「隨便」，那我就為你量身打造一張分析表：\n\n"
+        "| 飲品名稱 | 主要功效 | 精神狀態 | 副作用 | 炙彗評分 |\n"
+        "| :--- | :--- | :--- | :--- | :---: |\n"
+        "| 美式黑咖啡 | 靈魂強制開機 | 表面冷靜，內心已靈魂出竅 | 心悸、突然看破紅塵 | ★★★★☆ |\n"
+        "| 全糖珍奶 | 瞬間分泌多巴胺 | 充滿希望，覺得世界很美好 | 半小時後血糖驟降想睡覺 | ★★★★★ |\n\n"
+        "如果需要其他表格隨時跟我說！"
+    )
+
+    clean_text, files = extract_and_render_markdown_tables(sample_response)
+    assert "📊 **【表格已轉換為圖片】**" in clean_text
+    assert len(files) == 1
+    assert files[0].filename == "table_1.png"
+    # 確保圖片 bytes 非空
+    assert len(files[0].fp.getvalue()) > 1000
+
+    # 無表格的一般文字應保持原樣且不產生圖片
+    normal_text = "這是一段沒有表格的普通回覆。"
+    clean_normal, normal_files = extract_and_render_markdown_tables(normal_text)
+    assert clean_normal == normal_text
+    assert len(normal_files) == 0
+
+
+def test_resolve_error_view_and_deduplication():
+    """驗證 Fallback 逾時/失敗通報去重與已解決按鈕狀態。"""
+    from cogs.ai import _unresolved_ai_error_keys, ResolveErrorView
+
+    test_key = "測試異常類型_Timeout"
+    _unresolved_ai_error_keys.discard(test_key)
+
+    # 尚未解決時加入未解決集合
+    _unresolved_ai_error_keys.add(test_key)
+    assert test_key in _unresolved_ai_error_keys
+
+    # 模擬按下『已解決』
+    view = ResolveErrorView(test_key)
+    assert view.timeout is None  # 不設 disable 時間
+
+    # 觸發標記已解決
+    _unresolved_ai_error_keys.discard(test_key)
+    assert test_key not in _unresolved_ai_error_keys
+

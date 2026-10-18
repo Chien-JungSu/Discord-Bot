@@ -32,6 +32,7 @@ from cogs.database import (
 )
 from cogs.llm_router import router, strip_thinking_tags, strip_roleplay_prefix
 from cogs.memory import memory_manager
+from cogs.table_renderer import extract_and_render_markdown_tables
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(BASE_DIR, '.env'))
@@ -276,6 +277,116 @@ class AIChannelActionView(discord.ui.View):
         )
 
 
+_unresolved_ai_error_keys: set[str] = set()
+
+
+class ResolveErrorView(discord.ui.View):
+    """管理者錯誤通報之『已解決』按鈕互動 View：
+    - timeout=None (不設逾時時間，永不過期)
+    - 點擊後將按鈕設為 disabled 並標記已解決
+    - 點擊已解決之前，同類型的錯誤訊息不重複發送
+    """
+
+    def __init__(self, error_key: str):
+        super().__init__(timeout=None)
+        self.error_key = error_key
+
+    @discord.ui.button(
+        label="已解決",
+        style=discord.ButtonStyle.success,
+        emoji="✅",
+    )
+    async def resolve_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        owner_id = getattr(interaction.client, "owner_id", None) or os.getenv("DISCORD_OWNER_ID") or os.getenv("OWNER_ID")
+        if owner_id and interaction.user.id != int(owner_id):
+            await interaction.response.send_message("❌ 只有機器人擁有者可以操作此按鈕！", ephemeral=True)
+            return
+
+        _unresolved_ai_error_keys.discard(self.error_key)
+        button.disabled = True
+        button.label = "已解決 (已確認)"
+        button.style = discord.ButtonStyle.secondary
+        await interaction.response.edit_message(view=self)
+        await interaction.followup.send(
+            f"✅ 已將此類型異常「{self.error_key}」標記為已解決。後續若再發生將會再次發送通知。",
+            ephemeral=True,
+        )
+
+
+async def notify_owner_ai_fallback_failure(
+    bot: commands.Bot,
+    error_msg: str,
+    guild_name: str,
+    guild_id: str,
+    user_name: str,
+    user_id: int,
+    prompt: str,
+) -> None:
+    """所有模型 fallback 皆失效傳送逾時/錯誤訊息時，同步發送 bot owner DM。
+    若該類型錯誤尚未被標記為『已解決』，則略過重複發送。
+    """
+    if not error_msg or any(k in error_msg for k in ("逾時", "Timeout", "timeout")):
+        error_key = "AI模型請求逾時 (Timeout)"
+    elif any(k in error_msg.lower() for k in ("429", "quota", "rate limit", "配額", "超額")):
+        error_key = "AI模型配額耗盡或限流 (RateLimit/Quota)"
+    elif any(k in error_msg.lower() for k in ("401", "auth", "unauthorized", "key", "密鑰")):
+        error_key = "AI模型認證/金鑰失效 (Unauthorized)"
+    else:
+        error_key = f"AI服務全線Fallback失效 ({error_msg[:30]})"
+
+    if error_key in _unresolved_ai_error_keys:
+        print(f"ℹ️ [Owner DM] 錯誤類型「{error_key}」目前仍處於未解決狀態，略過重複通報。")
+        return
+
+    owner_id = getattr(bot, "owner_id", None) or os.getenv("DISCORD_OWNER_ID") or os.getenv("OWNER_ID")
+    if not owner_id:
+        try:
+            app_info = await bot.application_info()
+            owner_id = app_info.owner.id
+        except Exception:
+            owner_id = None
+
+    if not owner_id:
+        print("⚠️ 無法取得 Bot Owner ID，無法發送 Owner DM 通報。")
+        return
+
+    try:
+        owner = bot.get_user(int(owner_id))
+        if owner is None:
+            owner = await bot.fetch_user(int(owner_id))
+    except Exception as fetch_err:
+        print(f"⚠️ 取得 Bot Owner 使用者失敗: {fetch_err}")
+        return
+
+    if not owner:
+        return
+
+    _unresolved_ai_error_keys.add(error_key)
+
+    time_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    clean_prompt = prompt[:150] + ("..." if len(prompt) > 150 else "")
+
+    dm_text = (
+        f"🚨 **【AI 服務異常警報】所有模型 Fallback 皆已失效**\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"**錯誤類型**: `{error_key}`\n"
+        f"**伺服器**: {guild_name} (`{guild_id}`)\n"
+        f"**觸發使用者**: {user_name} (`{user_id}`)\n"
+        f"**提問摘要**: {clean_prompt or '（無文字）'}\n"
+        f"**失敗訊息**: `{error_msg or '所有模型皆回應逾時或不可用'}`\n"
+        f"**發生時間**: `{time_str}`\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"-# 💡 提示：在點擊下方「已解決」按鈕前，同類型之錯誤將不會重複對您發送 DM 警報。"
+    )
+
+    view = ResolveErrorView(error_key)
+    try:
+        await owner.send(dm_text, view=view)
+        print(f"📢 已成功發送 AI 全線 Fallback 失效通報至 Bot Owner DM (類型: {error_key})。")
+    except Exception as dm_err:
+        print(f"❌ 發送 Owner DM 失敗: {dm_err}")
+
+
 class AI(commands.Cog):
     """多供應商免費 LLM 智慧對話模組 (Gemini / NVIDIA / Mistral)。
 
@@ -445,6 +556,7 @@ class AI(commands.Cog):
         clean_response: str,
         footer_text: str,
         image_url: Optional[str] = None,
+        files: Optional[List[discord.File]] = None,
         is_interaction: bool = True,
     ) -> None:
         """超出字數/Token上限自動切割訊息並分成多個 container 發送，footer 永遠放在最後一則 container，不打斷回答。"""
@@ -460,6 +572,7 @@ class AI(commands.Cog):
             # 關鍵：footer 永遠放在訊息尾端（最後一則 container）！
             cur_footer = footer_text if is_last else None
             cur_image = image_url if is_first else None
+            cur_files = files if is_first and files else None
 
             # 優先嘗試 Components V2 LayoutView
             sent_v2 = False
@@ -470,10 +583,16 @@ class AI(commands.Cog):
                     image_url=cur_image,
                 )
                 if is_interaction:
-                    await target.followup.send(view=layout_view)
+                    if cur_files:
+                        await target.followup.send(view=layout_view, files=cur_files)
+                    else:
+                        await target.followup.send(view=layout_view)
                 else:
                     if is_first:
-                        await target.reply(view=layout_view, mention_author=False)
+                        if cur_files:
+                            await target.reply(view=layout_view, files=cur_files, mention_author=False)
+                        else:
+                            await target.reply(view=layout_view, mention_author=False)
                     else:
                         await target.channel.send(view=layout_view)
                 sent_v2 = True
@@ -481,16 +600,28 @@ class AI(commands.Cog):
                 print(f"⚠️ Components V2 渲染例外，降級為傳統 Embed 發送: {v2_err}")
 
             if not sent_v2:
+                if cur_files:
+                    for f in cur_files:
+                        try:
+                            f.fp.seek(0)
+                        except Exception:
+                            pass
                 fallback_embed = self._build_ai_embed(
                     response_text=chunk,
                     footer_text=cur_footer,
                     image_url=cur_image,
                 )
                 if is_interaction:
-                    await target.followup.send(embed=fallback_embed)
+                    if cur_files:
+                        await target.followup.send(embed=fallback_embed, files=cur_files)
+                    else:
+                        await target.followup.send(embed=fallback_embed)
                 else:
                     if is_first:
-                        await target.reply(embed=fallback_embed, mention_author=False)
+                        if cur_files:
+                            await target.reply(embed=fallback_embed, files=cur_files, mention_author=False)
+                        else:
+                            await target.reply(embed=fallback_embed, mention_author=False)
                     else:
                         await target.channel.send(embed=fallback_embed)
 
@@ -645,6 +776,23 @@ class AI(commands.Cog):
         if error_msg or not response_text:
             final_err = "請求逾時，請稍後再試" if (not error_msg or "逾時" in error_msg or "Timeout" in error_msg or "timeout" in error_msg) else error_msg
             await interaction.followup.send(final_err)
+
+            # 同步發送 Bot Owner DM (所有模型 fallback 皆失效逾時)
+            g_name = interaction.guild.name if interaction.guild else "私訊/未知伺服器"
+            g_id = str(interaction.guild_id) if interaction.guild_id else "DM"
+            u_name = interaction.user.display_name or interaction.user.name
+            u_id = interaction.user.id
+            asyncio.create_task(
+                notify_owner_ai_fallback_failure(
+                    bot=self.bot,
+                    error_msg=error_msg or "請求逾時",
+                    guild_name=g_name,
+                    guild_id=g_id,
+                    user_name=u_name,
+                    user_id=u_id,
+                    prompt=prompt or "[圖片提問]",
+                )
+            )
             return
 
         # 8. 寫入頻道記憶
@@ -661,8 +809,9 @@ class AI(commands.Cog):
         payer_member = interaction.guild.get_member(payer_id) if interaction.guild else None
         payer_name = payer_member.display_name if payer_member else (interaction.user.display_name or interaction.user.name)
 
-        # 10. 排版表格、清理格式並發送多 Container 回覆 (超過上限自動切割，footer 永遠在末端)
-        clean_response = format_markdown_tables(strip_roleplay_prefix(strip_thinking_tags(response_text or "")))
+        # 10. 抓取表格轉換為圖片、清理格式並發送多 Container 回覆 (超過上限自動切割，footer 永遠在末端)
+        raw_clean = strip_roleplay_prefix(strip_thinking_tags(response_text or ""))
+        clean_response, table_files = extract_and_render_markdown_tables(raw_clean)
         footer_text = self._format_ai_footer(stats=stats, cost=cost, payer_name=payer_name)
 
         await self._send_ai_response_chunks(
@@ -670,6 +819,7 @@ class AI(commands.Cog):
             clean_response=clean_response,
             footer_text=footer_text,
             image_url=img_url,
+            files=table_files,
             is_interaction=True,
         )
 
@@ -1073,6 +1223,23 @@ class AI(commands.Cog):
                 if error_msg or not response_text:
                     final_err = "請求逾時，請稍後再試" if (not error_msg or "逾時" in error_msg or "Timeout" in error_msg or "timeout" in error_msg) else error_msg
                     await message.reply(final_err, mention_author=False)
+
+                    # 同步發送 Bot Owner DM (所有模型 fallback 皆失效逾時)
+                    g_name = message.guild.name if message.guild else "私訊/未知伺服器"
+                    g_id = str(message.guild.id) if message.guild else "DM"
+                    u_name = message.author.display_name or message.author.name
+                    u_id = message.author.id
+                    asyncio.create_task(
+                        notify_owner_ai_fallback_failure(
+                            bot=self.bot,
+                            error_msg=error_msg or "請求逾時",
+                            guild_name=g_name,
+                            guild_id=g_id,
+                            user_name=u_name,
+                            user_id=u_id,
+                            prompt=clean_content or "[圖片提問]",
+                        )
+                    )
                     return
 
                 # 記錄對話歷史
@@ -1089,8 +1256,9 @@ class AI(commands.Cog):
                 payer_member = message.guild.get_member(payer_id) if message.guild else None
                 payer_name = payer_member.display_name if payer_member else (message.author.display_name or message.author.name)
 
-                # 排版表格、清理格式並發送多 Container 回覆 (超過上限自動切割，footer 永遠在末端)
-                clean_response = format_markdown_tables(strip_roleplay_prefix(strip_thinking_tags(response_text or "")))
+                # 抓取表格轉換為圖片、清理格式並發送多 Container 回覆 (超過上限自動切割，footer 永遠在末端)
+                raw_clean = strip_roleplay_prefix(strip_thinking_tags(response_text or ""))
+                clean_response, table_files = extract_and_render_markdown_tables(raw_clean)
                 footer_text = self._format_ai_footer(stats=stats, cost=cost, payer_name=payer_name)
 
                 await self._send_ai_response_chunks(
@@ -1098,6 +1266,7 @@ class AI(commands.Cog):
                     clean_response=clean_response,
                     footer_text=footer_text,
                     image_url=img_url,
+                    files=table_files,
                     is_interaction=False,
                 )
 
