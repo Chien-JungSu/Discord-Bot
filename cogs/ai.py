@@ -1182,10 +1182,18 @@ class AI(commands.Cog):
         is_dm = isinstance(message.channel, discord.DMChannel)
         is_mentioned = bot_user in message.mentions
         is_reply_to_bot = False
+        ref_msg = None
 
         if message.reference and message.reference.message_id:
             resolved = message.reference.resolved
-            if isinstance(resolved, discord.Message) and resolved.author.id == bot_user.id:
+            if isinstance(resolved, discord.Message):
+                ref_msg = resolved
+            elif not resolved or not isinstance(resolved, discord.DeletedReferencedMessage):
+                try:
+                    ref_msg = await message.channel.fetch_message(message.reference.message_id)
+                except Exception:
+                    ref_msg = None
+            if ref_msg and ref_msg.author.id == bot_user.id:
                 is_reply_to_bot = True
 
         dedicated_channel_id = cfg.get("channel_id")
@@ -1201,7 +1209,7 @@ class AI(commands.Cog):
         if is_mentioned:
             clean_content = re.sub(rf'<@!?{bot_user.id}>', '', clean_content).strip()
 
-        # 檢查是否有圖片附件
+        # 檢查是否有圖片附件 (優先使用當前訊息的附件)
         img_url = None
         for att in message.attachments:
             ct = att.content_type or ""
@@ -1209,6 +1217,25 @@ class AI(commands.Cog):
             if ct.startswith("image/") or any(fn.endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp", ".gif"]):
                 img_url = att.url
                 break
+
+        # 若當前訊息未附帶圖片，但用戶正在回覆某一則訊息，自動抓取被回覆訊息中帶有的圖片
+        if not img_url and ref_msg:
+            # 1. 優先檢查被回覆訊息的附件
+            for att in ref_msg.attachments:
+                ct = att.content_type or ""
+                fn = att.filename.lower()
+                if ct.startswith("image/") or any(fn.endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp", ".gif"]):
+                    img_url = att.url
+                    break
+            # 2. 若無附件圖片，檢查被回覆訊息中的 Embeds 圖片或縮圖
+            if not img_url and ref_msg.embeds:
+                for emb in ref_msg.embeds:
+                    if emb.image and emb.image.url:
+                        img_url = emb.image.url
+                        break
+                    elif emb.thumbnail and emb.thumbnail.url:
+                        img_url = emb.thumbnail.url
+                        break
 
         # 若僅標註卻無文字亦無圖片，發送親切引導問候
         if not clean_content and not img_url:
@@ -1258,6 +1285,17 @@ class AI(commands.Cog):
         # 構建上下文列表
         context_messages = memory_manager.get_context_messages(channel_id)
         user_name = message.author.display_name or message.author.name
+
+        # 若用戶回覆了某則訊息且該訊息有文字內容，將其附帶為參考上下文（非機器人自身訊息，避免重複記錄）
+        if ref_msg and ref_msg.author.id != bot_user.id:
+            ref_author = ref_msg.author.display_name or ref_msg.author.name
+            ref_text = ref_msg.clean_content.strip() if ref_msg.clean_content else ""
+            if ref_text:
+                context_messages.append({
+                    "role": "user",
+                    "content": f"[引述 {ref_author} 的訊息]: {ref_text}"
+                })
+
         context_messages.append({"role": "user", "content": clean_content or "請分析這張圖片"})
 
         # 解析伺服器預設模型與提供商

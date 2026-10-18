@@ -170,7 +170,7 @@ class LLMProvider:
             self.client = AsyncOpenAI(
                 base_url=self.base_url,
                 api_key=api_key,
-                timeout=35.0,  # 寬裕 35 秒單次逾時限制
+                timeout=100.0,  # 提高至 100 秒單次逾時限制（容納長思考與多模態推理）
                 max_retries=0,  # 停用 SDK 內部重試，改由 Router 即時切換下游提供商
             )
         return self.client
@@ -358,10 +358,10 @@ class MultiProviderLLMRouter:
             safe_log(f"[LLM Router] {prov.name} 遇到 429 速率限制，標記冷卻並切換...")
             return err_str
         elif isinstance(exc, (APITimeoutError, asyncio.TimeoutError)):
-            err_str = f"請求逾時 (>35.0s: {exc})"
-            failover_history.append(f"{prov.name}:{model} (逾時 35s)")
+            err_str = f"請求逾時 (>100.0s: {exc})"
+            failover_history.append(f"{prov.name}:{model} (逾時 100s)")
             prov.mark_cooldown(45.0, err_str)
-            safe_log(f"[LLM Router] {prov.name} 模型 {model} 請求逾時 (>35s)...")
+            safe_log(f"[LLM Router] {prov.name} 模型 {model} 請求逾時 (>100s)...")
             return err_str
         elif isinstance(exc, (AuthenticationError, PermissionDeniedError)):
             err_str = f"金鑰無效或權限錯誤 ({exc})"
@@ -384,7 +384,7 @@ class MultiProviderLLMRouter:
         temperature: float,
         max_tokens: int,
         is_vision: bool,
-        timeout_seconds: float = 35.0,
+        timeout_seconds: float = 100.0,
     ) -> Tuple[str, Dict[str, Any]]:
         """執行單一提供商模型的對話生成請求。"""
         client = prov.get_client()
@@ -423,6 +423,14 @@ class MultiProviderLLMRouter:
 
         raw_content = choice.message.content or ""
         clean_content = strip_roleplay_prefix(strip_thinking_tags(raw_content))
+
+        # 若正式 content 為空，檢查 reasoning_content (相容深度思考推理模型如 DeepSeek、GLM、Muse)
+        if not clean_content:
+            reasoning = getattr(choice.message, "reasoning_content", None)
+            if not reasoning and hasattr(choice.message, "model_extra") and choice.message.model_extra:
+                reasoning = choice.message.model_extra.get("reasoning_content")
+            if reasoning:
+                clean_content = strip_roleplay_prefix(strip_thinking_tags(str(reasoning)))
 
         if not clean_content:
             raise ValueError("AI 回傳之有效文字為空（可能在思考階段耗盡 Token）")
@@ -465,7 +473,7 @@ class MultiProviderLLMRouter:
         
         採用 15 秒預熱對沖並行備援機制 (Hedged Requests)：
         - 主模型發起後等待 15 秒，若尚未產出回覆，在背景預先啟動備援模型請求。
-        - 若原模型在硬逾時 (35s) 內成功產出，優先輸出原模型回覆並取消備援請求。
+        - 若原模型在硬逾時 (100s) 內成功產出，優先輸出原模型回覆並取消備援請求。
         - 若原模型真的 timeout 或失敗，才無縫輸出備援模型的回覆。
         """
         start_time = time.perf_counter()
@@ -573,7 +581,7 @@ class MultiProviderLLMRouter:
                     temperature,
                     max_tokens,
                     is_vision,
-                    timeout_seconds=35.0,
+                    timeout_seconds=100.0,
                 )
             )
 
@@ -621,12 +629,12 @@ class MultiProviderLLMRouter:
                         temperature,
                         max_tokens,
                         is_vision,
-                        timeout_seconds=35.0,
+                        timeout_seconds=100.0,
                     )
                 )
 
-            # 階段三：主模型繼續執行，直到達到硬逾時限制 (剩餘 20 秒，即總共 35 秒)
-            done, _ = await asyncio.wait([primary_task], timeout=20.0)
+            # 階段三：主模型繼續執行，直到達到硬逾時限制 (剩餘 85 秒，即總共 100 秒)
+            done, _ = await asyncio.wait([primary_task], timeout=85.0)
 
             if primary_task in done:
                 exc = primary_task.exception()
@@ -644,21 +652,21 @@ class MultiProviderLLMRouter:
                     stats["thinking_time"] = time.perf_counter() - start_time
                     return clean_content, None, stats
                 else:
-                    # 主模型在 15~35 秒之間失敗
+                    # 主模型在 15~100 秒之間失敗
                     last_error_details = self._record_failure(primary_prov, primary_model, exc, failover_history)
                     safe_log(f"[LLM Router] 主模型 {primary_model} 執行失敗: {exc}")
             else:
-                # 原模型真的 timeout (>35.0s)！取消原模型
+                # 原模型真的 timeout (>100.0s)！取消原模型
                 primary_task.cancel()
                 try:
                     await primary_task
                 except (asyncio.CancelledError, Exception):
                     pass
-                err_str = "請求逾時 (>35.0s)"
-                failover_history.append(f"{primary_prov.name}:{primary_model} (逾時 35s，啟用對沖備援)")
+                err_str = "請求逾時 (>100.0s)"
+                failover_history.append(f"{primary_prov.name}:{primary_model} (逾時 100s，啟用對沖備援)")
                 primary_prov.mark_cooldown(45.0, err_str)
                 last_error_details = err_str
-                safe_log(f"[LLM Router] 原模型 {primary_model} 真正逾時 (>35s)，輸出備援模型之回覆")
+                safe_log(f"[LLM Router] 原模型 {primary_model} 真正逾時 (>100s)，輸出備援模型之回覆")
 
             # 階段四：原模型逾時或失敗，輸出備援模型的回覆
             if fallback_task:
