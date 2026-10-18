@@ -191,7 +191,7 @@ class MultiProviderLLMRouter:
                 env_keys=["GEMINI_API_KEY", "GOOGLE_API_KEY"],
                 default_text_model="gemini-3.5-flash-lite",
                 default_vision_model="gemini-flash-latest",
-                fallback_models=["gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash-lite"],
+                fallback_models=["gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-3.0-flash", "gemini-3.6-flash", "gemini-3.7-flash"],
                 supports_vision=True,
                 rpm_limit_desc="15 ~ 30 RPM",
                 quota_desc="1,500 RPD (百萬超長 Context & 視覺分析)",
