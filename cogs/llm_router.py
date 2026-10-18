@@ -97,8 +97,10 @@ def strip_roleplay_prefix(text: str) -> str:
 
 # 已停用或過期模型自動轉發對照表 (確保舊設定或資料庫殘留模型不致報 404/410)
 DEPRECATED_MODEL_MAPPING = {
-    "llama-3.3-70b-versatile": "meta/llama-3.2-11b-vision-instruct",
-    "meta/llama-3.3-70b-instruct": "meta/llama-3.2-11b-vision-instruct",
+    "llama-3.3-70b-versatile": "deepseek-ai/deepseek-v4.1-flash",
+    "meta/llama-3.3-70b-instruct": "deepseek-ai/deepseek-v4.1-flash",
+    "meta/llama-3.2-11b-vision-instruct": "deepseek-ai/deepseek-v4.1-flash",
+    "nvidia:meta/llama-3.2-11b-vision-instruct": "nvidia:deepseek-ai/deepseek-v4.1-flash",
     "gemini-2.5-flash-lite": "gemini-flash-latest",
     "gemini-2.0-flash": "gemini-flash-latest",
     "gemini-2.0-flash-exp:free": "gemini-flash-latest",
@@ -193,7 +195,7 @@ class MultiProviderLLMRouter:
                 default_vision_model="gemini-flash-latest",
                 fallback_models=["gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-3.0-flash", "gemini-3.6-flash", "gemini-3.7-flash"],
                 supports_vision=True,
-                rpm_limit_desc="15 ~ 30 RPM",
+                rpm_limit_desc="5 ~ 15 RPM",
                 quota_desc="1,500 RPD (百萬超長 Context & 視覺分析)",
             ),
             "nvidia": LLMProvider(
@@ -201,9 +203,9 @@ class MultiProviderLLMRouter:
                 name="NVIDIA NIM (大容量備援 #1)",
                 base_url="https://integrate.api.nvidia.com/v1",
                 env_keys=["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"],
-                default_text_model="meta/llama-3.2-11b-vision-instruct",
-                default_vision_model="meta/llama-3.2-11b-vision-instruct",
-                fallback_models=["meta/llama-3.2-90b-vision-instruct", "meta/llama2-70b"],
+                default_text_model="deepseek-ai/deepseek-v4.1-flash",
+                default_vision_model="deepseek-ai/deepseek-v4.1-flash",
+                fallback_models=["z-ai/glm-5.3-flash", "meta/muse-glimmer-30b"],
                 supports_vision=True,
                 rpm_limit_desc="40 RPM",
                 quota_desc="10,000 RPD (圖文雙模態支援)",

@@ -720,7 +720,7 @@
       const presetModels = [
         'auto',
         'gemini:gemini-flash-latest',
-        'nvidia:meta/llama-3.2-11b-vision-instruct',
+        'nvidia:deepseek-ai/deepseek-v4.1-flash',
         'mistral:ministral-8b-latest',
       ];
       const modelVal = aiCfg.model || 'auto';

@@ -705,7 +705,7 @@ class AI(commands.Cog):
         provider=[
             app_commands.Choice(name="auto (text, vision)", value="auto"),
             app_commands.Choice(name="gemini-flash-latest (text, vision)", value="gemini"),
-            app_commands.Choice(name="meta/llama-3.2-11b-vision-instruct (text, vision)", value="nvidia"),
+            app_commands.Choice(name="deepseek-ai/deepseek-v4.1-flash (text, vision)", value="nvidia"),
             app_commands.Choice(name="ministral-8b-latest (text, vision)", value="mistral"),
         ]
     )
@@ -1055,7 +1055,7 @@ class AI(commands.Cog):
         model=[
             app_commands.Choice(name="auto (text, vision)", value="auto"),
             app_commands.Choice(name="gemini-flash-latest (text, vision)", value="gemini:gemini-flash-latest"),
-            app_commands.Choice(name="meta/llama-3.2-11b-vision-instruct (text, vision)", value="nvidia:meta/llama-3.2-11b-vision-instruct"),
+            app_commands.Choice(name="deepseek-ai/deepseek-v4.1-flash (text, vision)", value="nvidia:deepseek-ai/deepseek-v4.1-flash"),
             app_commands.Choice(name="ministral-8b-latest (text, vision)", value="mistral:ministral-8b-latest"),
         ]
     )

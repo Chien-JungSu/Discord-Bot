@@ -455,9 +455,9 @@ AI_PROVIDER_MODELS = [
         "desc": "Google Gemini (預設)",
     },
     {
-        "id": "nvidia:meta/llama-3.2-11b-vision-instruct",
+        "id": "nvidia:deepseek-ai/deepseek-v4.1-flash",
         "provider": "nvidia",
-        "name": "meta/llama-3.2-11b-vision-instruct (text, vision)",
+        "name": "deepseek-ai/deepseek-v4.1-flash (text, vision)",
         "desc": "NVIDIA NIM",
     },
     {
@@ -484,6 +484,8 @@ MODEL_TOKEN_RATES = {
     "gemini-2.5-flash-lite": 1.0,
     "gemini:gemini-2.5-flash": 1.0,
     "gemini-2.5-flash": 1.0,
+    "nvidia:deepseek-ai/deepseek-v4.1-flash": 1.0,
+    "deepseek-ai/deepseek-v4.1-flash": 1.0,
     "nvidia:meta/llama-3.2-11b-vision-instruct": 1.0,
     "meta/llama-3.2-11b-vision-instruct": 1.0,
     "mistral:ministral-8b-latest": 1.0,
