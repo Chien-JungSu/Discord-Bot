@@ -481,6 +481,8 @@ class AI(commands.Cog):
     ) -> ui.LayoutView:
         """依照圖二風格使用 Discord Components V2 建構容器、真實不可選取實體橫線與 Footer：
         - 自動將 AI 輸出的「---」分隔線轉為 Discord 原生 ui.Separator
+        - 將 Markdown 表格渲染之圖片以 ui.MediaGallery 完美嵌入 Container 內部
+        - 不輸出任何「表格已轉換為圖片」多餘提示文字
         - 若有 footer_text，在容器最底端加上分隔線與 -# footer (僅在最後一則 container 顯示)
         """
         view = ui.LayoutView()
@@ -497,25 +499,50 @@ class AI(commands.Cog):
             segments = segments[:14] + [merged_last]
 
         container_children: List[discord.ui.Item] = []
+        thumbnail_added = False
 
         for idx, seg in enumerate(segments):
-            safe_seg = seg[:3850] if len(seg) > 3850 else seg
-            text_item = ui.TextDisplay(safe_seg)
+            # 切分 segment 內的表格標記 [[TABLE_IMAGE:filename]]
+            sub_parts = re.split(r'(\[\[TABLE_IMAGE:[\w\.\-]+\]\])', seg)
+            for part in sub_parts:
+                m = re.match(r'\[\[TABLE_IMAGE:([\w\.\-]+)\]\]', part)
+                if m:
+                    filename = m.group(1)
+                    gallery_item = discord.MediaGalleryItem(f"attachment://{filename}")
+                    container_children.append(ui.MediaGallery(gallery_item))
+                else:
+                    stripped_part = part.strip()
+                    if not stripped_part:
+                        continue
+                    safe_seg = stripped_part[:3850] if len(stripped_part) > 3850 else stripped_part
+                    text_item = ui.TextDisplay(safe_seg)
 
-            if idx == 0 and image_url:
-                thumbnail = ui.Thumbnail(image_url)
-                container_children.append(ui.Section(text_item, accessory=thumbnail))
-            else:
-                container_children.append(text_item)
+                    if image_url and not thumbnail_added:
+                        thumbnail = ui.Thumbnail(image_url)
+                        container_children.append(ui.Section(text_item, accessory=thumbnail))
+                        thumbnail_added = True
+                    else:
+                        container_children.append(text_item)
 
-            # 若非最後一個段落，插入原生 Separator
+            # 若非最後一個段落，插入原生 Separator (避免連續 Separator)
             if idx < len(segments) - 1:
-                container_children.append(ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small))
+                if container_children and not isinstance(container_children[-1], ui.Separator):
+                    container_children.append(ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small))
+
+        # 若有指定 image_url 但尚未被加入 Section accessory，以獨立 Section 插入
+        if image_url and not thumbnail_added:
+            thumbnail = ui.Thumbnail(image_url)
+            container_children.insert(0, ui.Section(ui.TextDisplay(" "), accessory=thumbnail))
+            thumbnail_added = True
 
         # 2. 若有傳入 footer_text (僅在最後一則 container 附加)，在最底端插入分隔線與 footer
         if footer_text and footer_text.strip():
-            container_children.append(ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small))
+            if container_children and not isinstance(container_children[-1], ui.Separator):
+                container_children.append(ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small))
             container_children.append(ui.TextDisplay(f"-# {footer_text.strip()}"))
+
+        if not container_children:
+            container_children.append(ui.TextDisplay("（無回覆內容）"))
 
         container = ui.Container(*container_children, accent_color=color)
         view.add_item(container)
@@ -526,10 +553,11 @@ class AI(commands.Cog):
         response_text: str,
         footer_text: Optional[str] = None,
         image_url: Optional[str] = None,
+        table_files: Optional[List[discord.File]] = None,
         color: int = 0x5865F2,
     ) -> discord.Embed:
         """傳統 Embed 降級回退方法（若 Components V2 渲染例外時使用）。"""
-        clean_response = response_text.rstrip()
+        clean_response = re.sub(r'\[\[TABLE_IMAGE:[\w\.\-]+\]\]', '', response_text).rstrip()
         if not clean_response:
             clean_response = "（無回覆內容）"
 
@@ -548,6 +576,8 @@ class AI(commands.Cog):
         embed = discord.Embed(description=desc, color=color)
         if image_url:
             embed.set_thumbnail(url=image_url)
+        if table_files and len(table_files) > 0:
+            embed.set_image(url=f"attachment://{table_files[0].filename}")
         return embed
 
     async def _send_ai_response_chunks(
@@ -566,13 +596,41 @@ class AI(commands.Cog):
 
         total_chunks = len(chunks)
 
+        # 建立檔名映射
+        file_map = {f.filename: f for f in (files or [])}
+        allocated_files = set()
+
         for idx, chunk in enumerate(chunks):
             is_first = (idx == 0)
             is_last = (idx == total_chunks - 1)
             # 關鍵：footer 永遠放在訊息尾端（最後一則 container）！
             cur_footer = footer_text if is_last else None
             cur_image = image_url if is_first else None
-            cur_files = files if is_first and files else None
+
+            # 找出此 chunk 內引用的所有 table image 檔名
+            needed_filenames = re.findall(r'\[\[TABLE_IMAGE:([\w\.\-]+)\]\]', chunk)
+            chunk_files: List[discord.File] = []
+            for fname in needed_filenames:
+                if fname in file_map and fname not in allocated_files:
+                    chunk_files.append(file_map[fname])
+                    allocated_files.add(fname)
+
+            # 若是第一則訊息，且還有其他未在任何 chunk 中特別引用的檔案，一同帶入
+            if is_first:
+                for fname, f in file_map.items():
+                    if fname not in allocated_files:
+                        chunk_files.append(f)
+                        allocated_files.add(fname)
+
+            cur_files = chunk_files if chunk_files else None
+
+            # 確保檔案讀取指標歸零
+            if cur_files:
+                for f in cur_files:
+                    try:
+                        f.fp.seek(0)
+                    except Exception:
+                        pass
 
             # 優先嘗試 Components V2 LayoutView
             sent_v2 = False
@@ -594,7 +652,10 @@ class AI(commands.Cog):
                         else:
                             await target.reply(view=layout_view, mention_author=False)
                     else:
-                        await target.channel.send(view=layout_view)
+                        if cur_files:
+                            await target.channel.send(view=layout_view, files=cur_files)
+                        else:
+                            await target.channel.send(view=layout_view)
                 sent_v2 = True
             except Exception as v2_err:
                 print(f"⚠️ Components V2 渲染例外，降級為傳統 Embed 發送: {v2_err}")
@@ -610,6 +671,7 @@ class AI(commands.Cog):
                     response_text=chunk,
                     footer_text=cur_footer,
                     image_url=cur_image,
+                    table_files=cur_files,
                 )
                 if is_interaction:
                     if cur_files:
@@ -623,7 +685,10 @@ class AI(commands.Cog):
                         else:
                             await target.reply(embed=fallback_embed, mention_author=False)
                     else:
-                        await target.channel.send(embed=fallback_embed)
+                        if cur_files:
+                            await target.channel.send(embed=fallback_embed, files=cur_files)
+                        else:
+                            await target.channel.send(embed=fallback_embed)
 
     # ==========================================================================
     # /ai 斜線指令 (支援文字與圖片附件)

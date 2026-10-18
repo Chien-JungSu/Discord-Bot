@@ -507,11 +507,24 @@ def test_table_to_image_extractor():
     )
 
     clean_text, files = extract_and_render_markdown_tables(sample_response)
-    assert "📊 **【表格已轉換為圖片】**" in clean_text
+    assert "[[TABLE_IMAGE:table_1.png]]" in clean_text
+    assert "📊" not in clean_text
     assert len(files) == 1
     assert files[0].filename == "table_1.png"
     # 確保圖片 bytes 非空
     assert len(files[0].fp.getvalue()) > 1000
+
+    # 驗證 Components V2 Container 會將圖片嵌入 MediaGallery 組件且無多餘提示文字
+    from cogs.ai import AI
+    from discord import ui
+    ai_cog = AI(None)
+    view = ai_cog._build_ai_components_v2_view(clean_response=clean_text, footer_text="footer | stats")
+    assert len(view.children) == 1
+    container = view.children[0]
+    assert isinstance(container, ui.Container)
+    # 確保 Container 內部含有 MediaGallery 組件
+    has_gallery = any(isinstance(c, ui.MediaGallery) for c in container.children)
+    assert has_gallery, "Container 內部應包含 ui.MediaGallery 組件"
 
     # 無表格的一般文字應保持原樣且不產生圖片
     normal_text = "這是一段沒有表格的普通回覆。"

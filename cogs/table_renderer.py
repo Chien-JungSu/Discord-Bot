@@ -249,7 +249,7 @@ def extract_and_render_markdown_tables(text: str) -> Tuple[str, List[discord.Fil
                 table_index += 1
                 filename = f"table_{table_index}.png"
                 files.append(discord.File(fp=buf, filename=filename))
-                output_lines.append("📊 **【表格已轉換為圖片】**")
+                output_lines.append(f"[[TABLE_IMAGE:{filename}]]")
             except Exception as render_err:
                 print(f"⚠️ 表格轉圖片例外，保留原表格文字: {render_err}")
                 output_lines.append(header_line)
