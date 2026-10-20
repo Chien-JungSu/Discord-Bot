@@ -60,6 +60,26 @@ The five commands `/music_pause`, `/music_resume`, `/music_skip`, `/music_stop`,
 - **Stop**: any use starts a group vote with agree/disagree buttons showing live tallies; a single disagreement vetoes the request, and only unanimous agreement stops playback. Buttons are valid for 30 seconds. If the channel only has one human, the command executes directly without a vote. Once vetoed, no new stop vote can be started for that track until the next one begins.
 - **Rejection lock**: once a request for a track is denied (or times out) — including pause/resume button requests and a vetoed (or timed-out-as-denied) stop vote — no new request or vote can be started for that track until the next one starts playing; the lock clears when the track changes.
 
+### Interactive UI Control Panel (Week 5)
+
+When a track begins playing (`on_wavelink_track_start`), the bot automatically sends an interactive multi-button control panel to the music text channel:
+
+- **5 Interactive Control Buttons**:
+  - `⏯ Pause/Resume`: A single toggle button displaying blue "Pause" during playback and green "Resume" when paused.
+  - `⏭ Skip`: Skip the current track to play the next one; automatically `disabled` when the queue is empty.
+  - `⏹ Stop`: Stop playback and clear the queue.
+  - `🔉 Volume −`: Decrease player volume by 10%; automatically `disabled` at 0%.
+  - `🔊 Volume +`: Increase player volume by 10%; automatically `disabled` at 100%.
+- **Dynamic State Synchronization**:
+  - Buttons and embed information update in-place (`edit_message`) upon skipping, pausing, resuming, volume adjustments, or queue changes, preventing message spam.
+  - When playback ends, the queue clears, or the bot leaves the voice channel, the panel transitions to an "Ended" state with all buttons disabled.
+- **Persistent View & Graceful Restart Handling**:
+  - Implemented as a persistent `discord.ui.View` (`bot.add_view()`, `timeout=None`, unique fixed `custom_id` for every button).
+  - If an old panel button is clicked after the bot restarts (when the player no longer exists), the bot responds gracefully with an ephemeral message "目前沒有播放中的內容" and disables all buttons on the old panel without crashing or showing interaction failures.
+- **Multi-Server Isolation & Voice Channel Safety**:
+  - Panel tracking messages are strictly isolated per `guild_id` in memory, ensuring operations in one server never interfere with another.
+  - Operator voice state is checked uniformly in `interaction_check`; users not in the bot's voice channel are denied with an ephemeral message.
+
 The project also includes `cogs/web_server.py`, which starts a Flask web server in the background (backing a `templates/index.html` dashboard) that exposes bot status APIs (guild count, latency, uptime, etc.) for cloud deployments that require a keep-alive endpoint.
 
 ## Requirements

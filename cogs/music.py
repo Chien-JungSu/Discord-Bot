@@ -4,8 +4,10 @@ import asyncio
 import json
 import os
 import re
+import sys
 import tempfile
 import time
+import traceback
 from collections import deque
 from typing import TYPE_CHECKING, Any
 
@@ -356,12 +358,282 @@ class StopVoteView(ui.View):
         await self._vote(interaction, False)
 
 
+# ---------- 第 5 週新增：多按鈕音樂控制面板 ----------
+_PANEL_PLAYER_UNSET = object()
+
+
+class MusicControlView(ui.View):
+    """第 5 週新增：多按鈕音樂控制面板 View（持久化 View，timeout=None）。
+
+    設計理由與技術架構：
+    1. 持久化（bot.add_view()）：
+       - timeout 必須設為 None：若設有逾時，Bot 在重開機或長時間運作後，舊訊息上的按鈕
+         將無法再觸發 Discord 事件。設為 None 並指定唯一的 custom_id，可確保任何時候
+         按鈕被點擊都能正常被 Gateway 與 Bot 派發。
+       - 所有按鈕皆設定固定且唯一的 custom_id（music:toggle_pause, music:skip 等）。
+       - View 本身不綁定特定的 Guild 物件或 Player 實例。在按鈕被點擊時，統一透過
+         interaction.guild 取得該伺服器的 Player，實現單一 View 類別跨伺服器複用，且狀態嚴格隔離。
+    2. 逾時與生命週期替代方案：
+       - 持久化面板不依賴 View 內建的 on_timeout，而是將生命週期綁定播放狀態：
+         當播放結束、佇列清空、或 Bot 離開語音頻道時，由 Music Cog 主動將該伺服器的面板按鈕全部 disabled。
+       - 若 Bot 重啟後，舊面板按鈕被按下（此時記憶體中 Player 已不存在），於 interaction_check 中優雅攔截，
+         回覆 ephemeral 提示「目前沒有播放中的內容」，並嘗試將舊訊息上的按鈕全部 disable，避免拋出未處理例外。
+    3. 權限防呆（interaction_check）：
+       - 操作者必須與 Bot 處於同一個語音頻道，否則以 ephemeral 訊息提示並拒絕。
+    4. 統一更新邏輯（refresh_buttons）：
+       - 統一依 player 狀態設定每顆按鈕的 label / emoji / disabled，避免狀態邏輯散落各處。
+    """
+
+    CUSTOM_ID_TOGGLE_PAUSE = "music:toggle_pause"
+    CUSTOM_ID_SKIP = "music:skip"
+    CUSTOM_ID_STOP = "music:stop"
+    CUSTOM_ID_VOL_DOWN = "music:vol_down"
+    CUSTOM_ID_VOL_UP = "music:vol_up"
+
+    def __init__(self, cog: "Music | None" = None):
+        super().__init__(timeout=None)
+        self.cog = cog
+
+    def refresh_buttons(self, player: "wavelink.Player | None" = None):
+        """統一依據 player 播放狀態設定每顆按鈕的 label / emoji / disabled 狀態。
+
+        - 沒有正在播放的曲目（或 player 為 None）：全部按鈕 disabled。
+        - 暫停中：切換按鈕顯示「繼續」、綠色；播放中：顯示「暫停」、藍色。
+        - 佇列沒有下一首：切歌按鈕 disabled。
+        - 音量到 0% 時，「−」disabled；音量到 100% 時，「+」disabled。
+        """
+        btn_map: dict[str, ui.Button] = {}
+        for child in self.children:
+            if isinstance(child, ui.Button) and child.custom_id:
+                btn_map[child.custom_id] = child
+
+        btn_toggle = btn_map.get(self.CUSTOM_ID_TOGGLE_PAUSE)
+        btn_skip = btn_map.get(self.CUSTOM_ID_SKIP)
+        btn_stop = btn_map.get(self.CUSTOM_ID_STOP)
+        btn_vol_down = btn_map.get(self.CUSTOM_ID_VOL_DOWN)
+        btn_vol_up = btn_map.get(self.CUSTOM_ID_VOL_UP)
+
+        # 狀態 1：沒有播放中的曲目或 player 不存在 -> 全部 disabled
+        if player is None or getattr(player, "current", None) is None:
+            for child in self.children:
+                child.disabled = True
+            if btn_toggle:
+                btn_toggle.label = "暫停"
+                btn_toggle.emoji = "⏯️"
+                btn_toggle.style = discord.ButtonStyle.secondary
+            return
+
+        current_track = player.current
+        song_queue = getattr(player, "song_queue", None) or deque()
+        is_paused = getattr(player, "paused", False)
+        try:
+            volume = int(getattr(player, "volume", 100))
+        except (ValueError, TypeError):
+            volume = 100
+
+        # 暫停 / 繼續切換按鈕
+        if btn_toggle:
+            btn_toggle.disabled = False
+            if is_paused:
+                btn_toggle.label = "繼續"
+                btn_toggle.emoji = "▶️"
+                btn_toggle.style = discord.ButtonStyle.success
+            else:
+                btn_toggle.label = "暫停"
+                btn_toggle.emoji = "⏸️"
+                btn_toggle.style = discord.ButtonStyle.primary
+
+        # 切歌按鈕：佇列沒有下一首時 disabled
+        if btn_skip:
+            btn_skip.disabled = (len(song_queue) == 0)
+
+        # 停止按鈕
+        if btn_stop:
+            btn_stop.disabled = False
+
+        # 音量按鈕：邊界 disabled (0% ~ 100%)
+        if btn_vol_down:
+            btn_vol_down.disabled = (volume <= 0)
+        if btn_vol_up:
+            btn_vol_up.disabled = (volume >= 100)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        """統一權限與狀態防呆：
+        1. 伺服器環境檢查。
+        2. 播放狀態防呆：Bot 重啟後或無播放中內容時，優雅提示並 disable 按鈕。
+        3. 語音頻道檢查：操作者必須與 Bot 在同一個語音頻道。
+        """
+        if interaction.guild is None:
+            await interaction.response.send_message("❌ 此控制面板僅限伺服器中使用。", ephemeral=True)
+            return False
+
+        player = interaction.guild.voice_client
+
+        # 情況 A：機器人不在語音頻道，或沒有正在播放的曲目（例如 Bot 重開機後按舊面板）
+        if player is None or not isinstance(player, wavelink.Player) or getattr(player, "current", None) is None:
+            disabled_view = MusicControlView(self.cog)
+            disabled_view.refresh_buttons(None)
+
+            await interaction.response.send_message("目前沒有播放中的內容", ephemeral=True)
+
+            try:
+                if interaction.message:
+                    embed = discord.Embed(
+                        title="⏹️ 播放已結束",
+                        description="目前沒有正在播放的歌曲。可使用 `/music_play` 點歌！",
+                        color=discord.Color.light_grey(),
+                    )
+                    await interaction.message.edit(embed=embed, view=disabled_view)
+            except (discord.NotFound, discord.HTTPException):
+                pass
+            return False
+
+        # 情況 B：操作者與機器人是否在同一個語音頻道
+        user_voice = getattr(interaction.user, "voice", None)
+        if user_voice is None or user_voice.channel is None or user_voice.channel.id != player.channel.id:
+            channel_mention = player.channel.mention if player.channel else "語音頻道"
+            await interaction.response.send_message(
+                f"❌ 你必須跟我在同一個語音頻道（{channel_mention}）才能操作控制面板！",
+                ephemeral=True,
+            )
+            return False
+
+        return True
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception, item: ui.Item) -> None:
+        """統一錯誤回報，調用 bot.notify_owner_error。"""
+        print(f"❌ MusicControlView 按鈕操作錯誤 [{getattr(item, 'custom_id', 'unknown')}]: {error}", file=sys.stderr)
+        traceback.print_exception(type(error), error, error.__traceback__, file=sys.stderr)
+
+        bot = interaction.client
+        if hasattr(bot, "notify_owner_error"):
+            await bot.notify_owner_error(
+                error,
+                interaction=interaction,
+                extra_info=f"MusicControlView item={getattr(item, 'custom_id', 'unknown')}",
+            )
+
+        msg = "❌ 操作控制面板時發生錯誤，已回報給開發者。"
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(msg, ephemeral=True)
+            else:
+                await interaction.followup.send(msg, ephemeral=True)
+        except discord.HTTPException:
+            pass
+
+    @ui.button(
+        emoji="⏸️",
+        label="暫停",
+        style=discord.ButtonStyle.primary,
+        custom_id=CUSTOM_ID_TOGGLE_PAUSE,
+        row=0,
+    )
+    async def toggle_pause(self, interaction: discord.Interaction, button: ui.Button):
+        player: "wavelink.Player" = interaction.guild.voice_client
+        cog: "Music" = self.cog or interaction.client.get_cog("Music")
+
+        is_paused = getattr(player, "paused", False)
+        await player.pause(not is_paused)
+        if cog:
+            await cog._sync_panel(interaction.guild.id, player, interaction=interaction)
+
+    @ui.button(
+        emoji="⏭️",
+        label="切歌",
+        style=discord.ButtonStyle.secondary,
+        custom_id=CUSTOM_ID_SKIP,
+        row=0,
+    )
+    async def skip(self, interaction: discord.Interaction, button: ui.Button):
+        player: "wavelink.Player" = interaction.guild.voice_client
+        cog: "Music" = self.cog or interaction.client.get_cog("Music")
+
+        await interaction.response.defer()
+        if cog:
+            cog._pending_panel_interaction[interaction.guild.id] = interaction
+
+        player.end_intent = "skip"
+        if getattr(player, "paused", False):
+            await player.pause(False)
+        try:
+            await player.skip(force=True)
+        except Exception:
+            if cog:
+                cog._pending_panel_interaction.pop(interaction.guild.id, None)
+            raise
+
+    @ui.button(
+        emoji="⏹️",
+        label="停止",
+        style=discord.ButtonStyle.danger,
+        custom_id=CUSTOM_ID_STOP,
+        row=0,
+    )
+    async def stop(self, interaction: discord.Interaction, button: ui.Button):
+        player: "wavelink.Player" = interaction.guild.voice_client
+        cog: "Music" = self.cog or interaction.client.get_cog("Music")
+
+        await interaction.response.defer()
+        song_queue = getattr(player, "song_queue", None)
+        if song_queue:
+            song_queue.clear()
+        player.loop_mode = "off"
+        if cog:
+            cog._clear_rejection(getattr(player, "current", None))
+        if player.current:
+            player.end_intent = "stop"
+            if getattr(player, "paused", False):
+                await player.pause(False)
+            await player.skip(force=True)
+        if cog:
+            await cog._update_panel_ended(interaction.guild.id, interaction=interaction)
+
+    @ui.button(
+        emoji="🔉",
+        label="音量 −",
+        style=discord.ButtonStyle.secondary,
+        custom_id=CUSTOM_ID_VOL_DOWN,
+        row=0,
+    )
+    async def volume_down(self, interaction: discord.Interaction, button: ui.Button):
+        player: "wavelink.Player" = interaction.guild.voice_client
+        cog: "Music" = self.cog or interaction.client.get_cog("Music")
+
+        current_vol = getattr(player, "volume", 100)
+        new_vol = max(0, current_vol - 10)
+        await player.set_volume(new_vol)
+        if cog:
+            await cog._sync_panel(interaction.guild.id, player, interaction=interaction)
+
+    @ui.button(
+        emoji="🔊",
+        label="音量 +",
+        style=discord.ButtonStyle.secondary,
+        custom_id=CUSTOM_ID_VOL_UP,
+        row=0,
+    )
+    async def volume_up(self, interaction: discord.Interaction, button: ui.Button):
+        player: "wavelink.Player" = interaction.guild.voice_client
+        cog: "Music" = self.cog or interaction.client.get_cog("Music")
+
+        current_vol = getattr(player, "volume", 100)
+        new_vol = min(100, current_vol + 10)
+        await player.set_volume(new_vol)
+        if cog:
+            await cog._sync_panel(interaction.guild.id, player, interaction=interaction)
+
+
 class Music(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         # key: guild_id, value: 目前正在倒數「語音頻道空了要自動離開」的背景任務。
         # 一個伺服器同時最多只會有一個計時器在跑。
         self.empty_channel_timers: dict[int, asyncio.Task] = {}
+        # 第 5 週新增：伺服器控制面板訊息追蹤 (guild_id -> (channel_id, message_id))，多伺服器狀態隔離
+        self.panel_messages: dict[int, tuple[int, int]] = {}
+        # 進行中的面板 interaction（例如切歌時先 defer，換曲事件抵達時以此回應）
+        self._pending_panel_interaction: dict[int, discord.Interaction] = {}
         # key: 節點 identifier，value: 是否已經為「目前這次離線」發過通知。
         # 用來避免健康檢查每隔 NODE_HEALTH_CHECK_INTERVAL 秒就重複 DM 開發者，
         # 只在「狀態從連線變離線」的那一刻通知一次，恢復連線後才會重置旗標。
@@ -397,6 +669,8 @@ class Music(commands.Cog):
         self._pending_requests.clear()
         self._stop_votes.clear()
         self._rejected_track_keys.clear()
+        self.panel_messages.clear()
+        self._pending_panel_interaction.clear()
 
         if self.node_health_check.is_running():
             self.node_health_check.cancel()
@@ -411,6 +685,8 @@ class Music(commands.Cog):
         create_task 丟到背景後，cog_load() 會立刻返回，其餘啟動流程不受影響；
         另外加上逾時保護，避免背景任務本身無限期卡住。
         """
+        # 第 5 週新增：註冊持久化控制面板 View，讓 Bot 重開機後舊按鈕仍可被派發處理
+        self.bot.add_view(MusicControlView(self))
         if wavelink is None:
             print("⚠️ 尚未安裝 wavelink，Music Cog 的 /join /leave /play 將無法運作。"
                   "請先執行 pip install wavelink 並設定 Lavalink 節點。")
@@ -658,6 +934,14 @@ class Music(commands.Cog):
         print(f"✅ Lavalink 節點已就緒：{payload.node.uri}（Session ID: {payload.session_id}）")
 
     @commands.Cog.listener()
+    async def on_wavelink_track_start(self, payload: Any):
+        """音軌開始播放事件（第 5 週新增）：在下指令的文字頻道產生或更新控制面板。"""
+        player = getattr(payload, "player", None)
+        if player is None or getattr(player, "guild", None) is None:
+            return
+        await self._sync_panel(player.guild.id, player)
+
+    @commands.Cog.listener()
     async def on_wavelink_track_exception(self, payload: Any):
         """實測發現的問題：player.play(track) 呼叫成功不代表歌曲真的能播放。
 
@@ -787,6 +1071,8 @@ class Music(commands.Cog):
         if next_item is None:
             player.current_requester = None
             player.current_requester_id = None
+            if getattr(player, "guild", None):
+                await self._update_panel_ended(player.guild.id)
             if channel is not None:
                 try:
                     await channel.send("📭 播放佇列已經全部播完囉，輸入 `/music_play` 繼續點歌吧！")
@@ -943,6 +1229,7 @@ class Music(commands.Cog):
             song_queue.clear()
 
         home_channel = getattr(player, "home_channel", None)
+        await self._update_panel_ended(guild_id)
 
         try:
             await player.disconnect()
@@ -1145,6 +1432,7 @@ class Music(commands.Cog):
         song_queue = getattr(voice_client, "song_queue", None)
         if song_queue:
             song_queue.clear()
+        await self._update_panel_ended(interaction.guild.id)
         await voice_client.disconnect()
         await interaction.response.send_message(f"👋 已離開 {channel_mention}。", ephemeral=True)
 
@@ -1208,6 +1496,129 @@ class Music(commands.Cog):
             embed.set_footer(text=f"{footer_prefix} {requester_name} {footer_suffix}")
         return embed
 
+    def _build_panel_embed(self, player: "wavelink_module.Player | None") -> discord.Embed:
+        """建立音樂控制面板的即時資訊 Embed（第 5 週：基本曲目資訊，無進度條）。"""
+        if player is None or getattr(player, "current", None) is None:
+            return discord.Embed(
+                title="⏹️ 播放已結束",
+                description="目前沒有正在播放的歌曲。可使用 `/music_play` 點歌！",
+                color=discord.Color.light_grey(),
+            )
+
+        track = player.current
+        is_paused = getattr(player, "paused", False)
+        status_icon = "⏸️" if is_paused else "🎶"
+        status_text = "已暫停" if is_paused else "正在播放"
+
+        embed = discord.Embed(
+            title=f"{status_icon} {status_text}",
+            description=f"[{track.title}]({track.uri})" if getattr(track, "uri", None) else track.title,
+            color=discord.Color.orange() if is_paused else discord.Color.blurple(),
+            timestamp=discord.utils.utcnow(),
+        )
+        artwork = getattr(track, "artwork", None)
+        if artwork:
+            embed.set_thumbnail(url=artwork)
+
+        embed.add_field(name="👤 作者", value=getattr(track, "author", None) or "未知", inline=True)
+        embed.add_field(name="⏱️ 長度", value=format_duration(getattr(track, "length", None)), inline=True)
+        try:
+            volume = int(getattr(player, "volume", 100))
+        except (ValueError, TypeError):
+            volume = 100
+        embed.add_field(name="🔊 音量", value=f"{volume}%", inline=True)
+
+        song_queue = getattr(player, "song_queue", None) or deque()
+        loop_mode = getattr(player, "loop_mode", "off")
+        loop_label = LOOP_LABELS.get(loop_mode, "關閉")
+        embed.add_field(name="📜 待播清單", value=f"{len(song_queue)} 首", inline=True)
+        embed.add_field(name="🔁 循環模式", value=loop_label, inline=True)
+
+        requester_name = getattr(player, "current_requester", None)
+        if requester_name:
+            embed.set_footer(text=f"由 {requester_name} 點播 • 控制面板")
+        else:
+            embed.set_footer(text="控制面板")
+
+        return embed
+
+    async def _sync_panel(
+        self,
+        guild_id: int,
+        player: "wavelink_module.Player | None" = _PANEL_PLAYER_UNSET,
+        interaction: discord.Interaction | None = None,
+    ):
+        """同步指定伺服器的控制面板（動態刷新按鈕狀態與 Embed）。
+
+        - 狀態以 guild 為單位完全隔離。
+        - 若傳入 interaction 或有掛起的切歌 interaction，優先透過 edit_message / edit_original_response 回應。
+        - 否則透過 channel.fetch_message 編輯既有訊息，避免洗版。
+        - 若舊面板訊息被刪除（NotFound），重新發送新面板並更新記錄。
+        """
+        guild = self.bot.get_guild(guild_id)
+        if guild is None:
+            return
+
+        if player is _PANEL_PLAYER_UNSET:
+            player = guild.voice_client
+
+        # 檢查是否有切歌等操作掛起的 deferred interaction
+        if interaction is None and guild_id in self._pending_panel_interaction:
+            interaction = self._pending_panel_interaction.pop(guild_id, None)
+
+        view = MusicControlView(self)
+        view.refresh_buttons(player)
+        embed = self._build_panel_embed(player)
+
+        # 優先以 interaction 回應
+        if interaction is not None:
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.edit_message(embed=embed, view=view)
+                else:
+                    await interaction.edit_original_response(embed=embed, view=view)
+                return
+            except (discord.NotFound, discord.HTTPException) as exc:
+                print(f">>> 透過 interaction 更新面板失敗，改走 fetch_message：{exc}")
+
+        # 無 interaction 時，透過記錄的 channel_id 與 message_id 編輯既有訊息
+        panel_info = self.panel_messages.get(guild_id)
+        target_channel = getattr(player, "home_channel", None) if player else None
+
+        if panel_info:
+            channel_id, message_id = panel_info
+            channel = self.bot.get_channel(channel_id)
+            if channel is None:
+                try:
+                    channel = await self.bot.fetch_channel(channel_id)
+                except Exception:
+                    channel = None
+
+            if channel is not None:
+                try:
+                    msg = await channel.fetch_message(message_id)
+                    await msg.edit(embed=embed, view=view)
+                    return
+                except discord.NotFound:
+                    print(f"ℹ️ 控制面板訊息已被刪除 (message_id={message_id})，將重新發送新面板。")
+                    self.panel_messages.pop(guild_id, None)
+                except discord.HTTPException as exc:
+                    print(f"⚠️ 編輯控制面板訊息失敗：{exc}")
+
+        # 既有訊息不存在或已遭刪除時，若仍在播放中，於 target_channel 發送新面板
+        if target_channel is not None and player is not None and getattr(player, "current", None) is not None:
+            try:
+                new_msg = await target_channel.send(embed=embed, view=view)
+                self.panel_messages[guild_id] = (target_channel.id, new_msg.id)
+            except discord.HTTPException as exc:
+                print(f"❌ 發送新控制面板訊息失敗：{exc}")
+
+    async def _update_panel_ended(
+        self, guild_id: int, interaction: discord.Interaction | None = None
+    ):
+        """將伺服器的控制面板標記為已結束（全部按鈕 disabled）。"""
+        await self._sync_panel(guild_id, player=None, interaction=interaction)
+
     @app_commands.command(name="music_play", description="搜尋並播放音樂，若目前正在播放則排入佇列（可輸入關鍵字或直接貼網址）")
     @app_commands.describe(query="歌曲名稱 / 關鍵字，或是 YouTube、SoundCloud 網址")
     @app_commands.guild_only()
@@ -1241,6 +1652,7 @@ class Music(commands.Cog):
         if player.playing or player.paused:
             player.song_queue.append((track, interaction.user.display_name, interaction.user.id))
             position = len(player.song_queue)
+            await self._sync_panel(interaction.guild.id, player)
             embed = self._build_track_embed(
                 title="➕ 已加入佇列",
                 track=track,
@@ -1295,6 +1707,7 @@ class Music(commands.Cog):
             # 插播的重點：用 appendleft 塞到 FIFO 佇列的最前面，
             # 而不是照排隊順序 append 到最後面；同樣把點播者名稱存起來。
             player.song_queue.appendleft((track, interaction.user.display_name, interaction.user.id))
+            await self._sync_panel(interaction.guild.id, player)
             embed = self._build_track_embed(
                 title="⏭️ 已插播",
                 track=track,
@@ -1385,6 +1798,7 @@ class Music(commands.Cog):
 
         removed_count = len(song_queue)
         song_queue.clear()
+        await self._sync_panel(interaction.guild.id, player)
         await interaction.response.send_message(
             f"🗑️ 已清空佇列，移除了 {removed_count} 首歌曲（正在播放的歌曲不受影響）。", ephemeral=True
         )
@@ -1653,12 +2067,14 @@ class Music(commands.Cog):
                 await interaction.followup.send("ℹ️ 現在沒有可以暫停的歌曲。", ephemeral=True)
                 return
             await player.pause(True)
+            await self._sync_panel(interaction.guild.id, player)
             await interaction.followup.send(f"⏸️ 已暫停{self._operator_stamp(interaction)}")
         else:
             if not player.paused:
                 await interaction.followup.send("ℹ️ 目前不是暫停狀態。", ephemeral=True)
                 return
             await player.pause(False)
+            await self._sync_panel(interaction.guild.id, player)
             await interaction.followup.send(f"▶️ 繼續播放{self._operator_stamp(interaction)}")
 
     async def _handle_pause_resume_request(self, interaction: discord.Interaction, player, want_pause: bool):
@@ -1725,6 +2141,7 @@ class Music(commands.Cog):
                 await interaction.response.send_message("ℹ️ 已經是暫停狀態了。", ephemeral=True)
                 return
             await player.pause(True)
+            await self._sync_panel(interaction.guild.id, player)
             await interaction.response.send_message(f"⏸️ 已暫停{self._operator_stamp(interaction)}")
             return
 
@@ -1744,6 +2161,7 @@ class Music(commands.Cog):
                 await interaction.response.send_message("ℹ️ 目前不是暫停狀態。", ephemeral=True)
                 return
             await player.pause(False)
+            await self._sync_panel(interaction.guild.id, player)
             await interaction.response.send_message(f"▶️ 繼續播放{self._operator_stamp(interaction)}")
             return
 
@@ -1788,6 +2206,7 @@ class Music(commands.Cog):
             song_queue.clear()
         player.loop_mode = "off"
         self._clear_rejection(getattr(player, "current", None))
+        await self._update_panel_ended(interaction.guild.id)
         await interaction.followup.send(f"⏹️ 已停止播放並清空佇列{self._operator_stamp(interaction)}")
         if player.current:
             try:
@@ -1869,6 +2288,7 @@ class Music(commands.Cog):
         current_mode = getattr(player, "loop_mode", "off")
         new_mode = mode.value if mode is not None else LOOP_NEXT[current_mode]
         player.loop_mode = new_mode
+        await self._sync_panel(interaction.guild.id, player)
         await interaction.response.send_message(
             f"{LOOP_LABELS[new_mode]}{self._operator_stamp(interaction)}"
         )
