@@ -4,7 +4,7 @@
    ========================================================================== */
 
 :root {
-  /* 主題配色角色 */
+  /* 主題配色角色 (現有相容) */
   --bg: #0b1020;
   --bg2: #111827;
   --panel: rgba(15, 23, 42, 0.65);
@@ -16,7 +16,51 @@
   --muted: #b9c6db;
   --danger: #f87171;
 
-  /* Apple Liquid Glass: 彈性流體運動曲線 */
+  /* ── 5-Level Surface Stack (語意層) ── */
+  --surface-canvas: #090d1a;
+  --surface-sunken: #060810;
+  --surface-raised: rgba(15, 23, 42, 0.65);
+  --surface-overlay: rgba(22, 33, 62, 0.88);
+  --surface-inverse: #f8fafc;
+
+  /* ── Text Hierarchy ── */
+  --text-primary: #f8fafc;
+  --text-secondary: #e2e8f0;
+  --text-tertiary: #b9c6db;
+  --text-disabled: #64748b;
+
+  /* ── Border Roles ── */
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-default: rgba(255, 255, 255, 0.14);
+  --border-strong: rgba(255, 255, 255, 0.25);
+  --border-focus: #7dd3fc;
+
+  /* ── Radii Scale ── */
+  --radius-xs: 0.25rem;   /* 4px - 標籤徽章 */
+  --radius-sm: 0.375rem;  /* 6px - 輸入框 */
+  --radius-md: 0.625rem;  /* 10px - 按鈕、小卡片 */
+  --radius-lg: 1rem;      /* 16px - 子區塊 */
+  --radius-xl: 1.5rem;    /* 24px - Glass Card */
+  --radius-full: 9999px;  /* 膠囊按鈕、頭像 */
+
+  /* ── Semantic Z-Index ── */
+  --z-base: 0;
+  --z-raised: 1;
+  --z-ambient: 2;
+  --z-dropdown: 20;
+  --z-sticky: 30;
+  --z-fab: 35;
+  --z-drawer: 40;
+  --z-modal-backdrop: 50;
+  --z-modal: 60;
+  --z-toast: 70;
+  --z-tooltip: 80;
+
+  /* ── Motion Timing ── */
+  --duration-instant: 100ms;
+  --duration-fast: 180ms;
+  --duration-normal: 280ms;
+  --duration-slow: 450ms;
   --motion-spring: cubic-bezier(0.28, 1.45, 0.58, 1);
   --motion-smooth: cubic-bezier(0.2, 0.8, 0.2, 1);
 }
@@ -811,13 +855,20 @@ code:hover {
 a.dropdown-item.dropdown-panel-link,
 a.dropdown-item.dropdown-panel-link:link,
 a.dropdown-item.dropdown-panel-link:visited,
-.dropdown-panel-link {
+.dropdown-panel-link,
+a.dropdown-item.dropdown-profile-link,
+a.dropdown-item.dropdown-profile-link:link,
+a.dropdown-item.dropdown-profile-link:visited,
+.dropdown-profile-link {
   color: var(--primary) !important;
 }
 
 a.dropdown-item.dropdown-panel-link:hover,
 a.dropdown-item.dropdown-panel-link:visited:hover,
-.dropdown-panel-link:hover {
+.dropdown-panel-link:hover,
+a.dropdown-item.dropdown-profile-link:hover,
+a.dropdown-item.dropdown-profile-link:visited:hover,
+.dropdown-profile-link:hover {
   background: rgba(125, 211, 252, 0.12);
   color: #ffffff !important;
 }

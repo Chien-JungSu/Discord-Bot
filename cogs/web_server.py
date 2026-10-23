@@ -53,6 +53,9 @@ app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 from cogs.panel_bp import panel_bp
 app.register_blueprint(panel_bp)
 
+from cogs.profile_bp import profile_bp
+app.register_blueprint(profile_bp)
+
 
 
 @app.context_processor

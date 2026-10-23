@@ -1938,6 +1938,12 @@
       if (targetSub === 'owner-sub-bot-defaults') {
         loadOwnerBotDefaults();
       }
+      if (targetSub === 'owner-sub-profile-auth') {
+        loadOwnerProfileAuthData();
+      }
+      if (targetSub === 'owner-sub-blocked-users') {
+        loadOwnerBlockedUsers();
+      }
       checkUnsavedChanges();
     });
   });
@@ -2668,6 +2674,433 @@
 
     window.addEventListener('scroll', syncBackToTopVisibility, { passive: true });
     syncBackToTopVisibility();
+  }
+
+  // ============================================================================
+  // 6. 個人主頁授權與申請審核 (讀取、發放、撤銷、快捷授權)
+  // ============================================================================
+
+  async function loadOwnerProfileAuthData() {
+    const tbodyPerms = document.getElementById('tbody-profile-permissions');
+    const tbodyApps = document.getElementById('tbody-profile-applications');
+    if (!tbodyPerms && !tbodyApps) return;
+
+    try {
+      const res = await fetch('/api/panel/owner/profile-permissions');
+      if (res.status === 403) return;
+      const data = await res.json();
+      if (!res.ok || data.status !== 'success') {
+        showToast('載入授權名單失敗', 'error');
+        return;
+      }
+
+      renderProfilePermissionsTable(data.permissions || []);
+      renderProfileApplicationsTable(data.applications || []);
+    } catch (err) {
+      console.error(err);
+      if (tbodyPerms) tbodyPerms.innerHTML = '<tr><td colspan="5" style="text-align:center; color:#f87171;">連線錯誤，無法載入名單</td></tr>';
+      if (tbodyApps) tbodyApps.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#f87171;">連線錯誤，無法載入申請</td></tr>';
+    }
+  }
+
+  function renderProfilePermissionsTable(permissions) {
+    const tbody = document.getElementById('tbody-profile-permissions');
+    if (!tbody) return;
+
+    if (!permissions || permissions.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color: var(--muted); padding: 18px;">目前尚未手動授權任何使用者（管理員預設具備權限）。</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = permissions.map((p) => {
+      const visitBtnHtml = p.username ? `
+        <a href="/profile/@${escapeHtml(p.username)}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-visit-profile" style="display: inline-flex; align-items: center; gap: 4px; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.35); color: #38bdf8; border-radius: 6px; padding: 4px 10px; font-size: 12px; text-decoration: none; font-weight: 600; margin-right: 6px;">
+          <span>🔗 一鍵造訪主頁</span>
+        </a>
+      ` : `
+        <span style="font-size: 11.5px; color: var(--muted); margin-right: 6px;">(尚未建立)</span>
+      `;
+
+      return `
+        <tr>
+          <td style="font-family: monospace; font-weight: 700; color: #7dd3fc;">${escapeHtml(p.user_id)}</td>
+          <td>
+            <div style="font-weight: 600; color: #ffffff;">${escapeHtml(p.display_name || p.username || '—')}</div>
+            ${p.username ? `<div style="font-size: 11.5px; color: var(--muted);">@${escapeHtml(p.username)}</div>` : ''}
+          </td>
+          <td><span class="badge" style="background: rgba(255,255,255,0.08);">${escapeHtml(p.granted_by || 'owner')}</span></td>
+          <td style="color: var(--muted);">${escapeHtml(p.note || '—')}</td>
+          <td style="font-size: 12px; color: var(--muted);">${escapeHtml(p.created_at || '剛剛')}</td>
+          <td style="text-align: right; white-space: nowrap;">
+            ${visitBtnHtml}
+            <button type="button" class="btn btn-sm btn-revoke-profile" data-uid="${escapeHtml(p.user_id)}" style="background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.3); color: #f87171; border-radius: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer;">
+              撤銷權限
+            </button>
+            <button type="button" class="btn btn-sm btn-block-user" data-uid="${escapeHtml(p.user_id)}" data-name="${escapeHtml(p.username || p.user_id)}" style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.25); color: #f87171; border-radius: 6px; padding: 4px 8px; font-size: 12px; cursor: pointer; margin-left: 6px;">
+              🚫 封鎖
+            </button>
+          </td>
+        </tr>
+      `;
+    }).join('');
+
+    tbody.querySelectorAll('.btn-revoke-profile').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const uid = btn.getAttribute('data-uid');
+        if (!confirm(`確定要撤銷使用者 (Discord ID: ${uid}) 的個人檔案編輯權限嗎？`)) return;
+        try {
+          const res = await fetch('/api/panel/owner/profile-permissions/revoke', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user_id: uid }),
+          });
+          const ret = await res.json();
+          if (ret.status === 'success') {
+            showToast(ret.message, 'success');
+            loadOwnerProfileAuthData();
+          } else {
+            showToast(ret.message || '撤銷失敗', 'error');
+          }
+        } catch (e) {
+          showToast('連線失敗', 'error');
+        }
+      });
+    });
+
+    tbody.querySelectorAll('.btn-block-user').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const uid = btn.getAttribute('data-uid');
+        const uname = btn.getAttribute('data-name');
+        promptAndBlockUser(uid, uname);
+      });
+    });
+  }
+
+  function renderProfileApplicationsTable(applications) {
+    const tbody = document.getElementById('tbody-profile-applications');
+    if (!tbody) return;
+
+    if (!applications || applications.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color: var(--muted); padding: 18px;">目前沒有任何個人檔案申請單據。</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = applications.map((app) => {
+      let statusBadge = '';
+      if (app.status === 'authorized') {
+        statusBadge = '<span style="color: #34d399; background: rgba(52, 211, 153, 0.15); border: 1px solid rgba(52, 211, 153, 0.3); padding: 2px 8px; border-radius: 6px; font-size: 11.5px; font-weight: 700;">🟢 已授權</span>';
+      } else if (app.status === 'rejected') {
+        statusBadge = '<span style="color: #f87171; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.3); padding: 2px 8px; border-radius: 6px; font-size: 11.5px; font-weight: 700;">🔴 已拒絕</span>';
+      } else {
+        statusBadge = '<span style="color: #fbbf24; background: rgba(245, 158, 11, 0.15); border: 1px solid rgba(245, 158, 11, 0.3); padding: 2px 8px; border-radius: 6px; font-size: 11.5px; font-weight: 700;">🟡 待審核</span>';
+      }
+
+      let actionsHtml = '';
+      if (app.status === 'authorized') {
+        actionsHtml = `
+          <div style="display: flex; gap: 6px; justify-content: flex-end; align-items: center;">
+            <a href="/profile/@${escapeHtml(app.username)}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-visit-profile" style="display: inline-flex; align-items: center; gap: 4px; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.35); color: #38bdf8; border-radius: 6px; padding: 4px 8px; font-size: 12px; text-decoration: none; font-weight: 600;">
+              🔗 造訪主頁
+            </a>
+            <button type="button" class="btn btn-sm btn-block-user" data-uid="${escapeHtml(app.user_id)}" data-name="${escapeHtml(app.username)}" style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.25); color: #f87171; border-radius: 6px; padding: 4px 8px; font-size: 12px; cursor: pointer;">
+              🚫 封鎖
+            </button>
+          </div>
+        `;
+      } else if (app.status === 'rejected') {
+        actionsHtml = `
+          <div style="display: flex; gap: 6px; justify-content: flex-end; align-items: center;">
+            <span style="font-size: 12px; color: #f87171; margin-right: 4px;">已拒絕</span>
+            <button type="button" class="btn btn-sm btn-block-user" data-uid="${escapeHtml(app.user_id)}" data-name="${escapeHtml(app.username)}" style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.25); color: #f87171; border-radius: 6px; padding: 4px 8px; font-size: 12px; cursor: pointer;">
+              🚫 封鎖
+            </button>
+          </div>
+        `;
+      } else {
+        actionsHtml = `
+          <div style="display: flex; gap: 6px; justify-content: flex-end; align-items: center;">
+            <button type="button" class="btn-quick-authorize" data-tid="${app.id}" data-uid="${escapeHtml(app.user_id)}" style="background: rgba(52, 211, 153, 0.18); border: 1px solid #34d399; color: #34d399; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 700; cursor: pointer;">
+              ⚡ 快捷授權
+            </button>
+            <button type="button" class="btn-reject-app" data-tid="${app.id}" style="background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.15); color: var(--muted); padding: 4px 8px; border-radius: 6px; font-size: 12px; cursor: pointer;">
+              拒絕
+            </button>
+            <button type="button" class="btn btn-sm btn-block-user" data-uid="${escapeHtml(app.user_id)}" data-name="${escapeHtml(app.username)}" style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.25); color: #f87171; border-radius: 6px; padding: 4px 8px; font-size: 12px; cursor: pointer;">
+              🚫 封鎖
+            </button>
+          </div>
+        `;
+      }
+
+      return `
+        <tr>
+          <td>
+            <div style="font-weight: 700; color: #ffffff;">${escapeHtml(app.display_name)}</div>
+            <div style="font-size: 11.5px; color: var(--muted);">@${escapeHtml(app.username)}</div>
+          </td>
+          <td>
+            <code style="font-size: 12px; color: #7dd3fc; background: rgba(125, 211, 252, 0.08); padding: 2px 6px; border-radius: 4px;">${escapeHtml(app.user_id)}</code>
+          </td>
+          <td style="max-width: 240px; font-size: 13px; color: #e2e8f0; line-height: 1.4; word-break: break-all;">
+            ${escapeHtml(app.reason)}
+          </td>
+          <td style="font-size: 11.5px; color: var(--muted); white-space: nowrap;">${escapeHtml(app.created_at)}</td>
+          <td>${statusBadge}</td>
+          <td style="text-align: right; white-space: nowrap;">${actionsHtml}</td>
+        </tr>
+      `;
+    }).join('');
+
+    tbody.querySelectorAll('.btn-quick-authorize').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const tid = btn.getAttribute('data-tid');
+        const uid = btn.getAttribute('data-uid');
+        if (!confirm(`確定要快捷發放個人檔案權限予 Discord ID: ${uid} 嗎？`)) return;
+
+        try {
+          const res = await fetch('/api/panel/owner/profile-applications/action', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ticket_id: tid, action: 'authorize', user_id: uid }),
+          });
+          const ret = await res.json();
+          if (ret.status === 'success') {
+            showToast(ret.message, 'success');
+            loadOwnerProfileAuthData();
+          } else {
+            showToast(ret.message || '授權失敗', 'error');
+          }
+        } catch (e) {
+          showToast('連線失敗', 'error');
+        }
+      });
+    });
+
+    tbody.querySelectorAll('.btn-reject-app').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const tid = btn.getAttribute('data-tid');
+        if (!confirm(`確定要拒絕單據 #${tid} 嗎？`)) return;
+
+        try {
+          const res = await fetch('/api/panel/owner/profile-applications/action', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ticket_id: tid, action: 'reject' }),
+          });
+          const ret = await res.json();
+          if (ret.status === 'success') {
+            showToast(ret.message, 'info');
+            loadOwnerProfileAuthData();
+          } else {
+            showToast(ret.message || '操作失敗', 'error');
+          }
+        } catch (e) {
+          showToast('連線失敗', 'error');
+        }
+      });
+    });
+
+    tbody.querySelectorAll('.btn-block-user').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const uid = btn.getAttribute('data-uid');
+        const uname = btn.getAttribute('data-name');
+        promptAndBlockUser(uid, uname);
+      });
+    });
+  }
+
+  // ============================================================================
+  // 7. 使用者封鎖黑名單管理
+  // ============================================================================
+
+  async function loadOwnerBlockedUsers() {
+    const tbody = document.getElementById('tbody-blocked-users');
+    if (!tbody) return;
+
+    try {
+      const res = await fetch('/api/panel/owner/blocked-users');
+      if (res.status === 403) return;
+      const data = await res.json();
+      if (!res.ok || data.status !== 'success') {
+        showToast('載入封鎖名單失敗', 'error');
+        return;
+      }
+      renderBlockedUsersTable(data.blocked_users || []);
+    } catch (err) {
+      console.error(err);
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#f87171;">連線錯誤，無法載入黑名單</td></tr>';
+    }
+  }
+
+  function renderBlockedUsersTable(users) {
+    const tbody = document.getElementById('tbody-blocked-users');
+    if (!tbody) return;
+
+    if (!users || users.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color: var(--muted); padding: 18px;">目前沒有任何被封鎖的使用者。</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = users.map((u) => `
+      <tr>
+        <td style="font-family: monospace; font-weight: 700; color: #f87171;">${escapeHtml(u.user_id)}</td>
+        <td>
+          <div style="font-weight: 600; color: #ffffff;">${escapeHtml(u.display_name || u.username || '—')}</div>
+          ${u.username ? `<div style="font-size: 11.5px; color: var(--muted);">@${escapeHtml(u.username)}</div>` : ''}
+        </td>
+        <td style="max-width: 220px; font-size: 12.5px; color: #e2e8f0; word-break: break-all;">
+          ${escapeHtml(u.reason || '未說明原因')}
+        </td>
+        <td><span class="badge" style="background: rgba(255,255,255,0.08);">${escapeHtml(u.blocked_by || 'owner')}</span></td>
+        <td style="font-size: 12px; color: var(--muted);">${escapeHtml(u.created_at || '剛剛')}</td>
+        <td style="text-align: right;">
+          <button type="button" class="btn btn-sm btn-unblock-user" data-uid="${escapeHtml(u.user_id)}" style="background: rgba(52, 211, 153, 0.15); border: 1px solid rgba(52, 211, 153, 0.35); color: #34d399; border-radius: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer;">
+            解除封鎖
+          </button>
+        </td>
+      </tr>
+    `).join('');
+
+    tbody.querySelectorAll('.btn-unblock-user').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const uid = btn.getAttribute('data-uid');
+        if (!confirm(`確定要解除使用者 (Discord ID: ${uid}) 的封鎖嗎？`)) return;
+
+        try {
+          const res = await fetch('/api/panel/owner/blocked-users/remove', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user_id: uid }),
+          });
+          const ret = await res.json();
+          if (ret.status === 'success') {
+            showToast(ret.message, 'success');
+            loadOwnerBlockedUsers();
+            loadOwnerProfileAuthData();
+          } else {
+            showToast(ret.message || '解除失敗', 'error');
+          }
+        } catch (e) {
+          showToast('連線失敗', 'error');
+        }
+      });
+    });
+  }
+
+  // 快捷封鎖共用處理
+  async function promptAndBlockUser(userId, defaultName = '') {
+    if (!userId) return;
+    const reason = prompt(`確定要封鎖此使用者 (${defaultName || userId}) 嗎？\n請輸入封鎖原因（例如：惡意濫用單據、違規個人檔案內容等）：`, '違反使用條款');
+    if (reason === null) return;
+    const cleanReason = reason.trim() || '違反使用條款與社群守則';
+
+    try {
+      const res = await fetch('/api/panel/owner/blocked-users/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: userId, reason: cleanReason }),
+      });
+      const ret = await res.json();
+      if (ret.status === 'success') {
+        showToast(ret.message, 'success');
+        loadOwnerBlockedUsers();
+        loadOwnerProfileAuthData();
+      } else {
+        showToast(ret.message || '封鎖失敗', 'error');
+      }
+    } catch (e) {
+      showToast('連線失敗', 'error');
+    }
+  }
+
+  // 表單手動封鎖監聽
+  const formBlockUser = document.getElementById('form-block-user');
+  if (formBlockUser) {
+    formBlockUser.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const inputId = document.getElementById('input-block-user-id');
+      const inputReason = document.getElementById('input-block-reason');
+      const userId = inputId ? inputId.value.trim() : '';
+      const reason = inputReason ? inputReason.value.trim() : '';
+
+      if (!userId) {
+        showToast('請輸入 Discord 使用者 ID', 'warning');
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/panel/owner/blocked-users/add', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id: userId, reason }),
+        });
+        const ret = await res.json();
+        if (ret.status === 'success') {
+          showToast(ret.message, 'success');
+          if (inputId) inputId.value = '';
+          if (inputReason) inputReason.value = '';
+          loadOwnerBlockedUsers();
+          loadOwnerProfileAuthData();
+        } else {
+          showToast(ret.message || '封鎖失敗', 'error');
+        }
+      } catch (e) {
+        showToast('連線失敗', 'error');
+      }
+    });
+  }
+
+  const btnRefreshBlockedUsers = document.getElementById('btn-refresh-blocked-users');
+  if (btnRefreshBlockedUsers) {
+    btnRefreshBlockedUsers.addEventListener('click', () => {
+      loadOwnerBlockedUsers();
+      showToast('已重新整理封鎖黑名單', 'info');
+    });
+  }
+
+  // 手動發放權限表單監聽
+  const formGrantProfile = document.getElementById('form-grant-profile-permission');
+  if (formGrantProfile) {
+    formGrantProfile.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const inputId = document.getElementById('input-grant-user-id');
+      const inputNote = document.getElementById('input-grant-note');
+      const userId = inputId ? inputId.value.trim() : '';
+      const note = inputNote ? inputNote.value.trim() : '';
+
+      if (!userId) {
+        showToast('請輸入 Discord 使用者 ID', 'warning');
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/panel/owner/profile-permissions/grant', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id: userId, note }),
+        });
+        const ret = await res.json();
+        if (ret.status === 'success') {
+          showToast(ret.message, 'success');
+          if (inputId) inputId.value = '';
+          if (inputNote) inputNote.value = '';
+          loadOwnerProfileAuthData();
+        } else {
+          showToast(ret.message || '發放失敗', 'error');
+        }
+      } catch (err) {
+        showToast('連線錯誤', 'error');
+      }
+    });
+  }
+
+  // 單據重新整理按鈕
+  const btnRefreshApps = document.getElementById('btn-refresh-profile-applications');
+  if (btnRefreshApps) {
+    btnRefreshApps.addEventListener('click', () => {
+      loadOwnerProfileAuthData();
+      showToast('已更新申請單據列表', 'info');
+    });
   }
 
   // ---------- 初始化動作 ----------

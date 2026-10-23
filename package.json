@@ -1,0 +1,15 @@
+{
+  "name": "jihui-bot-web",
+  "version": "1.0.0",
+  "description": "Tailwind CSS architecture for 炙彗JI機器人 Web Panel & Profile",
+  "scripts": {
+    "build:css": "tailwindcss -i ./static/css/tailwind-input.css -o ./static/css/tailwind.output.css --minify",
+    "watch:css": "tailwindcss -i ./static/css/tailwind-input.css -o ./static/css/tailwind.output.css --watch"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "tailwindcss": "^3.4.19"
+  }
+}

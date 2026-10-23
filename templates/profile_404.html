@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="zh-TW" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>找不到個人檔案頁面 - 炙彗JI 機器人</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.output.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/common.css') }}" />
+  <style>
+    body {
+      background-color: var(--surface-canvas, #090d1a);
+      color: var(--text, #f8fafc);
+      font-family: 'Roboto', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      overflow-x: hidden;
+    }
+
+    .notfound-container {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 32px 20px;
+      position: relative;
+      z-index: 10;
+    }
+
+    .notfound-card {
+      width: 100%;
+      max-width: 520px;
+      background: rgba(15, 23, 42, 0.72);
+      backdrop-filter: blur(28px) saturate(180%);
+      -webkit-backdrop-filter: blur(28px) saturate(180%);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 28px;
+      padding: 42px 36px;
+      text-align: center;
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.65), 0 0 40px rgba(239, 68, 68, 0.1);
+      animation: modalScaleIn 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .notfound-icon-wrap {
+      width: 76px;
+      height: 76px;
+      margin: 0 auto 24px;
+      border-radius: 22px;
+      background: rgba(239, 68, 68, 0.12);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #f87171;
+      box-shadow: 0 0 24px rgba(239, 68, 68, 0.25);
+    }
+
+    .notfound-title {
+      font-size: 1.65rem;
+      font-weight: 800;
+      color: #ffffff;
+      margin: 0 0 12px 0;
+      letter-spacing: -0.01em;
+    }
+
+    .notfound-desc {
+      font-size: 15px;
+      line-height: 1.65;
+      color: var(--muted, #b9c6db);
+      margin: 0 0 32px 0;
+    }
+
+    .username-highlight {
+      color: #7dd3fc;
+      font-weight: 700;
+      word-break: break-all;
+    }
+
+    .notfound-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .btn-notfound-primary {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      background: var(--primary, #7dd3fc);
+      color: #090d1a;
+      font-size: 15px;
+      font-weight: 700;
+      padding: 13px 24px;
+      border-radius: 12px;
+      text-decoration: none;
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      box-shadow: 0 4px 18px rgba(125, 211, 252, 0.35);
+    }
+
+    .btn-notfound-primary:hover {
+      background: #bae6fd;
+      transform: translateY(-1px);
+      box-shadow: 0 6px 24px rgba(125, 211, 252, 0.5);
+    }
+
+    .btn-notfound-secondary {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      color: var(--text, #f8fafc);
+      font-size: 14px;
+      font-weight: 600;
+      padding: 11px 20px;
+      border-radius: 12px;
+      text-decoration: none;
+      transition: all 0.18s ease;
+    }
+
+    .btn-notfound-secondary:hover {
+      background: rgba(255, 255, 255, 0.12);
+      border-color: rgba(255, 255, 255, 0.25);
+      color: #ffffff;
+    }
+
+    @keyframes modalScaleIn {
+      from {
+        opacity: 0;
+        transform: scale(0.94) translateY(14px);
+      }
+      to {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+      }
+    }
+  </style>
+</head>
+<body>
+  <!-- 背景鮮活流體光暈 -->
+  <div class="fixed inset-0 overflow-hidden pointer-events-none -z-10">
+    <div class="absolute -top-32 left-1/4 w-96 h-96 bg-red-500/10 rounded-full blur-3xl"></div>
+    <div class="absolute -bottom-32 right-1/4 w-96 h-96 bg-slate-500/15 rounded-full blur-3xl"></div>
+  </div>
+
+  <!-- 頂部精簡導航列 -->
+  <header class="w-full border-b border-white/10 bg-slate-900/60 backdrop-blur-xl z-20 py-3.5 px-6">
+    <div class="max-w-7xl mx-auto flex items-center justify-between">
+      <a href="/" class="flex items-center gap-2.5 text-white font-extrabold text-lg tracking-wide hover:opacity-90 transition-opacity">
+        <img src="/static/logo.png" alt="炙彗JI Logo" class="w-7 h-7 rounded-lg" onerror="this.src='/static/logo.png'" />
+        <span>炙彗JI</span>
+      </a>
+      <div class="flex items-center gap-3">
+        <a href="/" class="text-xs sm:text-sm font-semibold text-slate-300 hover:text-white transition-colors">返回首頁</a>
+        {% if user %}
+        <a href="/panel" class="text-xs sm:text-sm font-semibold text-sky-400 hover:text-sky-300 transition-colors">用戶中心</a>
+        {% endif %}
+      </div>
+    </div>
+  </header>
+
+  <!-- 404 無此頁面卡片主體 -->
+  <main class="notfound-container">
+    <div class="notfound-card">
+      <div class="notfound-icon-wrap">
+        <svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="15" y1="9" x2="9" y2="15"></line>
+          <line x1="9" y1="9" x2="15" y2="15"></line>
+        </svg>
+      </div>
+      <h1 class="notfound-title">無此個人檔案頁面</h1>
+      <p class="notfound-desc">
+        抱歉，使用者 <span class="username-highlight">@{{ username }}</span> 尚未建立個人主頁，或該主頁網址不存在。
+      </p>
+      <div class="notfound-actions">
+        <a href="/" class="btn-notfound-primary">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+            <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/>
+          </svg>
+          <span>返回網站首頁</span>
+        </a>
+        {% if user %}
+        <a href="/panel" class="btn-notfound-secondary">前往用戶中心</a>
+        {% else %}
+        <a href="/support?category=profile" class="btn-notfound-secondary">申請我自己的個人主頁</a>
+        {% endif %}
+      </div>
+    </div>
+  </main>
+</body>
+</html>
+

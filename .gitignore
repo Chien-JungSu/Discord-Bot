@@ -8,4 +8,9 @@ cogs/__pycache__/*
 .freebuff/
 .pytest_cache/
 *.db
-*.sqlite3
+*.sqlite3
+
+node_modules/
+
+.ui-craft/
+commits_cache.json

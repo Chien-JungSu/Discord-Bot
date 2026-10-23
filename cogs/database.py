@@ -1,3 +1,4 @@
+import copy
 import datetime
 import json
 import math
@@ -169,6 +170,60 @@ def init_db():
                 value TEXT NOT NULL
             );
             """)
+
+            # 13. 個人 Profile 設定表 (網格拖移式 Bento Grid Profile)
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_profiles (
+                user_id TEXT PRIMARY KEY,
+                username TEXT UNIQUE NOT NULL,
+                display_name TEXT,
+                avatar_url TEXT,
+                bio TEXT,
+                theme_config TEXT,
+                layout_widgets TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """)
+            cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_user_profiles_username_lower ON user_profiles (LOWER(username));")
+
+            # 14. 個人 Profile 授權名單表 (預設僅管理者可編輯，Bot Owner 可依 Discord ID 授權)
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS profile_permissions (
+                user_id TEXT PRIMARY KEY,
+                granted_by TEXT,
+                note TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """)
+
+            # 15. 服務支援與問題回報單據表 (支援個人檔案申請、問題回報等)
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS support_tickets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                display_name TEXT,
+                category TEXT NOT NULL,
+                reason TEXT,
+                status TEXT DEFAULT 'pending',
+                admin_note TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_support_tickets_category ON support_tickets (category);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_support_tickets_user_id ON support_tickets (user_id);")
+
+            # 16. 濫用與違規封鎖黑名單表 (手動封鎖濫用機器人或問題回報之使用者)
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS blocked_users (
+                user_id TEXT PRIMARY KEY,
+                reason TEXT DEFAULT '',
+                blocked_by TEXT DEFAULT 'owner',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_blocked_users_created_at ON blocked_users (created_at);")
 
             # ---------- 自動欄位安全遷移 (Migration) ----------
             cursor.execute("PRAGMA table_info(economy_users);")
@@ -1772,5 +1827,825 @@ def build_panel_link_view(
     view = discord.ui.View()
     view.add_item(build_panel_link_button(guild_id, owner=owner, label=label))
     return view
+
+
+# ==============================================================================
+# 個人 Profile 模組 (Bento Grid 網格拖移式個人頁面)
+# ==============================================================================
+
+def get_default_profile_widgets(username: str, display_name: str) -> list[dict[str, Any]]:
+    """產生預設的 Bento Grid 卡片清單。
+
+    規則：優先讀取資料庫中 @patricksu 的設定檔作為第一次登入編輯面板的預設畫面，
+    並自動替換為該使用者的 display_name 與 username。
+    """
+    # 嘗試從資料庫讀取 patricksu 的現有版型作為母本
+    try:
+        init_db()
+        with _lock:
+            conn = get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT layout_widgets FROM user_profiles WHERE LOWER(username) = 'patricksu';")
+                row = cursor.fetchone()
+                if row and row["layout_widgets"]:
+                    raw_widgets = json.loads(row["layout_widgets"])
+                    if isinstance(raw_widgets, list) and len(raw_widgets) > 0:
+                        cloned_widgets = copy.deepcopy(raw_widgets)
+                        # 個人化更新 header 卡片
+                        for w in cloned_widgets:
+                            if w.get("type") == "profile_header" or w.get("id") == "header":
+                                if "content" not in w:
+                                    w["content"] = {}
+                                w["content"]["display_name"] = display_name
+                                w["content"]["username"] = username
+                        return cloned_widgets
+            finally:
+                conn.close()
+    except Exception as exc:
+        print(f"[WARN] 讀取 @patricksu 預設版型失敗，改用靜態範本: {exc}")
+
+    # 若尚未建立或讀取異常，使用 @patricksu 的精美 Bento Grid 預設版型
+    return [
+        {
+            "id": "header",
+            "type": "profile_header",
+            "x": 0,
+            "y": 0,
+            "w": 12,
+            "h": 2,
+            "content": {
+                "display_name": display_name,
+                "username": username,
+                "hashtag": "自訂標籤",
+                "hashtags": ["自訂標籤"],
+                "bio": "自訂個性簽名",
+                "avatar_url": "/static/logo.png"
+            }
+        },
+        {
+            "id": f"card-{int(time.time())}-text",
+            "type": "text_card",
+            "x": 0,
+            "y": 2,
+            "w": 6,
+            "h": 4,
+            "content": {
+                "body": "# 自介\n\n- 暱稱：\n- 年齡：\n- 性別：\n- 生日：\n- 身高：\n- 體重：\n- 座標：\n- 遊戲：\n- 歌手：\n- 動漫：\n- VTuber：\n- 興趣："
+            }
+        },
+        {
+            "id": f"card-{int(time.time())}-social1",
+            "type": "social_link",
+            "x": 6,
+            "y": 2,
+            "w": 6,
+            "h": 2,
+            "content": {
+                "title": "社群連結",
+                "links": [
+                    {
+                        "id": f"btn-{int(time.time()*1000)}-1",
+                        "platform": "discord",
+                        "username": "usename",
+                        "url": "https://discord.gg",
+                        "style": "avatar",
+                        "avatar_url": ""
+                    },
+                    {
+                        "id": f"btn-{int(time.time()*1000)}-2",
+                        "platform": "instagram",
+                        "username": "username",
+                        "url": "https://instagram.com",
+                        "style": "inline",
+                        "avatar_url": ""
+                    },
+                    {
+                        "id": f"btn-{int(time.time()*1000)}-3",
+                        "platform": "threads",
+                        "username": "username",
+                        "url": "https://threads.net",
+                        "style": "inline",
+                        "avatar_url": ""
+                    }
+                ]
+            }
+        },
+        {
+            "id": f"card-{int(time.time())}-media",
+            "type": "media_embed",
+            "x": 6,
+            "y": 4,
+            "w": 6,
+            "h": 3,
+            "content": {
+                "media_type": "image",
+                "title": "",
+                "media_url": "https://cdn.sounova.com/upload/I7Dy0Md2oO5sKJS0Jurx8.webp",
+                "caption": "",
+                "fit_mode": "cover",
+                "pos_x": 50,
+                "pos_y": 50,
+                "zoom": 1,
+                "show_caption": False
+            }
+        },
+        {
+            "id": f"card-{int(time.time())}-social2",
+            "type": "social_link",
+            "x": 0,
+            "y": 6,
+            "w": 6,
+            "h": 2,
+            "content": {
+                "title": "友列",
+                "links": [
+                    {
+                        "id": f"btn-{int(time.time()*1000)}-4",
+                        "platform": "threads",
+                        "username": "username",
+                        "url": "https://threads.net",
+                        "style": "inline",
+                        "avatar_url": ""
+                    },
+                    {
+                        "id": f"btn-{int(time.time()*1000)}-5",
+                        "platform": "spotify",
+                        "username": "username",
+                        "url": "https://spotify.com",
+                        "style": "inline",
+                        "avatar_url": ""
+                    },
+                    {
+                        "id": f"btn-{int(time.time()*1000)}-6",
+                        "platform": "github",
+                        "username": "username",
+                        "url": "https://github.com",
+                        "style": "avatar",
+                        "avatar_url": ""
+                    }
+                ]
+            }
+        },
+        {
+            "id": f"card-{int(time.time())}-economy",
+            "type": "bot_economy",
+            "x": 6,
+            "y": 7,
+            "w": 6,
+            "h": 2,
+            "content": {
+                "title": "經濟數據"
+            }
+        }
+    ]
+
+
+def get_default_profile_theme() -> dict[str, Any]:
+    """取得預設的主題設定（優先讀取 @patricksu 設定檔）。"""
+    try:
+        init_db()
+        with _lock:
+            conn = get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT theme_config FROM user_profiles WHERE LOWER(username) = 'patricksu';")
+                row = cursor.fetchone()
+                if row and row["theme_config"]:
+                    cfg = json.loads(row["theme_config"])
+                    if isinstance(cfg, dict):
+                        return copy.deepcopy(cfg)
+            finally:
+                conn.close()
+    except Exception:
+        pass
+
+    return {
+        "theme_id": "sky",
+        "glow_color": "#7dd3fc",
+        "card_radius": "16px",
+        "bg_style": "default",
+        "section_splits": [2],
+        "section_splits_x": ["6_0"]
+    }
+
+
+def get_user_profile_by_username(username: str) -> Optional[dict[str, Any]]:
+    """根據 Discord 使用者名稱查詢個人檔案 (不區分大小寫)。"""
+    init_db()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT user_id, username, display_name, avatar_url, bio, theme_config, layout_widgets, updated_at
+                FROM user_profiles
+                WHERE LOWER(username) = LOWER(?);
+                """,
+                (username.strip(),),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+
+            theme_raw = row["theme_config"]
+            layout_raw = row["layout_widgets"]
+
+            try:
+                theme_config = json.loads(theme_raw) if theme_raw else get_default_profile_theme()
+            except Exception:
+                theme_config = get_default_profile_theme()
+
+            try:
+                layout_widgets = json.loads(layout_raw) if layout_raw else []
+            except Exception:
+                layout_widgets = []
+
+            return {
+                "user_id": str(row["user_id"]),
+                "username": str(row["username"]),
+                "display_name": str(row["display_name"] or row["username"]),
+                "avatar_url": str(row["avatar_url"] or "/static/logo.png"),
+                "bio": str(row["bio"] or ""),
+                "theme_config": theme_config,
+                "layout_widgets": layout_widgets,
+                "updated_at": str(row["updated_at"] or ""),
+            }
+        finally:
+            conn.close()
+
+
+def get_user_profile_by_user_id(user_id: str) -> Optional[dict[str, Any]]:
+    """根據 Discord User ID 查詢個人檔案。"""
+    init_db()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT user_id, username, display_name, avatar_url, bio, theme_config, layout_widgets, updated_at
+                FROM user_profiles
+                WHERE user_id = ?;
+                """,
+                (str(user_id).strip(),),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+
+            theme_raw = row["theme_config"]
+            layout_raw = row["layout_widgets"]
+
+            try:
+                theme_config = json.loads(theme_raw) if theme_raw else get_default_profile_theme()
+            except Exception:
+                theme_config = get_default_profile_theme()
+
+            try:
+                layout_widgets = json.loads(layout_raw) if layout_raw else []
+            except Exception:
+                layout_widgets = []
+
+            return {
+                "user_id": str(row["user_id"]),
+                "username": str(row["username"]),
+                "display_name": str(row["display_name"] or row["username"]),
+                "avatar_url": str(row["avatar_url"] or "/static/logo.png"),
+                "bio": str(row["bio"] or ""),
+                "theme_config": theme_config,
+                "layout_widgets": layout_widgets,
+                "updated_at": str(row["updated_at"] or ""),
+            }
+        finally:
+            conn.close()
+
+
+def upsert_user_profile(
+    user_id: str,
+    username: str,
+    display_name: str,
+    avatar_url: str,
+    bio: str,
+    theme_config: dict[str, Any] | str,
+    layout_widgets: list[dict[str, Any]] | str,
+) -> bool:
+    """新增或更新使用者 Profile 資料。"""
+    init_db()
+    theme_str = json.dumps(theme_config, ensure_ascii=False) if isinstance(theme_config, dict) else str(theme_config)
+    layout_str = json.dumps(layout_widgets, ensure_ascii=False) if isinstance(layout_widgets, list) else str(layout_widgets)
+
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO user_profiles (user_id, username, display_name, avatar_url, bio, theme_config, layout_widgets, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    username = excluded.username,
+                    display_name = excluded.display_name,
+                    avatar_url = excluded.avatar_url,
+                    bio = excluded.bio,
+                    theme_config = excluded.theme_config,
+                    layout_widgets = excluded.layout_widgets,
+                    updated_at = CURRENT_TIMESTAMP;
+                """,
+                (
+                    str(user_id).strip(),
+                    username.strip(),
+                    display_name.strip(),
+                    avatar_url.strip(),
+                    bio.strip(),
+                    theme_str,
+                    layout_str,
+                ),
+            )
+            conn.commit()
+            return True
+        except Exception as exc:
+            print(f"❌ upsert_user_profile 失敗: {exc}")
+            return False
+        finally:
+            conn.close()
+
+
+def seed_default_profile(
+    username: str,
+    user_id: Optional[str] = None,
+    display_name: Optional[str] = None,
+    avatar_url: Optional[str] = None,
+    bio: Optional[str] = None,
+) -> dict[str, Any]:
+    """建立並寫入預設示範 Profile 種子資料，回傳完整的 profile 物件。"""
+    clean_user = username.strip().lstrip('@')
+    target_uid = str(user_id).strip() if user_id else f"dev_user_{clean_user.lower()}"
+    target_display = display_name or (f"Patrick Su (炙彗)" if clean_user.lower() == "patricksu" else clean_user)
+    target_avatar = avatar_url or "/static/logo.png"
+    target_bio = bio or ("熱愛開源開發與社群建造。正在打造次世代 Discord 機器人！" if clean_user.lower() == "patricksu" else "這是我的專屬個人檔案主頁。")
+
+    default_theme = get_default_profile_theme()
+    default_widgets = get_default_profile_widgets(clean_user, target_display)
+
+    upsert_user_profile(
+        user_id=target_uid,
+        username=clean_user,
+        display_name=target_display,
+        avatar_url=target_avatar,
+        bio=target_bio,
+        theme_config=default_theme,
+        layout_widgets=default_widgets,
+    )
+    return {
+        "user_id": target_uid,
+        "username": clean_user,
+        "display_name": target_display,
+        "avatar_url": target_avatar,
+        "bio": target_bio,
+        "theme_config": default_theme,
+        "layout_widgets": default_widgets,
+        "updated_at": "剛剛",
+    }
+
+
+def get_profile_economy_data(user_id: Any) -> dict[str, Any]:
+    """查詢使用者的機器人經濟系統數據（若尚未建立或為本地測試帳號，回傳安全的模擬數據）。"""
+    numeric_id: Optional[int] = None
+    try:
+        numeric_id = int(user_id)
+    except (ValueError, TypeError):
+        numeric_id = None
+
+    if numeric_id is not None:
+        try:
+            econ = get_economy_user(numeric_id)
+            if econ and (econ.get("balance", 0) > 0 or econ.get("daily_streak", 0) > 0 or econ.get("total_earned", 0) > 0):
+                # 查詢金幣富豪排行榜名次
+                rank_str = "未上榜"
+                try:
+                    _, rank_info = get_economy_leaderboard(limit=10, user_id=numeric_id)
+                    if rank_info and rank_info.get("rank") is not None:
+                        rank_str = f"第 {rank_info['rank']} 名"
+                except Exception:
+                    pass
+
+                return {
+                    "balance": int(econ.get("balance", 0)),
+                    "daily_streak": int(econ.get("daily_streak", 0)),
+                    "total_earned": int(econ.get("total_earned", 0)),
+                    "gold_rank": rank_str,
+                    "is_mock": False,
+                }
+        except Exception as exc:
+            print(f"⚠️ 讀取經濟數據失敗，改用預設展示數據: {exc}")
+
+    # 本地測試或無數據時的模擬數據
+    return {
+        "balance": 12500,
+        "daily_streak": 15,
+        "total_earned": 38600,
+        "gold_rank": "第 3 名",
+        "is_mock": True,
+    }
+
+
+# ==============================================================================
+# 個人 Profile 編輯權限與支援單據模組
+# ==============================================================================
+
+def is_profile_admin(user_id: Any) -> bool:
+    """檢查指定使用者是否為機器人擁有者或全域管理員。"""
+    if not user_id:
+        return False
+    str_uid = str(user_id).strip()
+    if str_uid in ("dev_user_patricksu", "941935836189065236", "1477930950288478262"):
+        return True
+
+    # 檢查環境變數中的 owner_id
+    owner_id = os.getenv("DISCORD_OWNER_ID") or os.getenv("OWNER_ID")
+    if owner_id and str_uid == str(owner_id).strip():
+        return True
+
+    # 檢查 ADMIN_USER_IDS
+    admin_ids = os.getenv("ADMIN_USER_IDS", "").split(",")
+    for aid in admin_ids:
+        if aid.strip() and str_uid == aid.strip():
+            return True
+
+    return False
+
+
+def has_profile_permission(user_id: Any) -> bool:
+    """檢查指定使用者是否擁有個人主頁編輯權限（管理者預設擁有，其餘需在授權表；被封鎖者一律禁止）。"""
+    if not user_id:
+        return False
+    str_uid = str(user_id).strip()
+
+    # 被封鎖的使用者一律不得編輯個人主頁
+    if is_user_blocked(str_uid):
+        return False
+
+    # 管理者預設擁有編輯權限
+    if is_profile_admin(str_uid):
+        return True
+
+    init_db()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1 FROM profile_permissions WHERE user_id = ?;", (str_uid,))
+            return cursor.fetchone() is not None
+        finally:
+            conn.close()
+
+
+def grant_profile_permission(user_id: str, granted_by: str = "owner", note: str = "") -> bool:
+    """發放個人檔案編輯權限予指定 Discord ID。"""
+    if not user_id:
+        return False
+    str_uid = str(user_id).strip()
+    init_db()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO profile_permissions (user_id, granted_by, note, created_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    granted_by = excluded.granted_by,
+                    note = excluded.note,
+                    created_at = CURRENT_TIMESTAMP;
+                """,
+                (str_uid, str(granted_by).strip(), str(note).strip())
+            )
+            conn.commit()
+            return True
+        except Exception as exc:
+            print(f"[ERROR] grant_profile_permission 失敗: {exc}")
+            return False
+        finally:
+            conn.close()
+
+
+def revoke_profile_permission(user_id: str) -> bool:
+    """撤銷指定 Discord ID 的個人檔案編輯權限。"""
+    if not user_id:
+        return False
+    str_uid = str(user_id).strip()
+    init_db()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM profile_permissions WHERE user_id = ?;", (str_uid,))
+            conn.commit()
+            return True
+        except Exception as exc:
+            print(f"[ERROR] revoke_profile_permission 失敗: {exc}")
+            return False
+        finally:
+            conn.close()
+
+
+def get_all_profile_permissions() -> list[dict[str, Any]]:
+    """取得所有已授權個人主頁編輯之名單，附加已儲存或申請時的使用者名稱以便一鍵造訪。"""
+    init_db()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT p.user_id, p.granted_by, p.note, p.created_at,
+                       COALESCE(u.username, (
+                           SELECT s.username FROM support_tickets s 
+                           WHERE s.user_id = p.user_id 
+                           ORDER BY s.id DESC LIMIT 1
+                       )) AS username,
+                       COALESCE(u.display_name, (
+                           SELECT s.display_name FROM support_tickets s 
+                           WHERE s.user_id = p.user_id 
+                           ORDER BY s.id DESC LIMIT 1
+                       )) AS display_name
+                FROM profile_permissions p
+                LEFT JOIN user_profiles u ON p.user_id = u.user_id
+                ORDER BY p.created_at DESC;
+                """
+            )
+            rows = cursor.fetchall()
+            return [
+                {
+                    "user_id": str(r["user_id"]),
+                    "granted_by": str(r["granted_by"] or ""),
+                    "note": str(r["note"] or ""),
+                    "created_at": str(r["created_at"] or ""),
+                    "username": str(r["username"] or ""),
+                    "display_name": str(r["display_name"] or ""),
+                }
+                for r in rows
+            ]
+        finally:
+            conn.close()
+
+
+def is_user_blocked(user_id: Any) -> bool:
+    """檢查指定使用者是否已被系統管理員手動封鎖（黑名單）。"""
+    if not user_id:
+        return False
+    str_uid = str(user_id).strip()
+    init_db()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1 FROM blocked_users WHERE user_id = ?;", (str_uid,))
+            return cursor.fetchone() is not None
+        finally:
+            conn.close()
+
+
+def block_user(user_id: str, reason: str = "", blocked_by: str = "owner") -> bool:
+    """手動將指定 Discord ID 列入全域封鎖黑名單，並同步撤銷其個人檔案權限。"""
+    if not user_id:
+        return False
+    str_uid = str(user_id).strip()
+    init_db()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO blocked_users (user_id, reason, blocked_by, created_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    reason = excluded.reason,
+                    blocked_by = excluded.blocked_by,
+                    created_at = CURRENT_TIMESTAMP;
+                """,
+                (str_uid, str(reason).strip(), str(blocked_by).strip())
+            )
+            # 同步撤銷個人主頁編輯權限
+            cursor.execute("DELETE FROM profile_permissions WHERE user_id = ?;", (str_uid,))
+            conn.commit()
+            return True
+        except Exception as exc:
+            print(f"[ERROR] block_user 失敗: {exc}")
+            return False
+        finally:
+            conn.close()
+
+
+def unblock_user(user_id: str) -> bool:
+    """將特定使用者移出封鎖黑名單。"""
+    if not user_id:
+        return False
+    str_uid = str(user_id).strip()
+    init_db()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM blocked_users WHERE user_id = ?;", (str_uid,))
+            conn.commit()
+            return True
+        except Exception as exc:
+            print(f"[ERROR] unblock_user 失敗: {exc}")
+            return False
+        finally:
+            conn.close()
+
+
+def get_blocked_users() -> list[dict[str, Any]]:
+    """取得所有被手動封鎖的使用者名單。"""
+    init_db()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT b.user_id, b.reason, b.blocked_by, b.created_at,
+                       COALESCE(u.username, (
+                           SELECT s.username FROM support_tickets s 
+                           WHERE s.user_id = b.user_id 
+                           ORDER BY s.id DESC LIMIT 1
+                       )) AS username,
+                       COALESCE(u.display_name, (
+                           SELECT s.display_name FROM support_tickets s 
+                           WHERE s.user_id = b.user_id 
+                           ORDER BY s.id DESC LIMIT 1
+                       )) AS display_name
+                FROM blocked_users b
+                LEFT JOIN user_profiles u ON b.user_id = u.user_id
+                ORDER BY b.created_at DESC;
+                """
+            )
+            rows = cursor.fetchall()
+            return [
+                {
+                    "user_id": str(r["user_id"]),
+                    "reason": str(r["reason"] or ""),
+                    "blocked_by": str(r["blocked_by"] or "owner"),
+                    "created_at": str(r["created_at"] or ""),
+                    "username": str(r["username"] or ""),
+                    "display_name": str(r["display_name"] or ""),
+                }
+                for r in rows
+            ]
+        finally:
+            conn.close()
+
+
+def get_profile_request_cooldown(user_id: str) -> tuple[bool, int]:
+    """檢查使用者申請個人主頁的 30 天冷卻限制。
+    每位使用者每 30 天僅能提交一次 'profile_request' 申請。
+    回傳 (is_allowed: bool, remaining_days: int)。
+    """
+    if not user_id:
+        return True, 0
+    str_uid = str(user_id).strip()
+    init_db()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT created_at FROM support_tickets
+                WHERE user_id = ? AND category = 'profile_request'
+                ORDER BY id DESC LIMIT 1;
+                """,
+                (str_uid,)
+            )
+            row = cursor.fetchone()
+            if not row or not row["created_at"]:
+                return True, 0
+
+            raw_ts = str(row["created_at"]).strip()
+            # 支援 SQLite CURRENT_TIMESTAMP "YYYY-MM-DD HH:MM:SS" 或 ISO 格式
+            clean_ts = raw_ts.split('.')[0]
+            dt = None
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+                try:
+                    dt = datetime.datetime.strptime(clean_ts, fmt)
+                    break
+                except ValueError:
+                    continue
+
+            if not dt:
+                return True, 0
+
+            # SQLite CURRENT_TIMESTAMP 儲存 UTC 時間
+            now_utc = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+            diff = now_utc - dt
+            elapsed_days = diff.total_seconds() / 86400.0
+            if elapsed_days < 30.0:
+                remaining_days = int(math.ceil(30.0 - elapsed_days))
+                return False, max(1, remaining_days)
+            return True, 0
+        except Exception as exc:
+            print(f"[WARN] get_profile_request_cooldown 發生錯誤: {exc}")
+            return True, 0
+        finally:
+            conn.close()
+
+
+def create_support_ticket(
+    user_id: str,
+    username: str,
+    display_name: str,
+    category: str,
+    reason: str
+) -> int:
+    """建立新的服務支援或個人檔案申請單據，回傳新產生的 Ticket ID。"""
+    init_db()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO support_tickets (user_id, username, display_name, category, reason, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+                """,
+                (str(user_id).strip(), str(username).strip(), str(display_name).strip(), str(category).strip(), str(reason).strip())
+            )
+            conn.commit()
+            return cursor.lastrowid or 0
+        except Exception as exc:
+            print(f"[ERROR] create_support_ticket 失敗: {exc}")
+            return 0
+        finally:
+            conn.close()
+
+
+def get_support_tickets(category: Optional[str] = None) -> list[dict[str, Any]]:
+    """取得支援單據列表（可依分類篩選，例如 'profile_request'）。"""
+    init_db()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            if category:
+                cursor.execute(
+                    "SELECT id, user_id, username, display_name, category, reason, status, admin_note, created_at, updated_at "
+                    "FROM support_tickets WHERE category = ? ORDER BY id DESC;",
+                    (category.strip(),)
+                )
+            else:
+                cursor.execute(
+                    "SELECT id, user_id, username, display_name, category, reason, status, admin_note, created_at, updated_at "
+                    "FROM support_tickets ORDER BY id DESC;"
+                )
+            rows = cursor.fetchall()
+            return [
+                {
+                    "id": r["id"],
+                    "user_id": str(r["user_id"]),
+                    "username": str(r["username"]),
+                    "display_name": str(r["display_name"] or r["username"]),
+                    "category": str(r["category"]),
+                    "reason": str(r["reason"] or ""),
+                    "status": str(r["status"] or "pending"),
+                    "admin_note": str(r["admin_note"] or ""),
+                    "created_at": str(r["created_at"] or ""),
+                    "updated_at": str(r["updated_at"] or "")
+                }
+                for r in rows
+            ]
+        finally:
+            conn.close()
+
+
+def update_support_ticket_status(ticket_id: int, status: str, admin_note: str = "") -> bool:
+    """更新支援單據狀態（如 'authorized', 'rejected', 'resolved'）。"""
+    init_db()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE support_tickets
+                SET status = ?, admin_note = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?;
+                """,
+                (str(status).strip(), str(admin_note).strip(), int(ticket_id))
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+        except Exception as exc:
+            print(f"[ERROR] update_support_ticket_status 失敗: {exc}")
+            return False
+        finally:
+            conn.close()
+
+
 
 

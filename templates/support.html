@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="zh-TW" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>服務支援與回報 - 炙彗JI 機器人</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.output.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/common.css') }}" />
+  <style>
+    body {
+      background-color: var(--surface-canvas, #090d1a);
+      color: var(--text, #f8fafc);
+      font-family: 'Roboto', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      overflow-x: hidden;
+    }
+
+    .support-wrapper {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 40px 20px;
+      position: relative;
+      z-index: 10;
+    }
+
+    .support-card {
+      width: 100%;
+      max-width: 620px;
+      background: rgba(15, 23, 42, 0.72);
+      backdrop-filter: blur(28px) saturate(180%);
+      -webkit-backdrop-filter: blur(28px) saturate(180%);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 28px;
+      padding: 36px 32px;
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.65), 0 0 35px rgba(125, 211, 252, 0.1);
+      animation: modalScaleIn 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .support-header {
+      margin-bottom: 26px;
+      text-align: center;
+    }
+
+    .support-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(125, 211, 252, 0.12);
+      border: 1px solid rgba(125, 211, 252, 0.3);
+      color: var(--primary, #7dd3fc);
+      font-size: 12px;
+      font-weight: 700;
+      padding: 4px 12px;
+      border-radius: 9999px;
+      margin-bottom: 12px;
+    }
+
+    .support-title {
+      font-size: 1.75rem;
+      font-weight: 800;
+      color: #ffffff;
+      margin: 0 0 8px 0;
+      letter-spacing: -0.01em;
+    }
+
+    .support-subtitle {
+      font-size: 14.5px;
+      color: var(--muted, #b9c6db);
+      margin: 0;
+      line-height: 1.5;
+    }
+
+    .user-pill {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: rgba(11, 16, 32, 0.65);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 16px;
+      padding: 10px 14px;
+      margin-bottom: 22px;
+    }
+
+    .user-pill-avatar {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      border: 1.5px solid rgba(125, 211, 252, 0.4);
+    }
+
+    .user-pill-info {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+
+    .user-pill-name {
+      font-size: 14px;
+      font-weight: 700;
+      color: #ffffff;
+    }
+
+    .user-pill-id {
+      font-size: 11.5px;
+      color: var(--muted, #b9c6db);
+      font-family: monospace;
+    }
+
+    .form-group {
+      margin-bottom: 20px;
+    }
+
+    .form-label {
+      display: block;
+      font-size: 13.5px;
+      font-weight: 700;
+      color: var(--text, #f8fafc);
+      margin-bottom: 8px;
+    }
+
+    .form-select,
+    .form-textarea {
+      width: 100%;
+      box-sizing: border-box;
+      background: rgba(11, 16, 32, 0.7);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 12px;
+      padding: 12px 14px;
+      color: #ffffff;
+      font-size: 14px;
+      font-family: inherit;
+      transition: all 0.2s ease;
+    }
+
+    .form-select:focus,
+    .form-textarea:focus {
+      outline: none;
+      border-color: var(--primary, #7dd3fc);
+      box-shadow: 0 0 0 3px rgba(125, 211, 252, 0.25);
+    }
+
+    .form-hint {
+      font-size: 12px;
+      color: var(--muted, #b9c6db);
+      margin-top: 6px;
+      display: block;
+    }
+
+    .alert-irrevocable {
+      background: rgba(245, 158, 11, 0.12);
+      border: 1px solid rgba(245, 158, 11, 0.35);
+      border-radius: 14px;
+      padding: 12px 16px;
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      margin-bottom: 24px;
+      color: #fbbf24;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .btn-submit {
+      width: 100%;
+      background: var(--primary, #7dd3fc);
+      color: #090d1a;
+      font-size: 15px;
+      font-weight: 700;
+      padding: 14px 24px;
+      border-radius: 12px;
+      border: none;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: all 0.2s ease;
+      box-shadow: 0 4px 18px rgba(125, 211, 252, 0.35);
+    }
+
+    .btn-submit:hover:not(:disabled) {
+      background: #bae6fd;
+      transform: translateY(-1px);
+      box-shadow: 0 6px 24px rgba(125, 211, 252, 0.5);
+    }
+
+    .btn-submit:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    /* 確認彈窗 */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      z-index: 100;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .modal-overlay.active {
+      display: flex;
+    }
+
+    .modal-box {
+      width: 100%;
+      max-width: 440px;
+      background: #0f172a;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 20px;
+      padding: 28px 24px;
+      text-align: center;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8);
+      animation: modalScaleIn 0.22s ease-out;
+    }
+
+    .modal-actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 24px;
+    }
+
+    .modal-btn {
+      flex: 1;
+      padding: 11px 18px;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      font-family: inherit;
+      transition: all 0.15s ease;
+    }
+
+    .modal-btn-cancel {
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      color: #ffffff;
+    }
+
+    .modal-btn-cancel:hover {
+      background: rgba(255, 255, 255, 0.15);
+    }
+
+    .modal-btn-confirm {
+      background: #f59e0b;
+      border: none;
+      color: #000;
+    }
+
+    .modal-btn-confirm:hover {
+      filter: brightness(1.1);
+    }
+
+    @keyframes modalScaleIn {
+      from { opacity: 0; transform: scale(0.95) translateY(12px); }
+      to { opacity: 1; transform: scale(1) translateY(0); }
+    }
+  </style>
+</head>
+<body>
+  <!-- 背景鮮活流體光暈 -->
+  <div class="fixed inset-0 overflow-hidden pointer-events-none -z-10">
+    <div class="absolute -top-32 left-1/4 w-96 h-96 bg-sky-500/12 rounded-full blur-3xl"></div>
+    <div class="absolute -bottom-32 right-1/4 w-96 h-96 bg-purple-500/12 rounded-full blur-3xl"></div>
+  </div>
+
+  <!-- 頂部精簡導航列 -->
+  <header class="w-full border-b border-white/10 bg-slate-900/60 backdrop-blur-xl z-20 py-3.5 px-6">
+    <div class="max-w-7xl mx-auto flex items-center justify-between">
+      <a href="/" class="flex items-center gap-2.5 text-white font-extrabold text-lg tracking-wide hover:opacity-90 transition-opacity">
+        <img src="/static/logo.png" alt="炙彗JI Logo" class="w-7 h-7 rounded-lg" onerror="this.src='/static/logo.png'" />
+        <span>炙彗JI</span>
+      </a>
+      <div class="flex items-center gap-3">
+        <a href="/" class="text-xs sm:text-sm font-semibold text-slate-300 hover:text-white transition-colors">返回首頁</a>
+        {% if user %}
+        <a href="/panel" class="text-xs sm:text-sm font-semibold text-sky-400 hover:text-sky-300 transition-colors">用戶中心</a>
+        {% else %}
+        <a href="/login?next=/support" class="text-xs sm:text-sm font-semibold text-sky-400 hover:text-sky-300 transition-colors">登入</a>
+        {% endif %}
+      </div>
+    </div>
+  </header>
+
+  <main class="support-wrapper">
+    <div class="support-card" id="card-form-container">
+      <div class="support-header">
+        <div class="support-badge">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
+            <path d="M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-7 12h-2v-2h2v2zm0-4h-2V6h2v4z"/>
+          </svg>
+          <span>Support & Requests</span>
+        </div>
+        <h1 class="support-title">服務支援與申請</h1>
+        <p class="support-subtitle">提交個人檔案頁面申請或問題回報，管理團隊將同步審核處理。</p>
+      </div>
+
+      {% if not user %}
+      <!-- 未登入提示區塊 -->
+      <div class="text-center py-8">
+        <div class="w-16 h-16 mx-auto mb-4 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400">
+          <svg viewBox="0 0 24 24" width="30" height="30" fill="currentColor">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z"/>
+          </svg>
+        </div>
+        <h3 class="text-lg font-bold text-white mb-2">需要登入 Discord 帳號</h3>
+        <p class="text-sm text-slate-300 max-w-sm mx-auto mb-6">
+          為了記錄您的申請者身分並在審核通過後自動發放權限，提交申請前請先登入 Discord。
+        </p>
+        <a href="/login?next=/support{% if initial_category %}?category={{ initial_category }}{% endif %}" class="btn-submit" style="max-width: 260px; margin: 0 auto;">
+          <span>使用 Discord 登入</span>
+        </a>
+      </div>
+
+      {% elif is_blocked %}
+      <!-- 帳號封鎖提示 -->
+      <div class="text-center py-8">
+        <div class="w-16 h-16 mx-auto mb-4 rounded-2xl bg-red-500/15 border border-red-500/30 flex items-center justify-center text-red-400">
+          <svg viewBox="0 0 24 24" width="30" height="30" fill="currentColor">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8 0-1.85.63-3.55 1.69-4.9L16.9 18.31C15.55 19.37 13.85 20 12 20zm6.31-3.1L7.1 5.69C8.45 4.63 10.15 4 12 4c4.42 0 8 3.58 8 8 0 1.85-.63 3.55-1.69 4.9z"/>
+          </svg>
+        </div>
+        <h3 class="text-lg font-bold text-white mb-2">帳號已被封鎖</h3>
+        <p class="text-sm text-slate-300 max-w-sm mx-auto mb-6">
+          您的帳號因違反服務條款或濫用服務已被系統管理員封鎖，無法提交支援單據。
+        </p>
+        <a href="/" class="btn-submit" style="max-width: 180px; margin: 0 auto; background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.15);">
+          <span>返回首頁</span>
+        </a>
+      </div>
+
+      {% else %}
+      <!-- 申請者身分標籤 -->
+      <div class="user-pill">
+        <img class="user-pill-avatar" src="{{ user.avatar_url or '/static/logo.png' }}" alt="{{ user.username }}" onerror="this.src='/static/logo.png'" />
+        <div class="user-pill-info">
+          <span class="user-pill-name">{{ user.global_name or user.username }} (@{{ user.username }})</span>
+          <span class="user-pill-id">Discord ID: {{ user.id }}</span>
+        </div>
+      </div>
+
+      <!-- 表單 -->
+      <form id="support-ticket-form">
+        <div class="form-group">
+          <label class="form-label" for="ticket-category">問題或申請分類</label>
+          <select class="form-select" id="ticket-category" required>
+            <option value="profile_request" {% if initial_category == 'profile' or initial_category == 'profile_request' or not initial_category %}selected{% endif %}>申請個人檔案 (30天限制申請一次)</option>
+            <option value="feature_request" {% if initial_category == 'feature' %}selected{% endif %}>功能建議與反饋</option>
+            <option value="bug_report" {% if initial_category == 'bug' %}selected{% endif %}>問題回報與異常</option>
+            <option value="other" {% if initial_category == 'other' %}selected{% endif %}>其他諮詢</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="ticket-reason" id="label-ticket-reason">申請理由與說明</label>
+          <textarea
+            class="form-textarea"
+            id="ticket-reason"
+            rows="5"
+            placeholder="請簡述您希望建立個人主頁的用途、預計展示的內容或社群連結..."
+            required
+            minlength="10"
+            maxlength="2000"
+          ></textarea>
+          <span class="form-hint" id="hint-ticket-reason">請詳細填寫理由，字數至少 10 字，上限 2000 字。個人檔案申請每 30 天僅能提交一次。</span>
+        </div>
+
+        <div class="alert-irrevocable">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" class="shrink-0 mt-0.5">
+            <path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/>
+          </svg>
+          <div>
+            <strong>送出提示：</strong>資料送出後<strong>不可收回或修改</strong>。個人檔案申請<strong>每 30 天限制申請一次</strong>。提交後將立即發送審核通知至機器人擁有者，請確認內容無誤再送出。
+          </div>
+        </div>
+
+        <button type="button" class="btn-submit" id="btn-open-confirm">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+            <line x1="22" y1="2" x2="11" y2="13"></line>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+          </svg>
+          <span>確認並送出申請</span>
+        </button>
+      </form>
+
+      <!-- 成功訊息卡片 (預設隱藏) -->
+      <div id="support-success-container" style="display: none;" class="text-center py-6">
+        <div class="w-16 h-16 mx-auto mb-4 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+          <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="20 6 9 17 4 12"></polyline>
+          </svg>
+        </div>
+        <h3 class="text-xl font-bold text-white mb-2">申請已成功提交！</h3>
+        <p class="text-sm text-slate-300 max-w-md mx-auto mb-6 leading-relaxed" id="success-message-text">
+          您的個人檔案申請已成功送出，並已同步通報 Bot Owner！請靜候管理團隊審核，審核通過後您即可在用戶中心直接進入個人主頁編輯器。
+        </p>
+        <div class="flex flex-col sm:flex-row gap-3 justify-center">
+          <a href="/panel" class="btn-submit" style="max-width: 180px;">前往用戶中心</a>
+          <a href="/" class="btn-submit" style="max-width: 180px; background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.15);">返回首頁</a>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+  </main>
+
+  <!-- 確認送出提示彈窗 -->
+  <div class="modal-overlay" id="modal-confirm-submit" aria-hidden="true">
+    <div class="modal-box">
+      <div class="w-12 h-12 mx-auto mb-3 rounded-xl bg-amber-500/15 text-amber-400 border border-amber-500/30 flex items-center justify-center">
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+        </svg>
+      </div>
+      <h3 class="text-lg font-bold text-white mb-2">確認送出申請？</h3>
+      <p class="text-sm text-slate-300 leading-relaxed mb-1">
+        請再次確認您的申請內容。<br />
+        <span class="text-amber-400 font-semibold">此申請送出後將不可收回或修改</span>，並將立即通報管理人員審核。
+      </p>
+      <div class="modal-actions">
+        <button type="button" class="modal-btn modal-btn-cancel" id="btn-cancel-submit">返回修改</button>
+        <button type="button" class="modal-btn modal-btn-confirm" id="btn-confirm-submit">確認送出</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      const categorySelect = document.getElementById('ticket-category');
+      const reasonLabel = document.getElementById('label-ticket-reason');
+      const reasonInput = document.getElementById('ticket-reason');
+      const reasonHint = document.getElementById('hint-ticket-reason');
+      const btnOpenConfirm = document.getElementById('btn-open-confirm');
+      const modalConfirm = document.getElementById('modal-confirm-submit');
+      const btnCancelSubmit = document.getElementById('btn-cancel-submit');
+      const btnConfirmSubmit = document.getElementById('btn-confirm-submit');
+      const formEl = document.getElementById('support-ticket-form');
+      const successContainer = document.getElementById('support-success-container');
+      const successMsgText = document.getElementById('success-message-text');
+
+      if (categorySelect) {
+        categorySelect.addEventListener('change', () => {
+          if (categorySelect.value === 'profile_request') {
+            if (reasonLabel) reasonLabel.textContent = '申請理由與說明';
+            if (reasonInput) reasonInput.placeholder = '請簡述您希望建立個人主頁的用途、預計展示的內容或社群連結...';
+            if (reasonHint) reasonHint.textContent = '請詳細填寫理由，字數至少 10 字，上限 2000 字。';
+          } else {
+            if (reasonLabel) reasonLabel.textContent = '詳細問題或建議內容';
+            if (reasonInput) reasonInput.placeholder = '請詳述您遭遇的問題、錯誤發生步驟或期望新增的功能...';
+            if (reasonHint) reasonHint.textContent = '請詳細說明，字數至少 10 字，上限 2000 字。';
+          }
+        });
+      }
+
+      if (btnOpenConfirm) {
+        btnOpenConfirm.addEventListener('click', () => {
+          const reason = reasonInput ? reasonInput.value.trim() : '';
+          if (!reason || reason.length < 10) {
+            alert('請至少填寫 10 個字元之說明理由！');
+            reasonInput?.focus();
+            return;
+          }
+          if (modalConfirm) modalConfirm.classList.add('active');
+        });
+      }
+
+      if (btnCancelSubmit) {
+        btnCancelSubmit.addEventListener('click', () => {
+          if (modalConfirm) modalConfirm.classList.remove('active');
+        });
+      }
+
+      if (btnConfirmSubmit) {
+        btnConfirmSubmit.addEventListener('click', async () => {
+          if (modalConfirm) modalConfirm.classList.remove('active');
+          if (btnOpenConfirm) {
+            btnOpenConfirm.disabled = true;
+            btnOpenConfirm.innerHTML = '<span>傳送中...</span>';
+          }
+
+          const category = categorySelect ? categorySelect.value : 'profile_request';
+          const reason = reasonInput ? reasonInput.value.trim() : '';
+
+          try {
+            const res = await fetch('/api/support/submit', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ category, reason }),
+            });
+            const data = await res.json();
+
+            if (data.success) {
+              if (formEl) formEl.style.display = 'none';
+              if (successContainer) successContainer.style.display = 'block';
+              if (successMsgText && data.message) successMsgText.textContent = data.message;
+            } else {
+              alert(data.error || '提交失敗，請稍後再試。');
+              if (btnOpenConfirm) {
+                btnOpenConfirm.disabled = false;
+                btnOpenConfirm.innerHTML = '<span>確認並送出申請</span>';
+              }
+            }
+          } catch (err) {
+            console.error(err);
+            alert('連線失敗，請檢查網路連線。');
+            if (btnOpenConfirm) {
+              btnOpenConfirm.disabled = false;
+              btnOpenConfirm.innerHTML = '<span>確認並送出申請</span>';
+            }
+          }
+        });
+      }
+    });
+  </script>
+</body>
+</html>
+

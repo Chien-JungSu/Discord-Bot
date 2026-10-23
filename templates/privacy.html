@@ -14,6 +14,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;600;700&display=swap" rel="stylesheet">
 
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.output.css') }}" />
   <link rel="stylesheet" href="{{ url_for('static', filename='css/common.css') }}" />
   <link rel="stylesheet" href="{{ url_for('static', filename='css/docs.css') }}" />
 </head>
@@ -66,6 +67,12 @@
               </div>
             </div>
             <div class="dropdown-divider"></div>
+            <a class="dropdown-item dropdown-profile-link" href="/profile">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
+              </svg>
+              <span>個人主頁</span>
+            </a>
             <a class="dropdown-item dropdown-panel-link" href="/panel">
               <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
                 <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>
@@ -159,6 +166,8 @@
               <li><strong>伺服器基本識別與設定資料</strong>：伺服器 ID（Guild ID）、頻道 ID（Channel ID）、身分組 ID（Role ID）、訊息 ID（Message ID），以及管理員自行設定的歡迎／離開訊息範本、專屬點歌頻道、表符身分組配對與關鍵字自動回覆規則。</li>
               <li><strong>經濟系統資料</strong>：使用者的 Discord User ID、虛擬金幣餘額、每日／每小時簽到時間戳記與連續簽到天數。</li>
               <li><strong>網頁控制面板登入資訊（OAuth2）</strong>：當您透過 Discord OAuth2 登入網頁控制面板時，系統會透過官方授權讀取您的基本公開檔案（User ID、顯示名稱、頭像）與所屬伺服器權限清單（<code>identify</code>、<code>guilds</code>），僅用於驗證您是否具備「管理伺服器」權限。</li>
+              <li><strong>個人檔案（Bento Grid Profile）自訂資料</strong>：當您使用個人檔案功能時，系統將儲存您所自訂之使用者代稱、個人簡介、頭像連結、版面佈局配置、社群連結磚及外觀主題設定。</li>
+              <li><strong>服務支援、回報單據與審核安全紀錄</strong>：當您提交問題回報或個人檔案申請時，系統將儲存單據內容、提交時間與處理狀態；為維護社群安全與防止惡意濫用，系統亦會記錄違規處置與黑名單封鎖資訊。</li>
             </ul>
           </li>
         </ul>

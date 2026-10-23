@@ -56,6 +56,16 @@ from cogs.database import (
     set_user_ai_points,
     update_economy_balance,
     update_user_ai_points,
+    get_all_profile_permissions,
+    grant_profile_permission,
+    revoke_profile_permission,
+    has_profile_permission,
+    get_support_tickets,
+    update_support_ticket_status,
+    is_user_blocked,
+    block_user,
+    unblock_user,
+    get_blocked_users,
 )
 from cogs.sanitize import redact_secrets
 
@@ -453,10 +463,13 @@ def control_panel():
         "&permissions=8&integration_type=0&scope=bot+applications.commands"
     )
 
+    can_edit_profile = has_profile_permission(user.get('id')) if user else False
+
     return render_template(
         'panel.html',
         user=user,
         is_owner=is_owner,
+        can_edit_profile=can_edit_profile,
         guilds=guilds,
         client_id=DISCORD_CLIENT_ID,
         invite_url=invite_url,
@@ -1660,4 +1673,146 @@ def owner_bot_defaults():
         'message': msg,
         'defaults': updated,
     })
+
+
+# ==============================================================================
+# 個人主頁授權與申請審核 API (僅 Bot Owner 可用)
+# ==============================================================================
+
+@panel_bp.route('/api/panel/owner/profile-permissions', methods=['GET'])
+def owner_profile_permissions_get():
+    """取得個人檔案授權名單與申請審核列表。"""
+    if not is_current_user_owner():
+        return jsonify({'status': 'error', 'message': '權限不足：僅 Bot 擁有者可操作'}), 403
+
+    perms = get_all_profile_permissions()
+    tickets = get_support_tickets(category='profile_request')
+    return jsonify({
+        'status': 'success',
+        'permissions': perms,
+        'applications': tickets,
+    })
+
+
+@panel_bp.route('/api/panel/owner/profile-permissions/grant', methods=['POST'])
+def owner_profile_permissions_grant():
+    """手動發放個人檔案編輯權限 (依 Discord User ID)。"""
+    if not is_current_user_owner():
+        return jsonify({'status': 'error', 'message': '權限不足：僅 Bot 擁有者可操作'}), 403
+
+    data = request.get_json() or {}
+    user_id = str(data.get('user_id', '')).strip()
+    note = str(data.get('note', '')).strip()
+
+    if not user_id or not user_id.isdigit() or len(user_id) < 17 or len(user_id) > 22:
+        return jsonify({'status': 'error', 'message': '無效的 Discord 使用者 ID (應為 17-22 位純數字)'}), 400
+
+    success = grant_profile_permission(user_id, granted_by='owner', note=note)
+    if success:
+        return jsonify({'status': 'success', 'message': f'已成功發放個人檔案編輯權限予 Discord ID: {user_id}'})
+    return jsonify({'status': 'error', 'message': '發放失敗，請檢查資料庫狀態'}), 500
+
+
+@panel_bp.route('/api/panel/owner/profile-permissions/revoke', methods=['POST'])
+def owner_profile_permissions_revoke():
+    """撤銷特定使用者之個人檔案編輯權限。"""
+    if not is_current_user_owner():
+        return jsonify({'status': 'error', 'message': '權限不足：僅 Bot 擁有者可操作'}), 403
+
+    data = request.get_json() or {}
+    user_id = str(data.get('user_id', '')).strip()
+
+    if not user_id:
+        return jsonify({'status': 'error', 'message': '缺少目標使用者 ID'}), 400
+
+    success = revoke_profile_permission(user_id)
+    if success:
+        return jsonify({'status': 'success', 'message': f'已成功撤銷 Discord ID: {user_id} 之編輯權限'})
+    return jsonify({'status': 'error', 'message': '撤銷失敗'}), 500
+
+
+@panel_bp.route('/api/panel/owner/profile-applications/action', methods=['POST'])
+def owner_profile_application_action():
+    """審核個人檔案申請單據 (快捷授權 或 拒絕)。"""
+    if not is_current_user_owner():
+        return jsonify({'status': 'error', 'message': '權限不足：僅 Bot 擁有者可操作'}), 403
+
+    data = request.get_json() or {}
+    ticket_id = data.get('ticket_id')
+    action = str(data.get('action', '')).strip().lower()
+    user_id = str(data.get('user_id', '')).strip()
+    note = str(data.get('note', '')).strip()
+
+    if not ticket_id or action not in ('authorize', 'reject'):
+        return jsonify({'status': 'error', 'message': '無效的審核參數'}), 400
+
+    if action == 'authorize':
+        if not user_id:
+            return jsonify({'status': 'error', 'message': '缺少目標使用者 ID'}), 400
+        # 1. 發放編輯權限
+        grant_profile_permission(user_id, granted_by='owner', note=note or f'單據 #{ticket_id} 審核通過')
+        # 2. 更新單據狀態
+        update_support_ticket_status(ticket_id, status='authorized', admin_note=note or '已授權開通')
+        return jsonify({'status': 'success', 'message': f'已成功快捷授權 Discord ID: {user_id}，單據狀態已更新為已授權！'})
+
+    elif action == 'reject':
+        update_support_ticket_status(ticket_id, status='rejected', admin_note=note or '未通過審核')
+        return jsonify({'status': 'success', 'message': f'已標記單據 #{ticket_id} 為拒絕'})
+
+
+# ==============================================================================
+# 使用者黑名單封鎖管理 API (僅 Bot Owner 可用)
+# ==============================================================================
+
+@panel_bp.route('/api/panel/owner/blocked-users', methods=['GET'])
+def owner_blocked_users_get():
+    """取得被封鎖的使用者黑名單。"""
+    if not is_current_user_owner():
+        return jsonify({'status': 'error', 'message': '權限不足：僅 Bot 擁有者可操作'}), 403
+
+    blocked = get_blocked_users()
+    return jsonify({
+        'status': 'success',
+        'blocked_users': blocked,
+    })
+
+
+@panel_bp.route('/api/panel/owner/blocked-users/add', methods=['POST'])
+def owner_blocked_users_add():
+    """手動將指定 Discord ID 列入封鎖黑名單。"""
+    if not is_current_user_owner():
+        return jsonify({'status': 'error', 'message': '權限不足：僅 Bot 擁有者可操作'}), 403
+
+    data = request.get_json() or {}
+    user_id = str(data.get('user_id', '')).strip()
+    reason = str(data.get('reason', '')).strip()
+
+    if not user_id or not user_id.isdigit() or len(user_id) < 17 or len(user_id) > 22:
+        return jsonify({'status': 'error', 'message': '無效的 Discord 使用者 ID (應為 17-22 位純數字)'}), 400
+
+    owner_user = session.get('user', {})
+    blocked_by = str(owner_user.get('username') or 'owner')
+
+    success = block_user(user_id, reason=reason, blocked_by=blocked_by)
+    if success:
+        return jsonify({'status': 'success', 'message': f'已成功將 Discord ID: {user_id} 列入封鎖黑名單！'})
+    return jsonify({'status': 'error', 'message': '封鎖失敗，請檢查資料庫狀態'}), 500
+
+
+@panel_bp.route('/api/panel/owner/blocked-users/remove', methods=['POST'])
+def owner_blocked_users_remove():
+    """將特定使用者移出封鎖黑名單。"""
+    if not is_current_user_owner():
+        return jsonify({'status': 'error', 'message': '權限不足：僅 Bot 擁有者可操作'}), 403
+
+    data = request.get_json() or {}
+    user_id = str(data.get('user_id', '')).strip()
+
+    if not user_id:
+        return jsonify({'status': 'error', 'message': '缺少目標使用者 ID'}), 400
+
+    success = unblock_user(user_id)
+    if success:
+        return jsonify({'status': 'success', 'message': f'已成功解除 Discord ID: {user_id} 之封鎖'})
+    return jsonify({'status': 'error', 'message': '解除封鎖失敗'}), 500
 
