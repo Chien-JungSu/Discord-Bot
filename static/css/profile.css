@@ -3405,13 +3405,57 @@ body.is-editing #action-btn-tour,
     border-radius: 9999px;
     white-space: nowrap;
   }
+
+  /* 手機版個人名片依指定順序排版：1. 顯示名稱 -> 2. @username -> 3. 自介 -> 4. 標籤 */
+  .widget-profile-header .header-main-row {
+    align-items: flex-start !important;
+    gap: 14px !important;
+  }
+
+  .widget-profile-header .header-info {
+    display: flex !important;
+    flex-direction: column !important;
+  }
+
+  .widget-profile-header .header-title-row {
+    display: contents !important;
+  }
+
+  .widget-profile-header .header-name {
+    order: 1 !important;
+    font-size: 1.45rem !important;
+    line-height: 1.25 !important;
+    margin-bottom: 2px !important;
+  }
+
+  .widget-profile-header .header-username {
+    order: 2 !important;
+    font-size: 13.5px !important;
+    line-height: 1.3 !important;
+    margin-bottom: 6px !important;
+  }
+
+  .widget-profile-header .header-bio {
+    order: 3 !important;
+    font-size: 14px !important;
+    line-height: 1.5 !important;
+    margin-bottom: 10px !important;
+  }
+
+  .widget-profile-header .header-hashtags-list {
+    order: 4 !important;
+    display: flex !important;
+    flex-wrap: wrap !important;
+    gap: 5px !important;
+    margin-top: 2px !important;
+  }
 }
 
 @media (max-width: 480px) {
   .header-main-row {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 12px;
+    flex-direction: row !important;
+    align-items: flex-start !important;
+    gap: 12px !important;
   }
 
   .header-avatar-img {
