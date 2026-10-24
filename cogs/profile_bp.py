@@ -1,11 +1,16 @@
 import asyncio
 import datetime
+import ipaddress
 import json
 import os
+import re
+import urllib.parse
 from typing import Any, Dict, List, Optional, Tuple
 
+import requests
 from flask import (
     Blueprint,
+    Response,
     abort,
     current_app,
     jsonify,
@@ -15,6 +20,7 @@ from flask import (
     session,
 )
 
+import cogs.database as _db_mod
 from cogs.database import (
     get_profile_economy_data,
     get_user_profile_by_username,
@@ -185,7 +191,16 @@ def send_support_dm_to_owner(
                 f"━━━━━━━━━━━━━━━━━━━\n"
                 f"-# 💡 提示：前往網頁管理員設定（Bot Owner 後台）可查看申請詳情並點擊「快捷授權」完成審核！"
             )
-            await owner.send(dm_text)
+            import discord
+            from cogs.database import get_panel_url
+
+            view = discord.ui.View(timeout=None)
+            view.add_item(discord.ui.Button(
+                label="🌐 前往管理員後台審核",
+                style=discord.ButtonStyle.link,
+                url=get_panel_url(owner=True),
+            ))
+            await owner.send(dm_text, view=view)
             print(f"[INFO] 已成功發送單據 #{ticket_id} 之通報至 Bot Owner DM。")
         except Exception as exc:
             print(f"[WARN] 發送 Owner DM 失敗: {exc}")
@@ -264,6 +279,63 @@ def profile_view(username: str):
             # 使用者無編輯權限且不存在於資料庫中，自動轉向到無此頁面的畫面 (404)
             return render_template('profile_404.html', username=clean_username, user=logged_user), 404
 
+    # 1.5 自動將 Discord 最新頭像與全域名稱同步至個人檔案與名片（包含本人登入與訪客瀏覽狀態）
+    try:
+        bot = current_app.config.get('BOT')
+    except Exception:
+        bot = None
+
+    latest_avatar = None
+    latest_display = None
+
+    if logged_user and (logged_uname == clean_username or logged_user_id == str(profile.get('user_id', ''))):
+        latest_avatar = logged_user.get('avatar_url')
+        latest_display = logged_user.get('global_name') or logged_user.get('username')
+
+    if (not latest_avatar or latest_avatar == '/static/logo.png') and bot:
+        raw_uid = str(profile.get('user_id', '')).strip()
+        if raw_uid.isdigit():
+            try:
+                d_user = bot.get_user(int(raw_uid))
+                if d_user is None and getattr(bot, 'loop', None) and bot.loop.is_running():
+                    fut = asyncio.run_coroutine_threadsafe(bot.fetch_user(int(raw_uid)), bot.loop)
+                    d_user = fut.result(timeout=2.5)
+                if d_user:
+                    if getattr(d_user, 'display_avatar', None):
+                        latest_avatar = str(d_user.display_avatar.url)
+                    if not latest_display:
+                        latest_display = getattr(d_user, 'global_name', None) or getattr(d_user, 'name', None)
+            except Exception:
+                pass
+
+    if latest_avatar and latest_avatar != '/static/logo.png':
+        needs_sync = False
+        if profile.get('avatar_url') != latest_avatar:
+            profile['avatar_url'] = latest_avatar
+            needs_sync = True
+
+        widgets = profile.get('layout_widgets') or []
+        for w in widgets:
+            if w.get('type') == 'profile_header' or w.get('id') == 'header':
+                w_content = w.setdefault('content', {})
+                if w_content.get('avatar_url') != latest_avatar:
+                    w_content['avatar_url'] = latest_avatar
+                    needs_sync = True
+                if latest_display and (not w_content.get('display_name') or w_content.get('display_name') == clean_username):
+                    w_content['display_name'] = latest_display
+                    needs_sync = True
+
+        if needs_sync:
+            upsert_user_profile(
+                user_id=profile['user_id'],
+                username=profile['username'],
+                display_name=profile.get('display_name') or latest_display,
+                avatar_url=profile.get('avatar_url') or latest_avatar,
+                bio=profile.get('bio', ''),
+                theme_config=profile.get('theme_config', {}),
+                layout_widgets=widgets,
+            )
+
     # 2. 判定當前瀏覽者權限 (is_owner)
     current_user, is_owner = get_current_profile_user(
         target_username=clean_username,
@@ -277,8 +349,17 @@ def profile_view(username: str):
         if not has_profile_permission(uid):
             is_owner = False
 
-    # 3. 取得機器人連動之經濟數據
-    economy_data = get_profile_economy_data(profile.get('user_id'))
+    # 3. 取得機器人連動之經濟數據（傳入 Bot Owner ID 確保擁有者顯示不參與排行且不影響他人名次）
+    try:
+        bot = current_app.config.get('BOT')
+    except Exception:
+        bot = None
+    bot_owner_id = os.getenv('DISCORD_OWNER_ID') or os.getenv('OWNER_ID')
+    if not bot_owner_id and bot and getattr(bot, 'owner_id', None):
+        bot_owner_id = bot.owner_id
+    economy_data = _db_mod.get_profile_economy_data(profile.get('user_id'), owner_id=bot_owner_id)
+    if str(profile.get('user_id', '')).strip() in ('941935836189065236', '1477930950288478262', 'dev_user_patricksu', 'dev_user_chienjungsu') or clean_username in ('chienjungsu', 'patricksu'):
+        economy_data['gold_rank'] = '不參與排行'
 
     # 4. 組裝標準公開 URL (Canonical URL，去除 ?role= 測試參數)
     host_url = request.host_url.rstrip('/')
@@ -286,6 +367,14 @@ def profile_view(username: str):
 
     # 當前視角模式（供狀態顯示）
     current_role_view = "owner" if is_owner else "visitor"
+
+    # 5. 紀錄與查詢個人檔案瀏覽次數 (CSV + SQLite 持久化，支援純 SVG 視覺作圖)
+    view_session_key = f"viewed_profile_{clean_username}"
+    should_increment = not session.get(view_session_key)
+    if should_increment:
+        session[view_session_key] = True
+
+    view_stats = _db_mod.record_profile_view(clean_username, increment=should_increment)
 
     return render_template(
         'profile.html',
@@ -295,6 +384,7 @@ def profile_view(username: str):
         dev_mode=PROFILE_DEV_MODE,
         current_role=current_role_view,
         canonical_url=canonical_url,
+        view_stats=view_stats,
     )
 
 
@@ -382,6 +472,90 @@ def submit_support_ticket():
         "ticket_id": ticket_id,
         "message": success_msg,
     })
+
+
+@profile_bp.route('/api/profile/image-proxy')
+def profile_image_proxy():
+    """安全圖片代理端點：解決第三方圖床熱鏈保護 (Hotlink Protection)、Referer 限制與 CORS 阻擋問題。"""
+    raw_url = request.args.get('url', '').strip()
+    if not raw_url:
+        return jsonify({"error": "缺少 url 參數"}), 400
+
+    parsed = urllib.parse.urlparse(raw_url)
+    if parsed.scheme not in ('http', 'https') or not parsed.netloc:
+        return jsonify({"error": "不合法的網址通訊協定"}), 400
+
+    # 安全檢查：防範 SSRF (阻擋私人/本機 IP 如 127.0.0.1, localhost, 10.x, 192.168.x)
+    hostname = (parsed.hostname or '').lower()
+    if hostname in ('localhost', '127.0.0.1', '::1', '0.0.0.0'):
+        return jsonify({"error": "不允許存取內部網路網址"}), 403
+    try:
+        ip = ipaddress.ip_address(hostname)
+        if ip.is_private or ip.is_loopback:
+            return jsonify({"error": "不允許存取內部網路網址"}), 403
+    except ValueError:
+        pass  # 不是 IP 格式，為一般網域名稱
+
+    # 針對常見圖床做 URL 優化 (如 Google Drive)
+    clean_url = raw_url
+    if 'drive.google.com' in parsed.netloc:
+        match = re.search(r'/file/d/([a-zA-Z0-9_-]+)', clean_url) or re.search(r'id=([a-zA-Z0-9_-]+)', clean_url)
+        if match:
+            clean_url = f"https://drive.google.com/thumbnail?id={match.group(1)}&sz=w1920"
+
+    # 特殊字元與空格安全編碼
+    fetch_url = urllib.parse.quote(clean_url, safe=':/?#[]@!$&\'()*+,;=')
+
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+    }
+    origin_referer = f"{parsed.scheme}://{parsed.netloc}/"
+    headers['Referer'] = origin_referer
+
+    try:
+        try:
+            resp = requests.get(fetch_url, headers=headers, timeout=10, stream=True)
+        except requests.exceptions.SSLError:
+            resp = requests.get(fetch_url, headers=headers, timeout=10, stream=True, verify=False)
+
+        # 若該網域阻擋同源 Referer (例如 imgur)，嘗試無 Referer 重試
+        if resp.status_code in (401, 403):
+            headers.pop('Referer', None)
+            try:
+                resp = requests.get(fetch_url, headers=headers, timeout=10, stream=True)
+            except requests.exceptions.SSLError:
+                resp = requests.get(fetch_url, headers=headers, timeout=10, stream=True, verify=False)
+
+        if resp.status_code != 200:
+            return jsonify({"error": f"遠端圖片伺服器回應狀態碼 {resp.status_code}"}), resp.status_code
+
+        raw_ct = resp.headers.get('Content-Type', '').split(';')[0].strip().lower()
+        if raw_ct.startswith('image/'):
+            content_type = raw_ct
+        else:
+            ext = os.path.splitext(parsed.path)[1].lower()
+            if ext == '.webp':
+                content_type = 'image/webp'
+            elif ext in ('.png', '.apng'):
+                content_type = 'image/png'
+            elif ext in ('.jpg', '.jpeg'):
+                content_type = 'image/jpeg'
+            elif ext == '.gif':
+                content_type = 'image/gif'
+            elif ext == '.svg':
+                content_type = 'image/svg+xml'
+            elif ext == '.avif':
+                content_type = 'image/avif'
+            else:
+                content_type = 'image/jpeg'
+
+        response = Response(resp.iter_content(chunk_size=16384), content_type=content_type)
+        response.headers['Cache-Control'] = 'public, max-age=86400, stale-while-revalidate=604800'
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        return response
+    except Exception as exc:
+        return jsonify({"error": f"圖片代理擷取失敗: {str(exc)}"}), 502
 
 
 @profile_bp.route('/api/profile/save', methods=['POST'])
@@ -576,6 +750,17 @@ def save_profile():
     display_name = sanitize_text(data.get('display_name', profile.get('display_name', '')), max_len=50)
     bio = sanitize_text(data.get('bio', profile.get('bio', '')), max_len=300)
     avatar_url = sanitize_text(data.get('avatar_url', profile.get('avatar_url', '')), max_len=500)
+    # 若前端未指定特別頭像或傳入預設 logo，優先保留使用者的 Discord 真實頭像
+    user_avatar = current_user.get('avatar_url') if current_user else None
+    if (not avatar_url or avatar_url == '/static/logo.png') and user_avatar and user_avatar != '/static/logo.png':
+        avatar_url = user_avatar
+
+    # 同步確保 profile_header 卡片 content 中的 avatar_url 也是真實頭像
+    for w in cleaned_widgets:
+        if w.get('type') == 'profile_header' or w.get('id') == 'header':
+            w_c = w.setdefault('content', {})
+            if (not w_c.get('avatar_url') or w_c.get('avatar_url') == '/static/logo.png') and avatar_url:
+                w_c['avatar_url'] = avatar_url
     if avatar_url and not is_safe_url(avatar_url):
         return jsonify({"success": False, "error": "頭像網址必須以 http:// 或 https:// 開頭"}), 400
 

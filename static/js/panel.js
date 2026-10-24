@@ -2252,7 +2252,7 @@
             <div style="font-size: 0.75rem; color: #64748b; font-family: monospace;">${escapeHtml(cog.module)}</div>
           </div>
           <button class="btn secondary btn-reload-single" data-mod="${cog.module}" style="padding: 6px 14px; font-size: 0.82rem;" type="button">
-            <span>🔄 重載</span>
+            <span>重載</span>
           </button>
         `;
         cogsGridList.appendChild(card);
@@ -2384,11 +2384,11 @@
 
       let badgeHtml = '';
       if (g.is_owner_guild) {
-        badgeHtml = '<span class="owner-ai-badge owner">👑 擁有者伺服器 (預設開通)</span>';
+        badgeHtml = '<span class="owner-ai-badge owner">擁有者伺服器 (預設開通)</span>';
       } else if (g.is_authorized) {
-        badgeHtml = '<span class="owner-ai-badge authorized">🟢 已開通封測授權</span>';
+        badgeHtml = '<span class="owner-ai-badge authorized">已開通封測授權</span>';
       } else {
-        badgeHtml = '<span class="owner-ai-badge unauthorized">⚪ 未授權</span>';
+        badgeHtml = '<span class="owner-ai-badge unauthorized">未授權</span>';
       }
 
       let actionHtml = '';
@@ -2397,13 +2397,13 @@
       } else if (g.is_authorized) {
         actionHtml = `
           <button type="button" class="btn-ai-auth btn-revoke" data-gid="${escapeHtml(g.id)}" data-gname="${escapeHtml(g.name)}">
-            <span>🚫 撤銷授權</span>
+            <span>撤銷授權</span>
           </button>
         `;
       } else {
         actionHtml = `
           <button type="button" class="btn-ai-auth btn-grant" data-gid="${escapeHtml(g.id)}" data-gname="${escapeHtml(g.name)}">
-            <span>✨ 發放授權</span>
+            <span>發放授權</span>
           </button>
         `;
       }
@@ -2439,7 +2439,7 @@
         const gid = btn.getAttribute('data-gid');
         const gname = btn.getAttribute('data-gname');
         showConfirmModal({
-          title: '✨ 確認發放 AI 封測授權',
+          title: '確認發放 AI 封測授權',
           message: `確定要為伺服器「${gname}」(${gid}) 開通 AI 智慧助手封測使用權限嗎？開通後該伺服器成員將可使用 /ai 指令與 @機器人 對話。`,
           confirmText: '確認開通',
           cancelText: '取消',
@@ -2454,7 +2454,7 @@
         const gid = btn.getAttribute('data-gid');
         const gname = btn.getAttribute('data-gname');
         showConfirmModal({
-          title: '⚠️ 確認撤銷 AI 封測授權',
+          title: '確認撤銷 AI 封測授權',
           message: `確定要撤銷伺服器「${gname}」(${gid}) 的 AI 封測使用權限嗎？撤銷後該伺服器將無法再使用 AI 相關功能。`,
           confirmText: '確認撤銷',
           cancelText: '取消',
@@ -2550,10 +2550,10 @@
 
     if (applyToAll && btnApply) {
       btnApply.disabled = true;
-      btnApply.innerHTML = '<span>⚡ 套用中...</span>';
+      btnApply.innerHTML = '<span>套用中...</span>';
     } else if (!applyToAll && btnSave) {
       btnSave.disabled = true;
-      btnSave.innerHTML = '<span>⏳ 儲存中...</span>';
+      btnSave.innerHTML = '<span>儲存中...</span>';
     }
 
     const payload = {
@@ -2578,13 +2578,13 @@
         showToast(data.message || '機器人全域預設設定已成功儲存！', 'success');
 
         if (applyToAll && btnApply) {
-          btnApply.innerHTML = '<span>✅ 已套用至所有伺服器！</span>';
+          btnApply.innerHTML = '<span>已套用至所有伺服器！</span>';
           setTimeout(() => {
             btnApply.innerHTML = origApplyHtml;
             btnApply.disabled = false;
           }, 2000);
         } else if (btnSave) {
-          btnSave.innerHTML = '<span>✅ 儲存成功！</span>';
+          btnSave.innerHTML = '<span>儲存成功！</span>';
           setTimeout(() => {
             btnSave.innerHTML = origSaveHtml;
             btnSave.disabled = false;
@@ -2629,7 +2629,7 @@
   if (btnApplyDefaultsAll) {
     btnApplyDefaultsAll.addEventListener('click', () => {
       showConfirmModal({
-        title: '⚡ 確認一鍵套用至所有伺服器',
+        title: '確認一鍵套用至所有伺服器',
         message: '確定要將此預設設定強制覆蓋套用至機器人已加入的所有伺服器嗎？\n此動作將立即更新所有伺服器的 AI 啟用狀態、模型與人設提示詞。',
         confirmText: '確認同步套用',
         cancelText: '取消',
@@ -2699,7 +2699,7 @@
     } catch (err) {
       console.error(err);
       if (tbodyPerms) tbodyPerms.innerHTML = '<tr><td colspan="5" style="text-align:center; color:#f87171;">連線錯誤，無法載入名單</td></tr>';
-      if (tbodyApps) tbodyApps.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#f87171;">連線錯誤，無法載入申請</td></tr>';
+      if (tbodyApps) tbodyApps.innerHTML = '<tr><td colspan="5" style="text-align:center; color:#f87171;">連線錯誤，無法載入申請</td></tr>';
     }
   }
 
@@ -2715,7 +2715,7 @@
     tbody.innerHTML = permissions.map((p) => {
       const visitBtnHtml = p.username ? `
         <a href="/profile/@${escapeHtml(p.username)}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-visit-profile" style="display: inline-flex; align-items: center; gap: 4px; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.35); color: #38bdf8; border-radius: 6px; padding: 4px 10px; font-size: 12px; text-decoration: none; font-weight: 600; margin-right: 6px;">
-          <span>🔗 一鍵造訪主頁</span>
+          <span>造訪主頁</span>
         </a>
       ` : `
         <span style="font-size: 11.5px; color: var(--muted); margin-right: 6px;">(尚未建立)</span>
@@ -2737,7 +2737,7 @@
               撤銷權限
             </button>
             <button type="button" class="btn btn-sm btn-block-user" data-uid="${escapeHtml(p.user_id)}" data-name="${escapeHtml(p.username || p.user_id)}" style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.25); color: #f87171; border-radius: 6px; padding: 4px 8px; font-size: 12px; cursor: pointer; margin-left: 6px;">
-              🚫 封鎖
+              封鎖
             </button>
           </td>
         </tr>
@@ -2776,57 +2776,75 @@
     });
   }
 
+  function openAppReasonModal(user, reason) {
+    const modal = document.getElementById('modal-view-app-reason');
+    const userEl = document.getElementById('modal-view-app-user');
+    const textEl = document.getElementById('modal-view-app-reason-text');
+    if (!modal) return;
+    if (userEl) userEl.textContent = user || '未知使用者';
+    if (textEl) textEl.textContent = reason || '(無理由說明)';
+    modal.style.display = 'flex';
+    modal.setAttribute('aria-hidden', 'false');
+  }
+
+  function closeAppReasonModal() {
+    const modal = document.getElementById('modal-view-app-reason');
+    if (!modal) return;
+    modal.style.display = 'none';
+    modal.setAttribute('aria-hidden', 'true');
+  }
+
   function renderProfileApplicationsTable(applications) {
     const tbody = document.getElementById('tbody-profile-applications');
     if (!tbody) return;
 
     if (!applications || applications.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color: var(--muted); padding: 18px;">目前沒有任何個人檔案申請單據。</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color: var(--muted); padding: 18px;">目前沒有任何個人檔案申請單據。</td></tr>';
       return;
     }
 
     tbody.innerHTML = applications.map((app) => {
       let statusBadge = '';
       if (app.status === 'authorized') {
-        statusBadge = '<span style="color: #34d399; background: rgba(52, 211, 153, 0.15); border: 1px solid rgba(52, 211, 153, 0.3); padding: 2px 8px; border-radius: 6px; font-size: 11.5px; font-weight: 700;">🟢 已授權</span>';
+        statusBadge = '<span style="color: #34d399; background: rgba(52, 211, 153, 0.15); border: 1px solid rgba(52, 211, 153, 0.3); padding: 3px 8px; border-radius: 6px; font-size: 11.5px; font-weight: 600; white-space: nowrap;">已授權</span>';
       } else if (app.status === 'rejected') {
-        statusBadge = '<span style="color: #f87171; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.3); padding: 2px 8px; border-radius: 6px; font-size: 11.5px; font-weight: 700;">🔴 已拒絕</span>';
+        statusBadge = '<span style="color: #f87171; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.3); padding: 3px 8px; border-radius: 6px; font-size: 11.5px; font-weight: 600; white-space: nowrap;">已拒絕</span>';
       } else {
-        statusBadge = '<span style="color: #fbbf24; background: rgba(245, 158, 11, 0.15); border: 1px solid rgba(245, 158, 11, 0.3); padding: 2px 8px; border-radius: 6px; font-size: 11.5px; font-weight: 700;">🟡 待審核</span>';
+        statusBadge = '<span style="color: #fbbf24; background: rgba(245, 158, 11, 0.15); border: 1px solid rgba(245, 158, 11, 0.3); padding: 3px 8px; border-radius: 6px; font-size: 11.5px; font-weight: 600; white-space: nowrap;">待審核</span>';
       }
 
       let actionsHtml = '';
       if (app.status === 'authorized') {
         actionsHtml = `
-          <div style="display: flex; gap: 6px; justify-content: flex-end; align-items: center;">
-            <a href="/profile/@${escapeHtml(app.username)}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-visit-profile" style="display: inline-flex; align-items: center; gap: 4px; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.35); color: #38bdf8; border-radius: 6px; padding: 4px 8px; font-size: 12px; text-decoration: none; font-weight: 600;">
-              🔗 造訪主頁
+          <div style="display: flex; gap: 6px; justify-content: flex-end; align-items: center; white-space: nowrap;">
+            <a href="/profile/@${escapeHtml(app.username)}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-visit-profile" style="display: inline-flex; align-items: center; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.35); color: #38bdf8; border-radius: 6px; padding: 4px 10px; font-size: 12px; text-decoration: none; font-weight: 600;">
+              造訪主頁
             </a>
-            <button type="button" class="btn btn-sm btn-block-user" data-uid="${escapeHtml(app.user_id)}" data-name="${escapeHtml(app.username)}" style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.25); color: #f87171; border-radius: 6px; padding: 4px 8px; font-size: 12px; cursor: pointer;">
-              🚫 封鎖
+            <button type="button" class="btn btn-sm btn-block-user" data-uid="${escapeHtml(app.user_id)}" data-name="${escapeHtml(app.username)}" style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.25); color: #f87171; border-radius: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer;">
+              封鎖
             </button>
           </div>
         `;
       } else if (app.status === 'rejected') {
         actionsHtml = `
-          <div style="display: flex; gap: 6px; justify-content: flex-end; align-items: center;">
+          <div style="display: flex; gap: 6px; justify-content: flex-end; align-items: center; white-space: nowrap;">
             <span style="font-size: 12px; color: #f87171; margin-right: 4px;">已拒絕</span>
-            <button type="button" class="btn btn-sm btn-block-user" data-uid="${escapeHtml(app.user_id)}" data-name="${escapeHtml(app.username)}" style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.25); color: #f87171; border-radius: 6px; padding: 4px 8px; font-size: 12px; cursor: pointer;">
-              🚫 封鎖
+            <button type="button" class="btn btn-sm btn-block-user" data-uid="${escapeHtml(app.user_id)}" data-name="${escapeHtml(app.username)}" style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.25); color: #f87171; border-radius: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer;">
+              封鎖
             </button>
           </div>
         `;
       } else {
         actionsHtml = `
-          <div style="display: flex; gap: 6px; justify-content: flex-end; align-items: center;">
-            <button type="button" class="btn-quick-authorize" data-tid="${app.id}" data-uid="${escapeHtml(app.user_id)}" style="background: rgba(52, 211, 153, 0.18); border: 1px solid #34d399; color: #34d399; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 700; cursor: pointer;">
-              ⚡ 快捷授權
+          <div style="display: flex; gap: 6px; justify-content: flex-end; align-items: center; white-space: nowrap;">
+            <button type="button" class="btn-quick-authorize" data-tid="${app.id}" data-uid="${escapeHtml(app.user_id)}" style="background: rgba(52, 211, 153, 0.18); border: 1px solid #34d399; color: #34d399; padding: 4px 12px; border-radius: 6px; font-size: 12px; font-weight: 700; cursor: pointer; transition: all 0.2s ease;">
+              快捷授權
             </button>
-            <button type="button" class="btn-reject-app" data-tid="${app.id}" style="background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.15); color: var(--muted); padding: 4px 8px; border-radius: 6px; font-size: 12px; cursor: pointer;">
+            <button type="button" class="btn-reject-app" data-tid="${app.id}" style="background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.15); color: var(--muted); padding: 4px 10px; border-radius: 6px; font-size: 12px; cursor: pointer;">
               拒絕
             </button>
-            <button type="button" class="btn btn-sm btn-block-user" data-uid="${escapeHtml(app.user_id)}" data-name="${escapeHtml(app.username)}" style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.25); color: #f87171; border-radius: 6px; padding: 4px 8px; font-size: 12px; cursor: pointer;">
-              🚫 封鎖
+            <button type="button" class="btn btn-sm btn-block-user" data-uid="${escapeHtml(app.user_id)}" data-name="${escapeHtml(app.username)}" style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.25); color: #f87171; border-radius: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer;">
+              封鎖
             </button>
           </div>
         `;
@@ -2835,21 +2853,31 @@
       return `
         <tr>
           <td>
-            <div style="font-weight: 700; color: #ffffff;">${escapeHtml(app.display_name)}</div>
-            <div style="font-size: 11.5px; color: var(--muted);">@${escapeHtml(app.username)}</div>
+            <div style="font-weight: 700; color: #ffffff; line-height: 1.3;">${escapeHtml(app.display_name)}</div>
+            <div style="font-size: 11.5px; color: var(--muted); margin-top: 1px;">@${escapeHtml(app.username)}</div>
+            <div style="margin-top: 4px;">
+              <code style="font-size: 11px; color: #7dd3fc; background: rgba(125, 211, 252, 0.08); padding: 1px 6px; border-radius: 4px; font-family: monospace;">${escapeHtml(app.user_id)}</code>
+            </div>
           </td>
-          <td>
-            <code style="font-size: 12px; color: #7dd3fc; background: rgba(125, 211, 252, 0.08); padding: 2px 6px; border-radius: 4px;">${escapeHtml(app.user_id)}</code>
-          </td>
-          <td style="max-width: 240px; font-size: 13px; color: #e2e8f0; line-height: 1.4; word-break: break-all;">
-            ${escapeHtml(app.reason)}
+          <td style="text-align: center; white-space: nowrap;">
+            <button type="button" class="btn-view-app-reason" data-user="${escapeHtml(app.display_name)} (@${escapeHtml(app.username)})" data-reason="${escapeHtml(app.reason)}" style="background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.16); color: var(--text); padding: 4px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; transition: all 0.2s ease;">
+              查看
+            </button>
           </td>
           <td style="font-size: 11.5px; color: var(--muted); white-space: nowrap;">${escapeHtml(app.created_at)}</td>
-          <td>${statusBadge}</td>
+          <td style="text-align: center; white-space: nowrap;">${statusBadge}</td>
           <td style="text-align: right; white-space: nowrap;">${actionsHtml}</td>
         </tr>
       `;
     }).join('');
+
+    tbody.querySelectorAll('.btn-view-app-reason').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const user = btn.getAttribute('data-user') || '';
+        const reason = btn.getAttribute('data-reason') || '';
+        openAppReasonModal(user, reason);
+      });
+    });
 
     tbody.querySelectorAll('.btn-quick-authorize').forEach((btn) => {
       btn.addEventListener('click', async () => {
@@ -2908,6 +2936,7 @@
       });
     });
   }
+
 
   // ============================================================================
   // 7. 使用者封鎖黑名單管理
@@ -3100,6 +3129,18 @@
     btnRefreshApps.addEventListener('click', () => {
       loadOwnerProfileAuthData();
       showToast('已更新申請單據列表', 'info');
+    });
+  }
+
+  // 查看申請理由 Modal 關閉按鈕監聽
+  const btnCloseAppReason = document.getElementById('modal-view-app-reason-close');
+  const btnOkAppReason = document.getElementById('modal-view-app-reason-ok');
+  const modalAppReason = document.getElementById('modal-view-app-reason');
+  if (btnCloseAppReason) btnCloseAppReason.addEventListener('click', closeAppReasonModal);
+  if (btnOkAppReason) btnOkAppReason.addEventListener('click', closeAppReasonModal);
+  if (modalAppReason) {
+    modalAppReason.addEventListener('click', (e) => {
+      if (e.target === modalAppReason) closeAppReasonModal();
     });
   }
 

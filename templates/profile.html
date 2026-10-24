@@ -8,7 +8,7 @@
 
   <!-- OpenGraph Meta Tags (Discord 預覽卡片最佳化) -->
   <meta property="og:type" content="profile" />
-  <meta property="og:title" content="{{ profile.display_name }} (@{{ profile.username }}) - 炙彗JI 個人主頁" />
+  <meta property="og:title" content="{{ profile.display_name }} (@{{ profile.username }}) - 個人主頁" />
   <meta property="og:description" content="{{ profile.bio or '查看我的炙彗JI機器人專屬 Bento Grid 個人名片與社群連動！' }}" />
   <meta property="og:image" content="{{ profile.avatar_url if profile.avatar_url.startswith('http') else url_for('static', filename='logo.png', _external=True) }}" />
   <meta property="og:url" content="{{ canonical_url }}" />
@@ -27,7 +27,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack-extra.min.css" />
 
   <!-- Profile 專屬 Liquid Glass Bento Grid 樣式 -->
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/profile.css', v='20261021_v1') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/profile.css', v='20261024_v15') }}" />
 </head>
 
 <body>
@@ -189,6 +189,20 @@
       <!-- 卡片內容將由 JavaScript 動態渲染並支援點擊文字直接修改 -->
     </div>
   </main>
+
+  <!-- 個人檔案瀏覽次數視覺 Footer (僅眼睛圖標與數字) -->
+  <div class="profile-views-footer" id="profile-views-footer">
+    <svg class="views-eye-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+      <circle cx="12" cy="12" r="3"></circle>
+    </svg>
+    <span class="views-count-num">{{ "{:,}".format(view_stats.total_views | default(1)) }}</span>
+  </div>
+
+  <!-- 著作權 footer (與首頁一致) -->
+  <div class="footer" id="profile-footer">
+      <span class="footer-line">© 2026 炙彗JI器人</span>
+  </div>
 
   <!-- 4. 底部懸浮純文字編輯工具欄 (僅當 is_owner == True 時輸出) -->
   {% if is_owner %}
@@ -392,7 +406,7 @@
         <div class="form-group">
           <label class="form-label">Discord 快速推廣文案</label>
           <div class="input-with-btn">
-            <input type="text" class="form-input" id="share-promo-input" readonly value="來看看我的炙彗JI專屬個人檔案：{{ canonical_url }}" />
+            <input type="text" class="form-input" id="share-promo-input" readonly value="來看看我的專屬個人檔案：{{ canonical_url }}" />
             <button type="button" class="btn-inline-action" id="btn-share-copy-promo">複製文案</button>
           </div>
         </div>
@@ -456,6 +470,14 @@
   <div class="toast-container" id="toast-container" aria-live="polite"></div>
 
   <!-- 數據島 Data Island (純標準 JSON 容器，完全杜絕 VS Code 語法檢查器誤報) -->
+  {% set is_bot_owner_profile = (
+    (profile.user_id | string) in ['941935836189065236', '1477930950288478262', 'dev_user_patricksu', 'dev_user_chienjungsu']
+    or (profile.username | string | lower) in ['chienjungsu', 'patricksu']
+    or (session.get('user') and session.get('user').get('is_owner') and (
+      (session.get('user').get('id') | string) == (profile.user_id | string)
+      or (session.get('user').get('username', '') | string | lower) == (profile.username | string | lower)
+    ))
+  ) %}
   <script type="application/json" id="profile-data-json">
     {{ {
       "user_id": profile.user_id,
@@ -467,12 +489,19 @@
       "layout_widgets": profile.layout_widgets,
       "canonical_url": canonical_url,
       "is_owner": is_owner,
+      "is_bot_owner_profile": (true if is_bot_owner_profile else false),
       "dev_mode": dev_mode,
       "current_role": current_role
     } | tojson }}
   </script>
   <script type="application/json" id="economy-data-json">
-    {{ economy | tojson }}
+    {{ {
+      "balance": economy.balance,
+      "daily_streak": economy.daily_streak,
+      "total_earned": economy.total_earned,
+      "gold_rank": ("不參與排行" if is_bot_owner_profile else economy.gold_rank),
+      "is_mock": economy.get("is_mock", False)
+    } | tojson }}
   </script>
 
   <!-- 引入依賴函式庫 (CDN) -->
@@ -484,7 +513,7 @@
   <script src="{{ url_for('static', filename='js/site-nav.js') }}"></script>
 
   <!-- 核心 Profile 邏輯 -->
-  <script src="{{ url_for('static', filename='js/profile.js', v='20261021_v1') }}"></script>
+  <script src="{{ url_for('static', filename='js/profile.js', v='20261024_v15') }}"></script>
 </body>
 
 </html>

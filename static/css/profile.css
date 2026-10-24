@@ -200,14 +200,60 @@
   margin: 0 auto 32px;
   position: relative;
   width: 100%;
-  padding: 0 12px 140px;
+  padding: 0 12px 8px;
   box-sizing: border-box;
 }
 
-@media (max-width: 768px) {
-  .profile-container {
-    padding: 0 12px 140px;
-  }
+/* 僅擁有者 (有底部浮動工具列) 才預留工具列空間；訪客不留多餘空白 */
+body:has(#mode-toggle) .profile-container {
+  padding-bottom: 120px;
+}
+
+/* 個人檔案瀏覽次數視覺 Footer (僅眼睛圖標與數字) */
+.profile-views-footer {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin: 24px auto 0 auto;
+  position: relative;
+  z-index: 5;
+  user-select: none;
+  color: var(--muted, #94a3b8);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  transition: color 0.25s ease, transform 0.25s ease;
+  cursor: default;
+}
+
+.profile-views-footer:hover {
+  color: var(--theme-glow, #7dd3fc);
+}
+
+.views-eye-icon {
+  width: 15px;
+  height: 15px;
+  stroke: currentColor;
+  opacity: 0.85;
+  flex-shrink: 0;
+  transition: stroke 0.25s ease, opacity 0.25s ease;
+}
+
+.profile-views-footer:hover .views-eye-icon {
+  opacity: 1;
+  filter: drop-shadow(0 0 6px var(--theme-glow, rgba(125, 211, 252, 0.6)));
+}
+
+.views-count-num {
+  font-variant-numeric: tabular-nums;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "SF Pro Text", sans-serif;
+  line-height: 1;
+}
+
+#profile-footer {
+  margin-top: 8px;
 }
 
 /* 液態玻璃連續分區背板層 (與網格畫布寬度精確對齊) */
@@ -340,24 +386,26 @@
   z-index: 2;
 }
 
-/* 預覽與訪客瀏覽模式：背景完全通透、絕對不顯示任何編輯邊界虛線或方塊框線 */
-.grid-stack:not(.is-editing),
-.grid-stack:not(.is-editing) .grid-stack-item,
-.grid-stack:not(.is-editing) .grid-stack-item-content,
-.grid-stack:not(.is-editing) .social-buttons-container,
-.grid-stack:not(.is-editing) .section-scissor-bar {
-  background: transparent !important;
-  border: none !important;
-  outline: none !important;
-  box-shadow: none !important;
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-  border-radius: 0 !important;
-}
+/* 預覽與訪客瀏覽模式 (僅限桌面端多欄連續背板模式)：卡片背景通透、由底層連續群組背板 (grid-glass-backdrops) 提供一體化液態玻璃質感 */
+@media (min-width: 769px) {
+  .grid-stack:not(.is-editing),
+  .grid-stack:not(.is-editing) .grid-stack-item,
+  .grid-stack:not(.is-editing) .grid-stack-item-content:not([data-widget-type="media_embed"]),
+  .grid-stack:not(.is-editing) .social-buttons-container,
+  .grid-stack:not(.is-editing) .section-scissor-bar {
+    background: transparent !important;
+    border: none !important;
+    outline: none !important;
+    box-shadow: none !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    border-radius: 0 !important;
+  }
 
-.grid-stack:not(.is-editing) .grid-stack-item-content:hover {
-  border-color: transparent !important;
-  box-shadow: none !important;
+  .grid-stack:not(.is-editing) .grid-stack-item-content:hover {
+    border-color: transparent !important;
+    box-shadow: none !important;
+  }
 }
 
 /* 編輯模式下的卡片外框 (顯示虛線邊界以利排版與縮放操作) */
@@ -1774,10 +1822,13 @@ body.is-editing #action-btn-tour,
 }
 
 /* --- 4.5 媒體展示卡 (media_embed) --- */
-.grid-stack-item[data-widget-type="media_embed"] .grid-stack-item-content {
+.grid-stack-item[data-widget-type="media_embed"],
+.grid-stack:not(.is-editing) .grid-stack-item[data-widget-type="media_embed"],
+.grid-stack-item[data-widget-type="media_embed"] .grid-stack-item-content,
+.grid-stack:not(.is-editing) .grid-stack-item[data-widget-type="media_embed"] .grid-stack-item-content {
   padding: 0 !important;
   overflow: hidden !important;
-  border-radius: var(--card-radius, 24px);
+  border-radius: var(--card-radius, 20px) !important;
 }
 
 .widget-media-embed {
@@ -1786,9 +1837,49 @@ body.is-editing #action-btn-tour,
   display: flex;
   flex-direction: column;
   position: relative;
-  border-radius: inherit;
-  overflow: hidden;
+  border-radius: var(--card-radius, 20px) !important;
+  overflow: hidden !important;
   background: rgba(11, 16, 32, 0.7);
+}
+
+.media-fallback-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: rgba(11, 16, 32, 0.88);
+  color: var(--muted, #94a3b8);
+  padding: 18px;
+  text-align: center;
+  user-select: none;
+  z-index: 5;
+}
+
+.media-fallback-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--theme-glow, #7dd3fc);
+  margin-bottom: 2px;
+}
+
+.media-fallback-text {
+  font-size: 13px;
+  font-weight: 700;
+  color: #f8fafc;
+}
+
+.media-fallback-hint {
+  font-size: 11px;
+  color: var(--muted, #64748b);
 }
 
 .media-image-holder {
@@ -1916,17 +2007,39 @@ body.is-editing #action-btn-tour,
 
 .crop-preview-box {
   width: 100%;
-  max-height: 240px;
-  min-height: 160px;
+  height: auto;
+  margin: 0 auto;
   position: relative;
   overflow: hidden;
   border-radius: 14px;
   background: #000000;
   border: 1px solid rgba(255, 255, 255, 0.1);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: aspect-ratio 0.25s ease;
+  display: block;
+  transition: aspect-ratio 0.25s ease, width 0.25s ease, max-width 0.25s ease;
+}
+
+.crop-preview-box[data-ratio="2 / 1"] {
+  width: 100%;
+  max-width: 480px;
+  aspect-ratio: 2 / 1 !important;
+}
+
+.crop-preview-box[data-ratio="16 / 9"] {
+  width: 100%;
+  max-width: 426px;
+  aspect-ratio: 16 / 9 !important;
+}
+
+.crop-preview-box[data-ratio="1 / 1"] {
+  width: 100%;
+  max-width: 240px;
+  aspect-ratio: 1 / 1 !important;
+}
+
+.crop-preview-box[data-ratio="3 / 4"] {
+  width: 100%;
+  max-width: 210px;
+  aspect-ratio: 3 / 4 !important;
 }
 
 .crop-preview-ambient {
@@ -1942,11 +2055,12 @@ body.is-editing #action-btn-tour,
 }
 
 .crop-preview-img {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   display: block;
   z-index: 2;
-  position: relative;
   transition: transform 0.2s ease, object-position 0.2s ease;
 }
 
@@ -2997,8 +3111,9 @@ body.is-editing #action-btn-tour,
 .spotlight-tour-overlay {
   position: fixed;
   inset: 0;
-  z-index: 400;
+  z-index: 100000;
   pointer-events: auto;
+  overscroll-behavior: contain;
 }
 
 .tour-spotlight-box {
@@ -3012,12 +3127,12 @@ body.is-editing #action-btn-tour,
               left 0.35s cubic-bezier(0.2, 0.8, 0.2, 1),
               width 0.35s cubic-bezier(0.2, 0.8, 0.2, 1),
               height 0.35s cubic-bezier(0.2, 0.8, 0.2, 1);
-  z-index: 401;
+  z-index: 100001;
 }
 
 .tour-tooltip-box {
   position: fixed;
-  z-index: 402;
+  z-index: 100002;
   background: rgba(18, 24, 38, 0.96);
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
@@ -3119,8 +3234,8 @@ body.is-editing #action-btn-tour,
 
 /* ==================== 9. 響應式佈局 (Mobile) ==================== */
 @media (max-width: 768px) {
-  body {
-    padding-bottom: 140px;
+  body:has(#mode-toggle) {
+    padding-bottom: 24px;
   }
 
   .status-bar-container {
@@ -3186,12 +3301,14 @@ body.is-editing #action-btn-tour,
   }
 
   /* 手機版各卡片自立為獨立液態玻璃卡片，維持玻璃光澤與圓角，預覽與編輯皆保有一流質感 */
+  .grid-stack .grid-stack-item .grid-stack-item-content,
+  .grid-stack:not(.is-editing) .grid-stack-item .grid-stack-item-content,
   .grid-stack .grid-stack-item-content,
   .grid-stack:not(.is-editing) .grid-stack-item-content {
     position: relative !important;
     inset: auto !important;
     height: auto !important;
-    min-height: 90px;
+    min-height: auto !important;
     padding: 18px 20px;
     border-radius: var(--card-radius, 18px) !important;
     background: linear-gradient(135deg, rgba(255, 255, 255, 0.06) 0%, rgba(255, 255, 255, 0.02) 40%, rgba(12, 18, 34, 0.72) 100%) !important;
@@ -3202,9 +3319,24 @@ body.is-editing #action-btn-tour,
     outline: none !important;
   }
 
+  .is-editing .grid-stack .grid-stack-item .grid-stack-item-content,
   .is-editing .grid-stack .grid-stack-item-content {
     border: 1.5px dashed rgba(125, 211, 252, 0.45) !important;
     background: rgba(15, 23, 42, 0.7) !important;
+  }
+
+  .grid-stack-item[data-widget-type="media_embed"] .grid-stack-item-content,
+  .grid-stack:not(.is-editing) .grid-stack-item[data-widget-type="media_embed"] .grid-stack-item-content {
+    padding: 0 !important;
+    overflow: hidden !important;
+  }
+
+  .grid-stack:not(.is-editing) .item-type-divider,
+  .grid-stack:not(.is-editing) .grid-stack-item[data-widget-type="divider"] {
+    display: none !important;
+    height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
   }
 
   /* 手機版顯示上下移動卡片快速按鈕 */
@@ -3456,22 +3588,30 @@ body.is-editing #action-btn-tour,
     justify-content: flex-start !important;
   }
 
-  /* 手機版圖片與 YouTube 嵌入卡片自適應比例 (16:9)，絕不裁切內容 */
+  /* 手機版圖片與 YouTube 嵌入卡片自適應比例 (支援 2:1 / 16:9 / 1:1 / 3:4 裁切比例) */
   .widget-media-embed {
     width: 100% !important;
     height: auto !important;
-    min-height: 200px;
-    aspect-ratio: 16 / 9;
+    min-height: 0 !important;
+    aspect-ratio: var(--img-ratio, 16 / 9) !important;
     position: relative !important;
+    display: block !important;
     border-radius: 14px;
-    overflow: hidden;
+    overflow: hidden !important;
   }
 
   .is-editing .widget-media-embed {
     margin-top: 36px;
   }
 
+  .grid-stack:not(.is-editing) .grid-stack-item[data-widget-type="media_embed"] .grid-stack-item-content {
+    padding: 0 !important;
+    overflow: hidden !important;
+  }
+
   .widget-media-embed iframe {
+    position: absolute !important;
+    inset: 0 !important;
     width: 100% !important;
     height: 100% !important;
     aspect-ratio: 16 / 9;
@@ -3480,15 +3620,17 @@ body.is-editing #action-btn-tour,
   }
 
   .widget-media-embed .media-image-holder {
-    position: relative !important;
+    position: absolute !important;
+    inset: 0 !important;
     width: 100% !important;
     height: 100% !important;
-    aspect-ratio: 16 / 9;
-    overflow: hidden;
+    overflow: hidden !important;
   }
 
   .widget-media-embed .media-image-holder img,
   .widget-media-embed .media-main-img {
+    position: absolute !important;
+    inset: 0 !important;
     width: 100% !important;
     height: 100% !important;
     object-fit: var(--img-fit, cover) !important;
@@ -3583,3 +3725,6 @@ body.is-editing #action-btn-tour,
 .social-block-header {
   margin-bottom: 0;
 }
+
+/* 導覽期間鎖定捲動 */
+html.tour-scroll-lock, html.tour-scroll-lock body { overscroll-behavior: none; }

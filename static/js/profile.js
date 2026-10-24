@@ -32,6 +32,20 @@
   const profileData = Object.assign({}, window.PROFILE_DATA || {}, parsedProfile);
   const economyData = Object.assign({}, window.BOT_ECONOMY_DATA || {}, parsedEconomy);
 
+  function isBotOwnerProfile() {
+    const uid = String(profileData.user_id || '').trim();
+    const uname = String(profileData.username || '').trim().toLowerCase();
+    return Boolean(
+      profileData.is_bot_owner_profile ||
+      ['941935836189065236', '1477930950288478262', 'dev_user_patricksu', 'dev_user_chienjungsu'].includes(uid) ||
+      ['chienjungsu', 'patricksu'].includes(uname)
+    );
+  }
+
+  if (isBotOwnerProfile()) {
+    economyData.gold_rank = '不參與排行';
+  }
+
   let widgets = JSON.parse(JSON.stringify(profileData.layout_widgets || []));
   let themeConfig = Object.assign(
     {
@@ -56,6 +70,142 @@
   let isGridDragging = false;
   let draggedSocialBtn = null;
   let glassUpdateTimer = null;
+  let mobileOrderChanged = false;
+  const initialDesktopGeometry = new Map();
+
+  function isMobileViewport() {
+    return window.innerWidth <= 768;
+  }
+
+  function snapshotDesktopGeometry() {
+    initialDesktopGeometry.clear();
+    widgets.forEach((w) => {
+      if (w && w.id) {
+        initialDesktopGeometry.set(w.id, {
+          x: w.x !== undefined ? Number(w.x) : 0,
+          y: w.y !== undefined ? Number(w.y) : 0,
+          w: w.w !== undefined ? Number(w.w) : 6,
+          h: w.h !== undefined ? Number(w.h) : 2,
+        });
+      }
+    });
+  }
+
+  // 手機版自適應排版顯示卡片順序演算法：
+  // 1. 個人名片 (profile_header) 永遠置頂
+  // 2. 優先由左上到左下 (左側欄位由上而下)，再往右顯示 (依欄位由左至右、各欄內由上而下)
+  function getMobileOrderedWidgets(list) {
+    if (!Array.isArray(list) || list.length <= 1) return Array.isArray(list) ? list.slice() : [];
+
+    const headers = list.filter((w) => w && w.type === 'profile_header');
+    const others = list.filter((w) => w && w.type !== 'profile_header');
+    if (others.length <= 1) return [...headers, ...others];
+
+    const getGeo = (w) => {
+      const saved = initialDesktopGeometry.get(w.id);
+      const src = (isMobileViewport() && saved) ? saved : w;
+      const x = src.x !== undefined ? Number(src.x) : 0;
+      const y = src.y !== undefined ? Number(src.y) : 0;
+      const wCols = src.w !== undefined ? Number(src.w) : 6;
+      const hRows = src.h !== undefined ? Number(src.h) : 2;
+      return { x, y, w: wCols, h: hRows };
+    };
+
+    function orderBandByColumns(bandItems) {
+      if (bandItems.length <= 1) return bandItems.slice();
+      const itemsWithGeo = bandItems.map((w, idx) => ({ w, idx, geo: getGeo(w) }));
+      const byX = itemsWithGeo.slice().sort((a, b) => a.geo.x - b.geo.x || a.geo.y - b.geo.y || a.idx - b.idx);
+      const colGroups = [];
+
+      byX.forEach((item) => {
+        const startX = item.geo.x;
+        const endX = item.geo.x + Math.max(1, item.geo.w);
+        const itemW = Math.max(1, item.geo.w);
+
+        const group = colGroups.find((g) => {
+          if (g.minX === startX) return true;
+          const overlap = Math.min(g.maxX, endX) - Math.max(g.minX, startX);
+          const minW = Math.min(g.maxX - g.minX, itemW);
+          return overlap >= minW * 0.5;
+        });
+
+        if (group) {
+          group.items.push(item);
+          group.minX = Math.min(group.minX, startX);
+          group.maxX = Math.max(group.maxX, endX);
+        } else {
+          colGroups.push({
+            minX: startX,
+            maxX: endX,
+            items: [item],
+          });
+        }
+      });
+
+      colGroups.sort((a, b) => a.minX - b.minX);
+      const result = [];
+      colGroups.forEach((g) => {
+        g.items.sort((a, b) => a.geo.y - b.geo.y || a.geo.x - b.geo.x || a.idx - b.idx);
+        g.items.forEach((item) => result.push(item.w));
+      });
+      return result;
+    }
+
+    const sortedByY = others
+      .map((w, idx) => ({ w, idx, geo: getGeo(w) }))
+      .sort((a, b) => a.geo.y - b.geo.y || a.geo.x - b.geo.x || a.idx - b.idx);
+
+    const orderedOthers = [];
+    let currentBand = [];
+    sortedByY.forEach((entry) => {
+      if (entry.w.type === 'divider' || entry.geo.w >= 12) {
+        if (currentBand.length > 0) {
+          orderedOthers.push(...orderBandByColumns(currentBand));
+          currentBand = [];
+        }
+        orderedOthers.push(entry.w);
+      } else {
+        currentBand.push(entry.w);
+      }
+    });
+    if (currentBand.length > 0) {
+      orderedOthers.push(...orderBandByColumns(currentBand));
+    }
+
+    return [...headers, ...orderedOthers];
+  }
+
+  function sortWidgetsForMobileOrder() {
+    if (isMobileViewport() && mobileOrderChanged) return;
+    const ordered = getMobileOrderedWidgets(widgets);
+    if (ordered.length === widgets.length) {
+      widgets.splice(0, widgets.length, ...ordered);
+    }
+  }
+
+  function syncMobileDomOrder() {
+    const gridEl = document.getElementById('profile-grid');
+    if (!gridEl) return;
+    if (isMobileViewport() && mobileOrderChanged) return;
+
+    sortWidgetsForMobileOrder();
+    const domNodes = Array.from(gridEl.querySelectorAll('.grid-stack-item[gs-id]'));
+    if (domNodes.length <= 1) return;
+
+    const currentDomIds = domNodes.map((el) => String(el.getAttribute('gs-id')));
+    const targetIds = widgets.map((w) => String(w.id));
+    const isSameOrder =
+      currentDomIds.length === targetIds.length &&
+      currentDomIds.every((id, idx) => id === targetIds[idx]);
+    if (isSameOrder) return;
+
+    widgets.forEach((w) => {
+      const itemEl = gridEl.querySelector(`.grid-stack-item[gs-id="${w.id}"]`);
+      if (itemEl) {
+        gridEl.appendChild(itemEl);
+      }
+    });
+  }
 
   function debouncedUpdateGlassSections() {
     if (glassUpdateTimer) clearTimeout(glassUpdateTimer);
@@ -100,6 +250,23 @@
       default:
         return { minW: 1, maxW: 12, minH: 1, maxH: 20 };
     }
+  }
+
+  function getMediaGridHeightForRatio(aspectRatio, colW = 6) {
+    const w = Math.max(2, Number(colW) || 6);
+    const approxWidthPx = w * 85;
+    const cellHeight = 95;
+    const ratioStr = String(aspectRatio || '16 / 9').trim();
+    let ratioVal = 16 / 9;
+    if (ratioStr.includes('/')) {
+      const parts = ratioStr.split('/').map((s) => parseFloat(s.trim()));
+      if (parts.length === 2 && parts[0] > 0 && parts[1] > 0) {
+        ratioVal = parts[0] / parts[1];
+      }
+    }
+    const idealHeightPx = approxWidthPx / ratioVal;
+    const limits = getWidgetSizeLimits('media_embed');
+    return Math.max(limits.minH, Math.min(limits.maxH, Math.round(idealHeightPx / cellHeight)));
   }
 
   // 檢查卡片是否支援內容自適應高度 (文字區塊與社群連結區塊)
@@ -278,6 +445,7 @@
   // ==================== 2.8 液態玻璃分區與剪刀分離運算 (24px 官網同款間距) ====================
 
   function syncWidgetCoordinatesFromGrid() {
+    if (isMobileViewport()) return;
     if (!gridInstance || !gridInstance.engine || !gridInstance.engine.nodes) return;
     gridInstance.engine.nodes.forEach((node) => {
       const target = widgets.find((w) => w.id === node.id);
@@ -288,6 +456,10 @@
         target.h = node.h;
       }
     });
+    snapshotDesktopGeometry();
+    if (!isGridDragging && !isGridResizing) {
+      syncMobileDomOrder();
+    }
   }
 
   // 自動將 legacy divider 轉移至 themeConfig.section_splits
@@ -374,7 +546,7 @@
         const nodeEl = document.querySelector('.grid-stack-item[gs-id="' + w.id + '"]');
         if (nodeEl) {
           const actualPx = getWidgetActualContentHeight(w, nodeEl);
-          const buffer = w.type === 'social_link' ? 28 : 14;
+          const buffer = w.type === 'social_link' ? 18 : 14;
           const need = Math.ceil(actualPx + buffer + 8);
           if (need > 0 && need < hPx) hPx = need;
         }
@@ -386,24 +558,25 @@
     const sorted = inBand.slice().sort((m, n) => (Number(m.y) || 0) - (Number(n.y) || 0));
     const shift = {};
     const newTop = {};
+
     sorted.forEach((w) => {
       const wx = Number(w.x) || 0;
       const ww = Number(w.w) || 1;
-      const origTop = (Number(w.y) || 0) * cellHeight;
-      let top = origTop;
-      let constrained = false;
+      const wy = Number(w.y) || 0;
+      const origTop = wy * cellHeight;
+      let top = minY * cellHeight;
       sorted.forEach((u) => {
         if (u === w || newTop[u.id] === undefined) return;
+        const uy = Number(u.y) || 0;
+        if (uy > wy || (uy === wy && (Number(u.x) || 0) >= wx)) return;
         const ux = Number(u.x) || 0;
         const uw = Number(u.w) || 1;
-        const uOrigBottom = ((Number(u.y) || 0) + (Number(u.h) || 2)) * cellHeight;
         const overlapX = ux < wx + ww && wx < ux + uw;
-        if (!overlapX || uOrigBottom > origTop) return;
-        // 保留原有間隙，但以上方卡片「實際」底部為準：所有重疊的上方卡片都必須避開，取最下方者
-        const candidate = newTop[u.id] + px[u.id] + (origTop - uOrigBottom);
-        if (!constrained || candidate > top) {
+        if (!overlapX) return;
+        // 以上方同欄重疊卡片「實際」底部為準直接緊湊貼合，消除編輯/預覽/瀏覽模式下卡片下方的異常空白區域
+        const candidate = newTop[u.id] + px[u.id];
+        if (candidate > top) {
           top = candidate;
-          constrained = true;
         }
       });
       newTop[w.id] = top;
@@ -411,10 +584,18 @@
     });
 
     let bandPx = 0;
+    let maxMediaBottom = 0;
     inBand.forEach((w) => {
       const bottom = ((Number(w.y) || 0) - minY) * cellHeight - shift[w.id] + px[w.id];
       if (bottom > bandPx) bandPx = bottom;
+      if (w.type === 'media_embed' && bottom > maxMediaBottom) {
+        maxMediaBottom = bottom;
+      }
     });
+    // 若圖片或 YouTube 嵌入卡片貼近畫布/區塊下方邊界，稍微延長下方邊界 (16px)，避免視覺貼邊壓迫
+    if (maxMediaBottom > 0 && bandPx - maxMediaBottom < 16) {
+      bandPx = maxMediaBottom + 16;
+    }
     return { px, shift, bandPx };
   }
 
@@ -422,6 +603,21 @@
     const backdropContainer = document.getElementById('grid-glass-backdrops');
     if (!backdropContainer) return;
     backdropContainer.innerHTML = '';
+
+    if (isMobileViewport()) {
+      syncMobileDomOrder();
+      document.querySelectorAll('.grid-stack-item[gs-id]').forEach((el) => {
+        el.style.height = '';
+        el.style.transform = '';
+      });
+      const mobileGridEl = document.getElementById('profile-grid');
+      if (mobileGridEl) {
+        mobileGridEl.style.removeProperty('min-height');
+        mobileGridEl.style.removeProperty('height');
+        mobileGridEl.querySelectorAll('.section-scissor-bar').forEach((el) => el.remove());
+      }
+      return;
+    }
 
     syncWidgetCoordinatesFromGrid();
     migrateLegacyDividers();
@@ -439,7 +635,7 @@
         if (w.type !== 'social_link') return;
         const el = document.querySelector('.grid-stack-item[gs-id="' + w.id + '"]');
         if (!el) return;
-        const need = Math.ceil(getWidgetActualContentHeight(w, el) + 28 + 8);
+        const need = Math.ceil(getWidgetActualContentHeight(w, el) + 18 + 8);
         if (need > 0 && need < (Number(w.h) || 2) * 95) {
           el.style.height = need + 'px';
         }
@@ -509,8 +705,8 @@
         // 編輯模式僅社群連結卡片貼合內容；預覽/瀏覽模式所有自適應卡片貼合內容；卡片間空隙一律向上吸附
         bandLayout = computeBandLayout(inBand, minY, cellHeight, isEditing);
         const actualBandPx = bandLayout.bandPx;
-        if (actualBandPx > 0 && actualBandPx < heightPx) {
-          bandTrim = Math.max(0, heightPx - Math.max(70, actualBandPx));
+        if (actualBandPx > 0) {
+          bandTrim = heightPx - Math.max(70, actualBandPx);
           heightPx -= bandTrim;
         }
       }
@@ -620,7 +816,21 @@
 
     const gridEl = document.getElementById('profile-grid');
     if (gridEl && maxContentBottomPx > 0) {
-      gridEl.style.minHeight = `${maxContentBottomPx + pad * 2 + 32}px`;
+      // 以實際渲染後 (吸附/裁切/平移之後) 的卡片與背板底緣量測內容高度，
+      // 並覆寫 GridStack 依「格數」撐出的高度，消除頁面底部多餘空白
+      const gridTop = gridEl.getBoundingClientRect().top;
+      let measuredBottom = 0;
+      gridEl.querySelectorAll('.grid-stack-item[gs-id]').forEach((el) => {
+        const b = el.getBoundingClientRect().bottom - gridTop;
+        if (b > measuredBottom) measuredBottom = b;
+      });
+      document.querySelectorAll('.grid-section-glass-backdrop').forEach((bd) => {
+        const b = bd.getBoundingClientRect().bottom - gridTop;
+        if (b > measuredBottom) measuredBottom = b;
+      });
+      const finalPx = Math.ceil(measuredBottom > 0 ? measuredBottom : maxContentBottomPx) + 8;
+      gridEl.style.setProperty('min-height', `${finalPx}px`, 'important');
+      gridEl.style.setProperty('height', `${finalPx}px`, 'important');
     }
 
     // 渲染區塊間界剪刀圖案按鈕 (包含上下向與左右向)
@@ -776,8 +986,8 @@
   }
 
   // ==================== 2.9 上下區塊自動磁吸壓實 (分隔線除外) ====================
-  function compactWidgetsWithDividerBounds() {
-    if (!gridInstance) return;
+  function compactWidgetsWithDividerBounds(allowPullUp = true) {
+    if (!gridInstance || isMobileViewport()) return;
     const wasStatic = !!(gridInstance.opts && gridInstance.opts.staticGrid);
     if (wasStatic) {
       gridInstance.setStatic(false);
@@ -792,19 +1002,31 @@
 
       const bounds = [0, ...splits, 9999];
       let changed = false;
+      let currentBandStartY = 0;
+      const updatedSplits = [];
 
-      // 依分隔線切分區間 (各區間內部自動向上吸附，但絕不越界穿透分隔線)
+      // 依分隔線切分區間 (各區間內部自動向上吸附，且區間交界處緊密接續前一區間的實際底緣，杜絕區間之間出現空行)
       for (let b = 0; b < bounds.length - 1; b++) {
-        const minYBound = bounds[b];
-        const maxYBound = bounds[b + 1];
+        const rawMinYBound = bounds[b];
+        const rawMaxYBound = bounds[b + 1];
 
         // 取得屬於該區間內的所有非分隔線卡片，按 y 座標由小至大排序
         const bandWidgets = widgets
           .filter((w) => {
             const wy = w.y !== undefined ? Number(w.y) : 0;
-            return wy >= minYBound && wy < maxYBound && w.type !== 'divider';
+            return wy >= rawMinYBound && wy < rawMaxYBound && w.type !== 'divider';
           })
-          .sort((a, b) => (Number(a.y) || 0) - (Number(b.y) || 0));
+          .sort((a, b) => (Number(a.y) || 0) - (Number(b.y) || 0) || (Number(a.x) || 0) - (Number(b.x) || 0));
+
+        if (bandWidgets.length === 0) {
+          continue;
+        }
+
+        if (currentBandStartY > 0 && !updatedSplits.includes(currentBandStartY)) {
+          updatedSplits.push(currentBandStartY);
+        }
+
+        const minYBound = currentBandStartY;
 
         // 記錄每欄目前已被卡片佔用的最高 y 座標
         const colMaxY = new Array(12).fill(minYBound);
@@ -815,7 +1037,7 @@
           const dh = Number(d.h) || 1;
           const dx = Number(d.x) || 0;
           const dw = Number(d.w) || 12;
-          if (dy >= minYBound && dy < maxYBound) {
+          if (dy >= rawMinYBound && dy < rawMaxYBound) {
             for (let c = dx; c < Math.min(12, dx + dw); c++) {
               colMaxY[c] = Math.max(colMaxY[c], dy + dh);
             }
@@ -847,7 +1069,7 @@
             return;
           }
 
-          // 計算此卡片涵蓋欄位中，允許向上吸附的最高 Y 座標
+          // 計算此卡片涵蓋欄位中，上方卡片已佔用的最低 Y 座標
           let targetY = minYBound;
           for (let c = wx; c < wx + ww; c++) {
             if (colMaxY[c] > targetY) {
@@ -855,8 +1077,9 @@
             }
           }
 
-          // 若 targetY 小於目前 y，表示上方有空行，執行向上吸附
-          if (targetY < curY) {
+          // 預設 (allowPullUp = false) 僅在發生重疊 (curY < targetY) 時向下推開，禁止移動卡片時自動將其他卡片往上移！
+          const shouldMove = allowPullUp ? (targetY !== curY) : (curY < targetY);
+          if (shouldMove) {
             w.y = targetY;
             changed = true;
             const nodeEl = document.querySelector(`.grid-stack-item[gs-id="${w.id}"]`);
@@ -872,6 +1095,17 @@
             colMaxY[c] = Math.max(colMaxY[c], (w.y || 0) + cardH);
           }
         });
+
+        currentBandStartY = Math.max(...colMaxY);
+      }
+
+      if (Array.isArray(themeConfig.section_splits)) {
+        const prevStr = JSON.stringify(themeConfig.section_splits);
+        const nextStr = JSON.stringify(updatedSplits);
+        if (prevStr !== nextStr) {
+          themeConfig.section_splits = updatedSplits;
+          changed = true;
+        }
       }
 
       if (changed) {
@@ -971,6 +1205,31 @@
       .replace(/'/g, '&#039;');
   }
 
+  function normalizeMediaUrl(url) {
+    if (!url) return '';
+    let clean = String(url).trim();
+    if (!clean.startsWith('http://') && !clean.startsWith('https://') && !clean.startsWith('/')) {
+      clean = 'https://' + clean;
+    }
+    // Google Drive 檢視/分享連結自動轉換為高畫質縮圖直鏈
+    if (clean.includes('drive.google.com')) {
+      const match = clean.match(/\/file\/d\/([a-zA-Z0-9_-]+)/) || clean.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+      if (match && match[1]) {
+        return `https://drive.google.com/thumbnail?id=${match[1]}&sz=w1920`;
+      }
+    }
+    // Imgur 單圖頁面連結轉直鏈 (如 https://imgur.com/abcde -> https://i.imgur.com/abcde.png)
+    if (/^https?:\/\/imgur\.com\/([a-zA-Z0-9]+)$/.test(clean)) {
+      const id = clean.match(/^https?:\/\/imgur\.com\/([a-zA-Z0-9]+)$/)[1];
+      return `https://i.imgur.com/${id}.png`;
+    }
+    // Dropbox 連結轉直鏈
+    if (clean.includes('dropbox.com') && clean.includes('dl=0')) {
+      return clean.replace('dl=0', 'raw=1');
+    }
+    return clean;
+  }
+
   function sanitizeUrl(url) {
     if (!url) return '#';
     const clean = String(url).trim();
@@ -983,6 +1242,45 @@
     }
     return '#';
   }
+
+  window.handleMediaImageError = function (img) {
+    if (!img) return;
+    const stage = parseInt(img.dataset.errStage || '0', 10);
+    const origSrc = img.dataset.originalSrc || img.getAttribute('src') || '';
+    if (!origSrc || origSrc === '/static/logo.png') return;
+
+    if (stage === 0 && !origSrc.startsWith('/api/profile/image-proxy')) {
+      // 第一階段：走後端專屬圖片代理服務，突破防盜鏈、Referer 阻擋與跨域限制
+      img.dataset.errStage = '1';
+      const proxyUrl = `/api/profile/image-proxy?url=${encodeURIComponent(origSrc)}`;
+      img.src = proxyUrl;
+      const ambient = img.closest('.media-image-holder')?.querySelector('.media-ambient-blur') ||
+                      img.closest('.crop-preview-box')?.querySelector('.crop-preview-ambient');
+      if (ambient) {
+        ambient.style.backgroundImage = `url('${proxyUrl}')`;
+      }
+    } else {
+      // 第二階段：代理亦失敗，顯示優雅提示遮罩，杜絕瀏覽器破損圖示
+      img.style.display = 'none';
+      const holder = img.closest('.media-image-holder') || img.closest('.crop-preview-box');
+      if (holder && !holder.querySelector('.media-fallback-placeholder')) {
+        const placeholder = document.createElement('div');
+        placeholder.className = 'media-fallback-placeholder';
+        placeholder.innerHTML = `
+          <div class="media-fallback-icon">
+            <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+              <circle cx="8.5" cy="8.5" r="1.5"></circle>
+              <polyline points="21 15 16 10 5 21"></polyline>
+            </svg>
+          </div>
+          <span class="media-fallback-text">${escapeHtml(img.alt || '精選視覺')}</span>
+          <span class="media-fallback-hint">圖片載入受限或網址失效</span>
+        `;
+        holder.appendChild(placeholder);
+      }
+    }
+  };
 
   // ==================== 4. Panel 同款確認刪除 Modal ====================
 
@@ -1088,7 +1386,10 @@
       const displayName = escapeHtml(content.display_name || profileData.display_name || profileData.username);
       const username = escapeHtml(content.username || profileData.username);
       const bio = escapeHtml(content.bio || profileData.bio || '熱愛開源開發與社群建造。正在打造次世代 Discord 機器人。');
-      const avatarUrl = sanitizeUrl(content.avatar_url || profileData.avatar_url || '/static/logo.png');
+      const rawAvatar = (profileData.avatar_url && profileData.avatar_url !== '/static/logo.png')
+        ? profileData.avatar_url
+        : ((content.avatar_url && content.avatar_url !== '/static/logo.png') ? content.avatar_url : '/static/logo.png');
+      const avatarUrl = sanitizeUrl(rawAvatar);
 
       let tags = [];
       if (Array.isArray(content.hashtags)) {
@@ -1139,7 +1440,7 @@
         <div class="widget-profile-header">
           <div class="header-main-row">
             <div class="header-avatar-wrap">
-              <img class="header-avatar-img" src="${avatarUrl}" alt="${displayName}" onerror="this.src='/static/logo.png'" />
+              <img class="header-avatar-img" src="${avatarUrl}" alt="${displayName}" referrerpolicy="no-referrer" onerror="this.onerror=null; this.src='/static/logo.png';" />
             </div>
             <div class="header-info">
               <div class="header-title-row">
@@ -1157,7 +1458,8 @@
       const balance = Number(economyData.balance || 0).toLocaleString();
       const streak = Number(economyData.daily_streak || 0);
       const earned = Number(economyData.total_earned || 0).toLocaleString();
-      const goldRank = escapeHtml(String(economyData.gold_rank || '第 3 名'));
+      const rawRank = isBotOwnerProfile() ? '不參與排行' : (economyData.gold_rank || '未上榜');
+      const goldRank = escapeHtml(String(rawRank));
 
       html = `
         ${dragHandleHtml}
@@ -1232,79 +1534,91 @@
     } else if (type === 'social_link') {
       const title = escapeHtml(content.title || '社群連結');
 
-      // 支援舊格式向下相容與多按鈕陣列解析
-      let links = [];
-      if (Array.isArray(content.links) && content.links.length > 0) {
-        links = content.links;
-      } else if (content.url || content.platform) {
-        links = [
-          {
-            id: 'legacy-1',
-            platform: content.platform || 'github',
-            username: content.title || '前往專屬社群',
-            url: content.url || '#',
-            style: 'inline',
-          }
-        ];
-      } else {
-        links = [
-          {
-            id: 'l-threads',
-            platform: 'threads',
-            username: profileData.username || 'patricksu',
-            url: 'https://threads.net',
-            style: 'inline',
-          },
-          {
-            id: 'l-spotify',
-            platform: 'spotify',
-            username: profileData.display_name || 'Spotify',
-            url: 'https://spotify.com',
-            style: 'inline',
-          },
-          {
-            id: 'l-github',
-            platform: 'github',
-            username: profileData.username || 'patricksu',
-            url: 'https://github.com',
-            style: 'avatar',
-          }
-        ];
+      // 確保 widget.content.links 為真實陣列，並移除預設佔位按鈕
+      if (!Array.isArray(content.links)) {
+        if (content.url || content.platform) {
+          content.links = [
+            {
+              id: 'legacy-' + String(widget.id),
+              platform: content.platform || 'github',
+              username: content.title || '前往專屬社群',
+              url: content.url || '#',
+              style: 'inline',
+            },
+          ];
+          delete content.url;
+          delete content.platform;
+        } else {
+          content.links = [];
+        }
       }
 
-      const buttonsHtml = links.map((link) => {
-        const platform = link.platform || 'custom';
-        const rawUName = link.username || '用戶名';
-        const displayUName = rawUName.startsWith('@') ? rawUName : '@' + rawUName;
-        const linkUrl = sanitizeUrl(link.url || '#');
-        const style = link.style || 'inline';
-        const usePlatformIcon = Boolean(link.use_platform_icon);
-        const avatarUrl = usePlatformIcon ? '' : (link.avatar_url || '');
+      const DEFAULT_PLACEHOLDER_URLS = new Set([
+        'https://threads.net',
+        'https://spotify.com',
+        'https://github.com',
+        'https://discord.gg',
+        'https://instagram.com',
+      ]);
+      const DEFAULT_PLACEHOLDER_NAMES = new Set([
+        'username',
+        'usename',
+        'threads_user',
+        'github_user',
+      ]);
 
-        if (style === 'avatar') {
-          return `
-            <div class="social-btn-wrap" data-link-id="${escapeHtml(link.id)}" data-widget-id="${escapeHtml(widget.id)}" draggable="${isEditing ? 'true' : 'false'}" style="position: relative; display: inline-flex;">
-              <a href="${linkUrl}" target="_blank" rel="noopener noreferrer" draggable="false" class="social-btn-item social-btn-avatar platform-${escapeHtml(platform)}" title="${isEditing ? '點擊編輯此連結 (可拖曳排序)' : escapeHtml(platform) + ': ' + escapeHtml(displayUName)}">
-                <div class="social-avatar-circle">
-                  ${avatarUrl ? `<img src="${avatarUrl}" alt="${escapeHtml(displayUName)}" onerror="this.style.display='none'; if(this.nextElementSibling) this.nextElementSibling.style.display='inline-flex';" /><span class="social-avatar-svg" style="display:none;">${getPlatformSvg(platform)}</span>` : `<span class="social-avatar-svg">${getPlatformSvg(platform)}</span>`}
-                </div>
-                <span class="social-avatar-name">${escapeHtml(displayUName)}</span>
-              </a>
-              ${isEditing ? `<button type="button" class="btn-remove-social-btn" data-widget-id="${escapeHtml(widget.id)}" data-link-id="${escapeHtml(link.id)}" title="刪除此按鈕">&times;</button>` : ''}
-            </div>
-          `;
-        } else {
-          return `
-            <div class="social-btn-wrap" data-link-id="${escapeHtml(link.id)}" data-widget-id="${escapeHtml(widget.id)}" draggable="${isEditing ? 'true' : 'false'}" style="position: relative; display: inline-flex;">
-              <a href="${linkUrl}" target="_blank" rel="noopener noreferrer" draggable="false" class="social-btn-item social-btn-inline platform-${escapeHtml(platform)}" title="${isEditing ? '點擊編輯此連結 (可拖曳排序)' : escapeHtml(platform) + ': ' + escapeHtml(displayUName)}">
-                <span class="social-btn-icon">${getPlatformSvg(platform)}</span>
-                <span class="social-btn-username">${escapeHtml(displayUName)}</span>
-              </a>
-              ${isEditing ? `<button type="button" class="btn-remove-social-btn" data-widget-id="${escapeHtml(widget.id)}" data-link-id="${escapeHtml(link.id)}" title="刪除此按鈕">&times;</button>` : ''}
-            </div>
-          `;
+      content.links = content.links.filter((l, idx) => {
+        if (!l || typeof l !== 'object') return false;
+        if (!l.id) {
+          l.id = 'btn-' + Date.now() + '-' + idx;
         }
-      }).join('');
+        const uName = String(l.username || '').trim().toLowerCase();
+        const uUrl = String(l.url || '').trim().replace(/\/+$/, '').toLowerCase();
+        if (DEFAULT_PLACEHOLDER_NAMES.has(uName) && DEFAULT_PLACEHOLDER_URLS.has(uUrl)) {
+          return false;
+        }
+        return true;
+      });
+
+      const links = content.links;
+
+      const buttonsHtml = links.length > 0
+        ? links.map((link) => {
+            const platform = link.platform || 'custom';
+            const rawUName = link.username || '用戶名';
+            const displayUName = rawUName.startsWith('@') ? rawUName : '@' + rawUName;
+            const linkUrl = sanitizeUrl(link.url || '#');
+            const style = link.style || 'inline';
+            const usePlatformIcon = Boolean(link.use_platform_icon);
+            const avatarUrl = usePlatformIcon ? '' : (link.avatar_url || '');
+
+            if (style === 'avatar') {
+              return `
+                <div class="social-btn-wrap" data-link-id="${escapeHtml(link.id)}" data-widget-id="${escapeHtml(widget.id)}" draggable="${isEditing ? 'true' : 'false'}" style="position: relative; display: inline-flex;">
+                  <a href="${linkUrl}" target="_blank" rel="noopener noreferrer" draggable="false" class="social-btn-item social-btn-avatar platform-${escapeHtml(platform)}" title="${isEditing ? '點擊編輯此連結 (可拖曳排序)' : escapeHtml(platform) + ': ' + escapeHtml(displayUName)}">
+                    <div class="social-avatar-circle">
+                      ${avatarUrl ? `<img src="${avatarUrl}" alt="${escapeHtml(displayUName)}" referrerpolicy="no-referrer" onerror="this.style.display='none'; if(this.nextElementSibling) this.nextElementSibling.style.display='inline-flex';" /><span class="social-avatar-svg" style="display:none;">${getPlatformSvg(platform)}</span>` : `<span class="social-avatar-svg">${getPlatformSvg(platform)}</span>`}
+                    </div>
+                    <span class="social-avatar-name">${escapeHtml(displayUName)}</span>
+                  </a>
+                  ${isEditing ? `<button type="button" class="btn-remove-social-btn" data-widget-id="${escapeHtml(widget.id)}" data-link-id="${escapeHtml(link.id)}" title="刪除此按鈕">&times;</button>` : ''}
+                </div>
+              `;
+            } else {
+              return `
+                <div class="social-btn-wrap" data-link-id="${escapeHtml(link.id)}" data-widget-id="${escapeHtml(widget.id)}" draggable="${isEditing ? 'true' : 'false'}" style="position: relative; display: inline-flex;">
+                  <a href="${linkUrl}" target="_blank" rel="noopener noreferrer" draggable="false" class="social-btn-item social-btn-inline platform-${escapeHtml(platform)}" title="${isEditing ? '點擊編輯此連結 (可拖曳排序)' : escapeHtml(platform) + ': ' + escapeHtml(displayUName)}">
+                    <span class="social-btn-icon">${getPlatformSvg(platform)}</span>
+                    <span class="social-btn-username">${escapeHtml(displayUName)}</span>
+                  </a>
+                  ${isEditing ? `<button type="button" class="btn-remove-social-btn" data-widget-id="${escapeHtml(widget.id)}" data-link-id="${escapeHtml(link.id)}" title="刪除此按鈕">&times;</button>` : ''}
+                </div>
+              `;
+            }
+          }).join('')
+        : (isEditing
+            ? `<div style="font-size: 12.5px; color: var(--muted, #94a3b8); padding: 6px 2px; user-select: none;">尚未新增連結，請點擊右上角「+ 新增連結」</div>`
+            : '');
 
       html = `
         ${dragHandleHtml}
@@ -1319,27 +1633,40 @@
         </div>
       `;
     } else if (type === 'media_embed') {
-      const mediaType = content.media_type || 'image';
+      let mediaType = content.media_type || 'image';
       const title = escapeHtml(content.title || '精選視覺展示');
       const caption = escapeHtml(content.caption || '點擊編輯說明文字');
-      const mediaUrl = sanitizeUrl(content.media_url || 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=800&q=80');
+      let rawMediaUrl = String(content.media_url || '').trim();
+      if (!rawMediaUrl || rawMediaUrl === '/static/logo.png') {
+        rawMediaUrl = 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=800&q=80';
+      }
+      const normalizedUrl = normalizeMediaUrl(rawMediaUrl);
+      const mediaUrl = sanitizeUrl(normalizedUrl);
       const fitMode = content.fit_mode || 'cover';
+      const aspectRatio = content.aspect_ratio || '16 / 9';
       const posX = content.pos_x !== undefined ? Number(content.pos_x) : 50;
       const posY = content.pos_y !== undefined ? Number(content.pos_y) : 50;
       const zoom = content.zoom !== undefined ? Number(content.zoom) : 1;
       const showCaption = content.show_caption !== false;
 
-      if (mediaType === 'youtube' && (mediaUrl.includes('youtube.com') || mediaUrl.includes('youtu.be'))) {
+      const isYoutubeUrl = mediaUrl.includes('youtube.com/') || mediaUrl.includes('youtu.be/');
+      if (mediaType === 'youtube' || isYoutubeUrl) {
         let videoId = '';
         if (mediaUrl.includes('youtu.be/')) {
-          videoId = mediaUrl.split('youtu.be/')[1].split('?')[0];
+          videoId = mediaUrl.split('youtu.be/')[1].split(/[?&]/)[0];
         } else if (mediaUrl.includes('v=')) {
-          videoId = mediaUrl.split('v=')[1].split('&')[0];
+          videoId = mediaUrl.split('v=')[1].split(/[?&]/)[0];
+        } else if (mediaUrl.includes('/embed/')) {
+          videoId = mediaUrl.split('/embed/')[1].split(/[?&]/)[0];
+        } else if (mediaUrl.includes('/shorts/')) {
+          videoId = mediaUrl.split('/shorts/')[1].split(/[?&]/)[0];
+        } else if (mediaUrl.includes('/live/')) {
+          videoId = mediaUrl.split('/live/')[1].split(/[?&]/)[0];
         }
         html = `
           ${dragHandleHtml}
           ${controlsHtml}
-          <div class="widget-media-embed">
+          <div class="widget-media-embed" data-aspect-ratio="16 / 9" style="--img-ratio: 16 / 9;">
             <iframe width="100%" height="100%" src="https://www.youtube.com/embed/${videoId}" frameborder="0" allowfullscreen style="border:0; border-radius:18px;"></iframe>
           </div>
         `;
@@ -1347,10 +1674,10 @@
         html = `
           ${dragHandleHtml}
           ${controlsHtml}
-          <div class="widget-media-embed mode-${fitMode}" style="--img-fit: ${fitMode}; --img-pos: ${posX}% ${posY}%; --img-zoom: ${zoom};">
+          <div class="widget-media-embed mode-${fitMode}" data-aspect-ratio="${escapeHtml(aspectRatio)}" style="--img-fit: ${fitMode}; --img-pos: ${posX}% ${posY}%; --img-zoom: ${zoom}; --img-ratio: ${escapeHtml(aspectRatio)};">
             <div class="media-image-holder">
-              ${fitMode === 'contain' ? `<div class="media-ambient-blur" style="background-image: url('${mediaUrl}');"></div>` : ''}
-              <img src="${mediaUrl}" alt="${title}" class="media-main-img" onerror="this.src='/static/logo.png'" />
+              ${fitMode === 'contain' ? `<div class="media-ambient-blur" style="background-image: url('${escapeHtml(mediaUrl)}');"></div>` : ''}
+              <img src="${escapeHtml(mediaUrl)}" alt="${title}" class="media-main-img" data-original-src="${escapeHtml(mediaUrl)}" onerror="handleMediaImageError(this);" />
             </div>
             ${showCaption ? `
               <div class="media-caption-overlay">
@@ -1529,8 +1856,8 @@
     }, 40);
   }
 
-  function autoAdjustWidgetHeight(widgetId, isManualResize = false) {
-    if (!gridInstance || adjustingWidgets.has(widgetId)) return false;
+  function autoAdjustWidgetHeight(widgetId, isManualResize = false, allowShrinkInEdit = false) {
+    if (!gridInstance || adjustingWidgets.has(widgetId) || isMobileViewport()) return false;
     const widget = widgets.find((w) => w.id === widgetId);
     if (!widget || !isAutoHeightCard(widget)) {
       return false; // 核心約束：僅支援自適應高度之卡片 (text_card 與 social_link) 改變高度
@@ -1554,8 +1881,8 @@
     // 安全邊距緩衝：
     // 預覽與瀏覽模式下外層 padding 與 inset 緊湊 (約 22px-30px)，設定緩衝為 14px 即可完全杜絕跳列並精確切除多餘留白；
     // 編輯模式下設定為 28px 確保打字換行有充裕空間
-    // 社群連結：外層 inset (10px) + padding (18px) = 28px，精準貼合單列 95px，不額外留白
-    const safetyBuffer = widget.type === 'social_link' ? 28 : (isEditing ? 28 : 14);
+    // 社群連結：設定緩衝為 18px，確保單列社群連結 (約 68px) 精準收納於 1 格 (95px) 內，不產生多餘第 2 格留白
+    const safetyBuffer = widget.type === 'social_link' ? 18 : (isEditing ? 28 : 14);
     const requiredH = Math.min(limits.maxH, Math.max(effectiveMinH, Math.ceil((actualPx + safetyBuffer) / cellHeight)));
     const currentH = Number(nodeEl.getAttribute('gs-h')) || widget.h || effectiveMinH;
 
@@ -1565,11 +1892,11 @@
     if (isManualResize) {
       targetH = currentH < requiredH ? requiredH : currentH;
     } else {
-      if (isEditing && widget.type !== 'social_link') {
+      if (isEditing && widget.type !== 'social_link' && !allowShrinkInEdit) {
         // 核心修復：在編輯打字時，只有在內容真正溢出當前卡片高度 (requiredH > currentH) 時才長高！
         targetH = requiredH > currentH ? requiredH : currentH;
       } else {
-        // 預覽與實際瀏覽：精確收縮至實際內容高度 (requiredH)，切除編輯工具列所佔的空間，杜絕卡片下方無效留白
+        // 頁面初始化、切換模式、預覽與實際瀏覽：精確收縮至實際內容高度 (requiredH)，杜絕卡片下方無效留白
         targetH = Math.max(effectiveMinH, requiredH);
       }
     }
@@ -1599,11 +1926,12 @@
     return false;
   }
 
-  function checkMarkdownCardsAutoHeight() {
+  function checkMarkdownCardsAutoHeight(allowShrinkInEdit = true) {
+    if (isMobileViewport()) return false;
     let anyChanged = false;
     widgets.forEach((w) => {
       if (isAutoHeightCard(w)) {
-        const changed = autoAdjustWidgetHeight(w.id);
+        const changed = autoAdjustWidgetHeight(w.id, false, allowShrinkInEdit);
         if (changed) anyChanged = true;
       }
     });
@@ -1618,6 +1946,10 @@
   function initGrid() {
     const gridEl = document.getElementById('profile-grid');
     if (!gridEl) return;
+
+    healMobileCorruptedLayout();
+    snapshotDesktopGeometry();
+    sortWidgetsForMobileOrder();
 
     gridEl.innerHTML = '';
 
@@ -1663,6 +1995,7 @@
 
       const contentEl = document.createElement('div');
       contentEl.className = 'grid-stack-item-content';
+      contentEl.setAttribute('data-widget-type', w.type);
       contentEl.innerHTML = renderCardInnerHtml(w);
       nodeEl.appendChild(contentEl);
 
@@ -1681,8 +2014,130 @@
       });
     });
 
+    let dragStartPositions = new Map();
+    let draggedNodeId = null;
+
+    if (gridInstance.engine && typeof gridInstance.engine.moveNode === 'function') {
+      const origMoveNode = gridInstance.engine.moveNode.bind(gridInstance.engine);
+      gridInstance.engine.moveNode = function (node, o) {
+        if (isGridDragging && node && draggedNodeId && String(node.id) === String(draggedNodeId) && o) {
+          const origA = dragStartPositions.get(String(node.id));
+          if (origA) {
+            // 1. 每次拖曳判定前，先將所有非拖曳卡片還原至拖曳前的原始座標，徹底杜絕往下拖曳時下方卡片被不斷往下累加推擠 (雪球效應)
+            this.nodes.forEach((n) => {
+              if (n === node) return;
+              const orig = dragStartPositions.get(String(n.id));
+              if (orig && (n.x !== orig.x || n.y !== orig.y)) {
+                n.x = orig.x;
+                n.y = orig.y;
+                n._dirty = true;
+                if (n.el) {
+                  n.el.setAttribute('gs-x', String(orig.x));
+                  n.el.setAttribute('gs-y', String(orig.y));
+                }
+              }
+            });
+
+            const ax = o.x !== undefined ? o.x : node.x;
+            const aw = o.w !== undefined ? o.w : node.w;
+            const ah = o.h !== undefined ? o.h : node.h;
+            let targetY = o.y !== undefined ? o.y : node.y;
+
+            // 防止拖入名片卡 (profile_header) 所在的置頂列
+            const headerNode = this.nodes.find((n) => {
+              const wObj = widgets.find((w) => String(w.id) === String(n.id));
+              return wObj && wObj.type === 'profile_header';
+            });
+            const minTopY = headerNode ? (Number(headerNode.h) || 2) : 0;
+            if (targetY < minTopY) targetY = minTopY;
+
+            // 2. 針對目標欄位同欄卡片進行中線交換判定，杜絕往下拖曳不斷推擠下方卡片或剛移動時其他卡片自動亂跳
+            if (targetY > origA.y) {
+              const colBelowNodes = this.nodes
+                .filter((n) => {
+                  if (n === node || n === headerNode) return false;
+                  const orig = dragStartPositions.get(String(n.id));
+                  if (!orig) return false;
+                  const overlapX = orig.x < ax + aw && ax < orig.x + orig.w;
+                  return overlapX && orig.y >= origA.y + origA.h;
+                })
+                .sort((m, n) => {
+                  const om = dragStartPositions.get(String(m.id));
+                  const on = dragStartPositions.get(String(n.id));
+                  return (om ? om.y : 0) - (on ? on.y : 0);
+                });
+
+              for (let i = 0; i < colBelowNodes.length; i++) {
+                const bNode = colBelowNodes[i];
+                const origB = dragStartPositions.get(String(bNode.id));
+                if (!origB) continue;
+                const bMid = origB.y + Math.max(1, Math.floor(origB.h / 2));
+                if (targetY + ah > origB.y) {
+                  if (targetY + ah <= bMid) {
+                    // 尚未越過 B 的中線：禁止把 B 往下推，將拖曳卡片停在 B 上緣
+                    targetY = Math.max(minTopY, origB.y - ah);
+                    break;
+                  } else {
+                    // 已越過 B 的中線：將 B 往上移補位，並確保拖曳卡片位於 B 新位置下方而不重疊
+                    const shiftedY = Math.max(minTopY, origB.y - ah);
+                    bNode.y = shiftedY;
+                    bNode._dirty = true;
+                    if (bNode.el) {
+                      bNode.el.setAttribute('gs-y', String(shiftedY));
+                    }
+                    if (targetY < shiftedY + origB.h) {
+                      targetY = shiftedY + origB.h;
+                    }
+                  }
+                }
+              }
+            } else if (targetY < origA.y) {
+              const colAboveNodes = this.nodes
+                .filter((n) => {
+                  if (n === node || n === headerNode) return false;
+                  const orig = dragStartPositions.get(String(n.id));
+                  if (!orig) return false;
+                  const overlapX = orig.x < ax + aw && ax < orig.x + orig.w;
+                  return overlapX && orig.y + orig.h <= origA.y;
+                })
+                .sort((m, n) => {
+                  const om = dragStartPositions.get(String(m.id));
+                  const on = dragStartPositions.get(String(n.id));
+                  return (on ? on.y : 0) - (om ? om.y : 0);
+                });
+
+              for (let i = 0; i < colAboveNodes.length; i++) {
+                const bNode = colAboveNodes[i];
+                const origB = dragStartPositions.get(String(bNode.id));
+                if (!origB) continue;
+                const bMid = origB.y + Math.floor(origB.h / 2);
+                if (targetY < origB.y + origB.h) {
+                  if (targetY > bMid) {
+                    targetY = origB.y + origB.h;
+                    break;
+                  } else {
+                    const shiftedY = origB.y + ah;
+                    bNode.y = shiftedY;
+                    bNode._dirty = true;
+                    if (bNode.el) {
+                      bNode.el.setAttribute('gs-y', String(shiftedY));
+                    }
+                    if (targetY + ah > shiftedY) {
+                      targetY = Math.max(minTopY, shiftedY - ah);
+                    }
+                  }
+                }
+              }
+            }
+            o.y = targetY;
+          }
+        }
+        return origMoveNode(node, o);
+      };
+    }
+
     gridInstance.on('change', function (event, items) {
-      if (!items) return;
+      if (isMobileViewport() || !items) return;
       items.forEach((item) => {
         const id = item.id;
         const target = widgets.find((w) => w.id === id);
@@ -1704,18 +2159,31 @@
       }
     });
 
-    gridInstance.on('dragstart', function () {
+    gridInstance.on('dragstart', function (event, el) {
       isGridDragging = true;
-      document.querySelectorAll('.grid-stack-item').forEach((el) => {
+      draggedNodeId = el ? el.getAttribute('gs-id') : null;
+      dragStartPositions.clear();
+      if (gridInstance && gridInstance.engine && Array.isArray(gridInstance.engine.nodes)) {
+        gridInstance.engine.nodes.forEach((n) => {
+          dragStartPositions.set(String(n.id), {
+            x: Number(n.x) || 0,
+            y: Number(n.y) || 0,
+            w: Number(n.w) || 1,
+            h: Number(n.h) || 2,
+          });
+        });
+      }
+      // 僅清除被拖曳卡片自身的 transform，禁止清除其他卡片的區塊間距位移，避免移動卡片時其他卡片自動往上跳動
+      if (el) {
         el.style.transform = '';
-      });
+      }
     });
 
-    gridInstance.on('resizestart', function () {
+    gridInstance.on('resizestart', function (event, el) {
       isGridResizing = true;
-      document.querySelectorAll('.grid-stack-item').forEach((el) => {
+      if (el) {
         el.style.transform = '';
-      });
+      }
     });
 
     // 手動縮放結束：同步座標、補正最小高度防裁切，並執行上下區塊自動吸附 (分隔線除外)
@@ -1729,15 +2197,17 @@
           debouncedAutoAdjustWidgetHeight(id, true);
         }
       }
-      compactWidgetsWithDividerBounds();
+      compactWidgetsWithDividerBounds(true);
       syncWidgetCoordinatesFromGrid();
       updateGlassSections();
     });
 
     gridInstance.on('dragstop', function () {
       isGridDragging = false;
+      draggedNodeId = null;
+      dragStartPositions.clear();
       syncWidgetCoordinatesFromGrid();
-      compactWidgetsWithDividerBounds();
+      compactWidgetsWithDividerBounds(true);
       syncWidgetCoordinatesFromGrid();
       updateGlassSections();
       observeSocialBlocks();
@@ -1746,7 +2216,7 @@
     ['added', 'removed'].forEach((evName) => {
       gridInstance.on(evName, function () {
         syncWidgetCoordinatesFromGrid();
-        compactWidgetsWithDividerBounds();
+        compactWidgetsWithDividerBounds(true);
         syncWidgetCoordinatesFromGrid();
         updateGlassSections();
         observeSocialBlocks();
@@ -1756,7 +2226,7 @@
     applyModeState(isEditing);
     setTimeout(() => {
       checkMarkdownCardsAutoHeight();
-      compactWidgetsWithDividerBounds();
+      compactWidgetsWithDividerBounds(true);
       syncWidgetCoordinatesFromGrid();
       updateGlassSections();
       observeSocialBlocks();
@@ -2030,15 +2500,17 @@
 
       // 模式切換收尾：高度自適應計算、格網向上緊湊吸附、玻璃背板更新與 staticGrid 鎖定
       const finalizeModeSwitch = () => {
-        try {
-          checkMarkdownCardsAutoHeight();
-        } catch (err) {
-          console.error('checkMarkdownCardsAutoHeight error:', err);
-        }
-        try {
-          compactWidgetsWithDividerBounds();
-        } catch (err) {
-          console.error('compactWidgetsWithDividerBounds error:', err);
+        if (isEditing) {
+          try {
+            checkMarkdownCardsAutoHeight();
+          } catch (err) {
+            console.error('checkMarkdownCardsAutoHeight error:', err);
+          }
+          try {
+            compactWidgetsWithDividerBounds(true);
+          } catch (err) {
+            console.error('compactWidgetsWithDividerBounds error:', err);
+          }
         }
         try {
           syncWidgetCoordinatesFromGrid();
@@ -2248,7 +2720,10 @@
 
     let targetLink = null;
     if (linkId) {
-      targetLink = widget.content.links.find((l) => l.id === linkId);
+      targetLink = widget.content.links.find((l) => String(l.id) === String(linkId));
+      if (!targetLink) {
+        editingSocialLinkId = null;
+      }
     }
 
     const isEditMode = Boolean(targetLink);
@@ -2340,8 +2815,8 @@
       });
     }
 
-    let userEditedName = false;
-    let userEditedAvatar = false;
+    let userEditedName = Boolean(isEditMode && curUsername && !['username', 'usename', 'threads_user', 'github_user', '專屬連結', '用戶名'].includes(curUsername.trim().toLowerCase()));
+    let userEditedAvatar = Boolean(isEditMode && curAvatar);
     let userEditedPlatform = false;
 
     const usePlatformIconCheckbox = document.getElementById('edit-link-use-platform-icon');
@@ -2404,9 +2879,14 @@
         if (!userEditedName) {
           usernameInput.value = detected.username;
         }
+      } else {
+        usernameInput.placeholder = '留空將自動偵測並帶入用戶名';
+        if (!userEditedName) {
+          usernameInput.value = '';
+        }
       }
       if (detected.platform && detected.platform !== 'custom') {
-        if (!userEditedPlatform || platSelect.value === 'auto') {
+        if (!userEditedPlatform) {
           platSelect.value = detected.platform;
         }
       }
@@ -2417,14 +2897,18 @@
         }
       } else {
         avatarInput.placeholder = '留空預設使用社群平台官方圖標';
+        if (!userEditedAvatar && !usePlatformIconCheckbox?.checked) {
+          avatarInput.value = '';
+        }
       }
       updateAvatarPreview();
     }
 
     if (urlInput) {
       urlInput.addEventListener('input', handleUrlDetection);
-      urlInput.addEventListener('change', handleUrlDetection);
-      if (curUrl) {
+      if (isEditMode) {
+        updateAvatarPreview();
+      } else if (curUrl) {
         handleUrlDetection();
       }
       setTimeout(() => urlInput.focus(), 150);
@@ -2460,6 +2944,7 @@
 
       const mediaUrl = content.media_url || 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=800&q=80';
       const fitMode = content.fit_mode || 'cover';
+      const aspectRatio = content.aspect_ratio || '16 / 9';
       const posX = content.pos_x !== undefined ? Number(content.pos_x) : 50;
       const posY = content.pos_y !== undefined ? Number(content.pos_y) : 50;
       const zoom = content.zoom !== undefined ? Number(content.zoom) : 1;
@@ -2486,16 +2971,17 @@
             <div class="crop-preview-header">
               <span class="crop-section-label">即時效果預覽</span>
               <div class="crop-ratio-toggles" id="crop-ratio-toggles">
-                <button type="button" class="crop-ratio-btn active" data-ratio="2 / 1">寬卡片 2:1</button>
-                <button type="button" class="crop-ratio-btn" data-ratio="16 / 9">標準 16:9</button>
-                <button type="button" class="crop-ratio-btn" data-ratio="1 / 1">正方 1:1</button>
-                <button type="button" class="crop-ratio-btn" data-ratio="3 / 4">縱向 3:4</button>
+                <button type="button" class="crop-ratio-btn ${aspectRatio === '2 / 1' ? 'active' : ''}" data-ratio="2 / 1">寬卡片 2:1</button>
+                <button type="button" class="crop-ratio-btn ${aspectRatio === '16 / 9' ? 'active' : ''}" data-ratio="16 / 9">標準 16:9</button>
+                <button type="button" class="crop-ratio-btn ${aspectRatio === '1 / 1' ? 'active' : ''}" data-ratio="1 / 1">正方 1:1</button>
+                <button type="button" class="crop-ratio-btn ${aspectRatio === '3 / 4' ? 'active' : ''}" data-ratio="3 / 4">縱向 3:4</button>
               </div>
+              <input type="hidden" id="edit-media-aspect-ratio" value="${escapeHtml(aspectRatio)}" />
             </div>
 
-            <div class="crop-preview-box" id="crop-preview-box" style="aspect-ratio: 2 / 1;">
+            <div class="crop-preview-box" id="crop-preview-box" data-ratio="${escapeHtml(aspectRatio)}" style="aspect-ratio: ${escapeHtml(aspectRatio)};">
               <div class="crop-preview-ambient" id="crop-preview-ambient" style="background-image: url('${mediaUrl}'); display: ${fitMode === 'contain' ? 'block' : 'none'};"></div>
-              <img src="${mediaUrl}" id="crop-preview-img" class="crop-preview-img" style="object-fit: ${fitMode}; object-position: ${posX}% ${posY}%; transform: scale(${zoom}); transform-origin: ${posX}% ${posY}%;" onerror="this.src='/static/logo.png'" />
+              <img src="${escapeHtml(mediaUrl)}" id="crop-preview-img" class="crop-preview-img" data-original-src="${escapeHtml(mediaUrl)}" style="object-fit: ${fitMode}; object-position: ${posX}% ${posY}%; transform: scale(${zoom}); transform-origin: ${posX}% ${posY}%;" onerror="handleMediaImageError(this);" />
               <div class="crop-preview-overlay" id="crop-preview-overlay" style="${showCaption ? '' : 'display: none;'}">
                 <h5 id="crop-preview-title" class="crop-overlay-title">${escapeHtml(cardTitle)}</h5>
                 <p id="crop-preview-caption" class="crop-overlay-caption">${escapeHtml(cardCaption)}</p>
@@ -2659,17 +3145,32 @@
 
       mediaUrlInput?.addEventListener('input', () => {
         const val = mediaUrlInput.value.trim();
-        if (val && previewImg) previewImg.src = val;
-        if (val && previewAmbient) previewAmbient.style.backgroundImage = `url('${val}')`;
+        const norm = normalizeMediaUrl(val);
+        if (norm && previewImg) {
+          previewImg.style.display = '';
+          previewImg.dataset.errStage = '0';
+          previewImg.dataset.originalSrc = norm;
+          previewImg.src = norm;
+          const oldPh = previewBox?.querySelector('.media-fallback-placeholder');
+          if (oldPh) oldPh.remove();
+        }
+        if (norm && previewAmbient) {
+          previewAmbient.style.backgroundImage = `url('${norm}')`;
+        }
       });
 
       // 比例切換按鈕
+      const aspectRatioInput = document.getElementById('edit-media-aspect-ratio');
       document.querySelectorAll('#crop-ratio-toggles .crop-ratio-btn').forEach((btn) => {
         btn.addEventListener('click', () => {
           document.querySelectorAll('#crop-ratio-toggles .crop-ratio-btn').forEach((b) => b.classList.remove('active'));
           btn.classList.add('active');
-          const ratio = btn.getAttribute('data-ratio');
-          if (previewBox && ratio) previewBox.style.aspectRatio = ratio;
+          const ratio = btn.getAttribute('data-ratio') || '16 / 9';
+          if (aspectRatioInput) aspectRatioInput.value = ratio;
+          if (previewBox && ratio) {
+            previewBox.setAttribute('data-ratio', ratio);
+            previewBox.style.aspectRatio = ratio;
+          }
         });
       });
 
@@ -2746,7 +3247,18 @@
       const platform = (platVal && platVal !== 'auto') ? platVal : (detected.platform || 'custom');
 
       const userInputName = document.getElementById('edit-link-username')?.value.trim();
-      const username = userInputName || detected.username || '專屬連結';
+      const PLATFORM_DISPLAY_NAMES = {
+        threads: 'Threads',
+        spotify: 'Spotify',
+        github: 'GitHub',
+        youtube: 'YouTube',
+        twitter: 'X',
+        instagram: 'Instagram',
+        discord: 'Discord',
+        twitch: 'Twitch',
+        steam: 'Steam',
+      };
+      const username = userInputName || detected.username || PLATFORM_DISPLAY_NAMES[platform] || '專屬連結';
 
       const usePlatformIcon = document.getElementById('edit-link-use-platform-icon')?.checked || false;
       const userInputAvatar = document.getElementById('edit-link-avatar-url')?.value.trim();
@@ -2756,14 +3268,27 @@
       if (!Array.isArray(widget.content.links)) widget.content.links = [];
 
       if (editingSocialLinkId) {
-        const link = widget.content.links.find((l) => l.id === editingSocialLinkId);
-        if (link) {
-          link.url = rawUrl;
-          link.style = style;
-          link.platform = platform;
-          link.username = username;
-          link.avatar_url = avatar_url;
-          link.use_platform_icon = usePlatformIcon;
+        const linkIdx = widget.content.links.findIndex((l) => String(l.id) === String(editingSocialLinkId));
+        if (linkIdx !== -1) {
+          widget.content.links[linkIdx] = Object.assign({}, widget.content.links[linkIdx], {
+            id: String(editingSocialLinkId),
+            url: rawUrl,
+            style: style,
+            platform: platform,
+            username: username,
+            avatar_url: avatar_url,
+            use_platform_icon: usePlatformIcon,
+          });
+        } else {
+          widget.content.links.push({
+            id: String(editingSocialLinkId),
+            url: rawUrl,
+            style: style,
+            platform: platform,
+            username: username,
+            avatar_url: avatar_url,
+            use_platform_icon: usePlatformIcon,
+          });
         }
       } else {
         const newLinkId = 'l-' + Date.now() + '-' + Math.random().toString(36).substr(2, 4);
@@ -2778,20 +3303,31 @@
         });
       }
 
-      refreshCardContent(editingCardId);
+      const targetCardId = editingCardId;
+      refreshCardContent(targetCardId);
+      debouncedAutoAdjustWidgetHeight(targetCardId);
       updateGlassSections();
       closeModal('modal-edit-card');
       showToast('社群連結已更新 (請記得點擊「儲存變更」寫入資料庫)', 'info');
       return;
     } else if (widget.type === 'media_embed') {
-      const mType = document.getElementById('edit-media-type')?.value || 'image';
-      const url = document.getElementById('edit-media-url')?.value.trim();
+      let mType = document.getElementById('edit-media-type')?.value || 'image';
+      let url = document.getElementById('edit-media-url')?.value.trim() || '';
+      if (url && !url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('/')) {
+        url = 'https://' + url;
+      }
+      if (url && (url.includes('youtube.com/') || url.includes('youtu.be/'))) {
+        mType = 'youtube';
+      } else if (mType === 'image') {
+        url = normalizeMediaUrl(url);
+      }
 
       widget.content.media_type = mType;
-      widget.content.media_url = url || '';
+      widget.content.media_url = url;
 
       if (mType === 'image') {
         const fitMode = document.getElementById('edit-media-fit-mode')?.value || 'cover';
+        const aspectRatio = document.getElementById('edit-media-aspect-ratio')?.value || widget.content.aspect_ratio || '16 / 9';
         const posX = Number(document.getElementById('edit-crop-x')?.value || 50);
         const posY = Number(document.getElementById('edit-crop-y')?.value || 50);
         const zoom = Number(document.getElementById('edit-crop-zoom')?.value || 1);
@@ -2800,12 +3336,57 @@
         const caption = document.getElementById('edit-media-caption')?.value.trim();
 
         widget.content.fit_mode = fitMode;
+        widget.content.aspect_ratio = aspectRatio;
         widget.content.pos_x = posX;
         widget.content.pos_y = posY;
         widget.content.zoom = zoom;
         widget.content.show_caption = showCaption;
         if (title !== undefined && title !== '') widget.content.title = title;
         if (caption !== undefined && caption !== '') widget.content.caption = caption;
+
+        // 根據所選裁切比例同步更新桌面端網格高度 (3:4 -> h=7, 1:1 -> h=5, 16:9 / 2:1 -> h=3)
+        let targetW = Number(widget.w) || 6;
+        if ((aspectRatio === '3 / 4' || aspectRatio === '1 / 1') && targetW > 6) {
+          targetW = 6;
+        }
+        const targetH = getMediaGridHeightForRatio(aspectRatio, targetW);
+        widget.w = targetW;
+        widget.h = targetH;
+
+        if (initialDesktopGeometry.has(widget.id)) {
+          const savedGeo = initialDesktopGeometry.get(widget.id);
+          const oldH = Number(savedGeo.h) || 3;
+          const oldY = Number(savedGeo.y) || 0;
+          const oldX = Number(savedGeo.x) || 0;
+          const oldW = Number(savedGeo.w) || 6;
+          const deltaH = targetH - oldH;
+          savedGeo.w = targetW;
+          savedGeo.h = targetH;
+          if (deltaH !== 0) {
+            initialDesktopGeometry.forEach((geo, otherId) => {
+              if (otherId !== widget.id && geo.y >= oldY + oldH) {
+                const overlapX = geo.x < oldX + oldW && geo.x + geo.w > oldX;
+                if (overlapX) {
+                  geo.y = Math.max(0, geo.y + deltaH);
+                }
+              }
+            });
+          }
+        }
+
+        if (!isMobileViewport() && gridInstance) {
+          const nodeEl = document.querySelector(`.grid-stack-item[gs-id="${widget.id}"]`);
+          if (nodeEl) {
+            const wasStatic = !!(gridInstance.opts && gridInstance.opts.staticGrid);
+            if (wasStatic) gridInstance.setStatic(false);
+            nodeEl.setAttribute('gs-w', String(targetW));
+            nodeEl.setAttribute('gs-h', String(targetH));
+            gridInstance.update(nodeEl, { w: targetW, h: targetH });
+            if (wasStatic) gridInstance.setStatic(true);
+            compactWidgetsWithDividerBounds();
+            syncWidgetCoordinatesFromGrid();
+          }
+        }
       }
     }
 
@@ -2831,6 +3412,7 @@
       gridInstance.removeWidget(nodeEl);
     }
     widgets.splice(index, 1);
+    if (isMobileViewport()) mobileOrderChanged = true;
     compactWidgetsWithDividerBounds();
     updateAddCardPaletteState();
     updateGlassSections();
@@ -2908,30 +3490,7 @@
         h: 2,
         content: {
           title: '社群連結',
-          links: [
-            {
-              id: 'btn-' + Date.now() + '-1',
-              platform: 'threads',
-              username: profileData.username || 'threads_user',
-              url: 'https://threads.net',
-              style: 'inline',
-            },
-            {
-              id: 'btn-' + Date.now() + '-2',
-              platform: 'spotify',
-              username: profileData.display_name || 'Spotify',
-              url: 'https://spotify.com',
-              style: 'inline',
-            },
-            {
-              id: 'btn-' + Date.now() + '-3',
-              platform: 'github',
-              username: profileData.username || 'github_user',
-              url: 'https://github.com',
-              style: 'avatar',
-              avatar_url: profileData.avatar_url || '/static/logo.png',
-            }
-          ],
+          links: [],
         },
       };
     } else if (type === 'media_embed') {
@@ -2941,7 +3500,7 @@
         x: xPos,
         y: yPos,
         w: 6,
-        h: 2,
+        h: 3,
         content: {
           media_type: 'image',
           title: '精選視覺',
@@ -2972,7 +3531,7 @@
         type: 'bot_economy',
         x: xPos,
         y: yPos,
-        w: 4,
+        w: 6,
         h: 2,
         content: {
           title: '經濟數據',
@@ -2991,6 +3550,7 @@
     }
 
     widgets.push(newWidget);
+    if (isMobileViewport()) mobileOrderChanged = true;
 
     const nodeEl = document.createElement('div');
     nodeEl.className = 'grid-stack-item' + (newWidget.type === 'divider' ? ' item-type-divider' : '');
@@ -3007,6 +3567,7 @@
 
     const contentEl = document.createElement('div');
     contentEl.className = 'grid-stack-item-content';
+    contentEl.setAttribute('data-widget-type', newWidget.type);
     contentEl.innerHTML = renderCardInnerHtml(newWidget);
     nodeEl.appendChild(contentEl);
 
@@ -3280,8 +3841,22 @@
       saveBtn.disabled = true;
     }
 
-    if (window.innerWidth <= 640) {
-      normalizeMobileLayoutToDesktop();
+    if (isMobileViewport()) {
+      if (mobileOrderChanged) {
+        normalizeMobileLayoutToDesktop();
+      } else {
+        // 若於手機端僅編輯文字/連結/主題而未變動卡片順序，完整保留桌面端雙欄 Bento 網格座標與尺寸
+        widgets.forEach((w) => {
+          const savedGeo = initialDesktopGeometry.get(w.id);
+          if (savedGeo) {
+            w.x = savedGeo.x;
+            w.y = savedGeo.y;
+            w.w = savedGeo.w;
+            w.h = savedGeo.h;
+          }
+        });
+        sortWidgetsForMobileOrder();
+      }
     } else if (gridInstance && gridInstance.engine && gridInstance.engine.nodes) {
       gridInstance.engine.nodes.forEach((node) => {
         const id = node.id;
@@ -3293,7 +3868,21 @@
           target.h = node.h;
         }
       });
+      snapshotDesktopGeometry();
+      sortWidgetsForMobileOrder();
     }
+
+    // 確保名片卡片保存時帶上 Discord 真實頭像，避免覆蓋成預設 logo
+    widgets.forEach((w) => {
+      if (w.type === 'profile_header' || w.id === 'header') {
+        if (!w.content) w.content = {};
+        if (!w.content.avatar_url || w.content.avatar_url === '/static/logo.png') {
+          if (profileData.avatar_url && profileData.avatar_url !== '/static/logo.png') {
+            w.content.avatar_url = profileData.avatar_url;
+          }
+        }
+      }
+    });
 
     const payload = {
       username: profileData.username,
@@ -3340,7 +3929,85 @@
   // ==================== 14. 事件綁定 (Event Listeners) ====================
 
 
-  // ==================== 2.9 手機版排版正規化至電腦端 (單一橫排一區塊) ====================
+  // ==================== 2.9 手機版排版正規化至電腦端 (智慧雙欄 Bento Grid 緊湊對齊，杜絕無效空白與圖片裁切) ====================
+  function getRecommendedDesktopHeight(w, colWidth = 6) {
+    if (!w) return 2;
+    if (w.type === 'profile_header') return Math.max(2, Number(w.h) || 2);
+    if (w.type === 'divider') return 1;
+    if (w.type === 'bot_economy') return 2;
+    if (w.type === 'media_embed') {
+      if (w.content && w.content.aspect_ratio && (w.content.media_type || 'image') === 'image') {
+        return getMediaGridHeightForRatio(w.content.aspect_ratio, colWidth);
+      }
+      // 6 欄寬 (約 540px) 時 h=3 (285px) 為標準 16:9 黃金比例，完整呈現圖片不裁切；若為 12 欄全寬則需 h=5
+      return colWidth >= 10 ? Math.max(5, Number(w.h) || 5) : 3;
+    }
+    if (w.type === 'social_link') {
+      return 2;
+    }
+    if (w.type === 'text_card') {
+      const rawH = Number(w.h) || 5;
+      return Math.max(3, Math.min(8, rawH));
+    }
+    return Math.max(2, Number(w.h) || 2);
+  }
+
+  function packSegmentIntoTwoColumns(segment, startY) {
+    if (!segment || segment.length === 0) return startY;
+    if (segment.length === 1) {
+      const only = segment[0];
+      only.x = 0;
+      only.y = startY;
+      if (only.type === 'media_embed') {
+        only.w = 6;
+        only.h = getRecommendedDesktopHeight(only, 6);
+      } else {
+        only.w = 12;
+        only.h = getRecommendedDesktopHeight(only, 12);
+      }
+      return startY + only.h;
+    }
+
+    const n = segment.length;
+    const heights = segment.map((w) => getRecommendedDesktopHeight(w, 6));
+    const totalH = heights.reduce((acc, h) => acc + h, 0);
+
+    // 配合手機版「優先由左上到左下、再往右顯示」順序演算法：
+    // 將前半段卡片由上而下配置於左欄 (x=0)，後半段卡片由上而下配置於右欄 (x=6)，並挑選左右欄高度最均衡之切分點
+    let bestSplit = Math.max(1, Math.ceil(n / 2));
+    let bestDiff = Infinity;
+    let prefixH = 0;
+    for (let i = 1; i < n; i++) {
+      prefixH += heights[i - 1];
+      const suffixH = totalH - prefixH;
+      const diff = Math.abs(prefixH - suffixH);
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        bestSplit = i;
+      }
+    }
+
+    let leftY = startY;
+    let rightY = startY;
+    for (let i = 0; i < n; i++) {
+      const w = segment[i];
+      const h = heights[i];
+      w.w = 6;
+      w.h = h;
+      if (i < bestSplit) {
+        w.x = 0;
+        w.y = leftY;
+        leftY += h;
+      } else {
+        w.x = 6;
+        w.y = rightY;
+        rightY += h;
+      }
+    }
+
+    return Math.max(leftY, rightY);
+  }
+
   function normalizeMobileLayoutToDesktop() {
     let curY = 0;
     const headerWidget = widgets.find((w) => w.type === 'profile_header');
@@ -3348,19 +4015,72 @@
       headerWidget.x = 0;
       headerWidget.y = 0;
       headerWidget.w = 12;
-      curY = headerWidget.h || 2;
+      headerWidget.h = Math.max(2, Number(headerWidget.h) || 2);
+      curY = headerWidget.h;
     }
 
     const nonHeader = widgets.filter((w) => w.type !== 'profile_header');
+    let currentSegment = [];
     nonHeader.forEach((w) => {
-      w.x = 0;
-      w.w = 12;
-      w.y = curY;
-      curY += (w.h || 2);
+      if (w.type === 'divider') {
+        if (currentSegment.length > 0) {
+          curY = packSegmentIntoTwoColumns(currentSegment, curY);
+          currentSegment = [];
+        }
+        w.x = 0;
+        w.w = 12;
+        w.h = 1;
+        w.y = curY;
+        curY += 1;
+      } else {
+        currentSegment.push(w);
+      }
     });
+    if (currentSegment.length > 0) {
+      curY = packSegmentIntoTwoColumns(currentSegment, curY);
+    }
 
-    // 依 y 排序 widgets
-    widgets.sort((a, b) => (a.y || 0) - (b.y || 0));
+    // 同步清理並對齊分隔切點：保留名片下方預設分隔線 (y = header.h)，移除舊單欄造成的殘留無效切點
+    const headerBottom = headerWidget ? (Number(headerWidget.h) || 2) : 2;
+    themeConfig.section_splits = nonHeader.length > 0 ? [headerBottom] : [];
+    themeConfig.section_splits_x = [];
+
+    // 依手機版「優先由左上到左下、再往右顯示」順序演算法排序 widgets
+    const ordered = getMobileOrderedWidgets(widgets);
+    if (ordered.length === widgets.length) {
+      widgets.splice(0, widgets.length, ...ordered);
+    }
+  }
+
+  // 自動檢測並修復先前因舊版手機端強制單欄化 (全部 w=12) 之版面；絕不覆寫已具備多欄座標之電腦版排版
+  function healMobileCorruptedLayout() {
+    const nonHeader = widgets.filter((w) => w.type !== 'profile_header' && w.type !== 'divider');
+    if (nonHeader.length < 2) return;
+
+    // 僅在所有非名片卡片皆為 x=0 且 w=12 (舊版手機端單欄覆寫殘留) 時才重排為雙欄
+    const allFullWidthSingleCol = nonHeader.every(
+      (w) => (Number(w.w) || 12) === 12 && (Number(w.x) || 0) === 0
+    );
+
+    if (allFullWidthSingleCol) {
+      widgets.sort((a, b) => {
+        if (a.type === 'profile_header') return -1;
+        if (b.type === 'profile_header') return 1;
+        return (Number(a.y) || 0) - (Number(b.y) || 0) || (Number(a.x) || 0) - (Number(b.x) || 0);
+      });
+      mobileOrderChanged = true;
+      normalizeMobileLayoutToDesktop();
+    } else {
+      // 若有圖片卡片已設定 3:4 或 1:1 裁切比例，確保桌面端網格高度與比例一致
+      nonHeader.forEach((w) => {
+        if (w.type === 'media_embed' && w.content && w.content.aspect_ratio && (w.content.media_type || 'image') === 'image') {
+          const ratio = String(w.content.aspect_ratio).trim();
+          if ((ratio === '3 / 4' || ratio === '1 / 1') && (Number(w.h) || 3) <= 3) {
+            w.h = getMediaGridHeightForRatio(ratio, Number(w.w) || 6);
+          }
+        }
+      });
+    }
   }
 
   function moveWidgetOrder(widgetId, delta) {
@@ -3400,6 +4120,7 @@
       return (idxA === -1 ? 999 : idxA) - (idxB === -1 ? 999 : idxB);
     });
 
+    mobileOrderChanged = true;
     normalizeMobileLayoutToDesktop();
     updateGlassSections();
     showToast('已調整卡片順序', 'info');
@@ -3509,6 +4230,7 @@
         return (idxA === -1 ? 999 : idxA) - (idxB === -1 ? 999 : idxB);
       });
 
+      mobileOrderChanged = true;
       normalizeMobileLayoutToDesktop();
       updateGlassSections();
       showToast('已更新卡片順序', 'info');
@@ -4158,13 +4880,37 @@
       spotlightBox.style.height = `${height}px`;
 
       const tipWidth = Math.min(340, window.innerWidth - 32);
-      const tipHeight = 200;
-      let tipTop = rect.bottom + 16;
-      let tipLeft = Math.max(16, Math.min(rect.left + (rect.width - tipWidth) / 2, window.innerWidth - tipWidth - 16));
+      const tipHeight = tooltipBox.offsetHeight || 200;
+      const topSafe = 72;     // 避開頂部導覽列
+      const bottomSafe = 100; // 避開底部浮動工具列
+      const gap = 16;
+      const vw = window.innerWidth;
+      const maxTop = Math.max(8, window.innerHeight - bottomSafe - tipHeight);
+      const minTop = Math.min(topSafe, maxTop);
+      const clampTop = (v) => Math.max(minTop, Math.min(v, maxTop));
+      const clampLeft = (v) => Math.max(16, Math.min(v, vw - tipWidth - 16));
+      const spot = { l: left, t: top, r: left + width, b: top + height };
 
-      if (tipTop + tipHeight > window.innerHeight - 20) {
-        tipTop = Math.max(20, rect.top - tipHeight - 16);
+      // 候選位置：下、上、右、左；挑選與聚光燈重疊面積最小者 (優先順序為先後)
+      const candidates = [
+        { top: clampTop(rect.bottom + gap), left: clampLeft(rect.left + (rect.width - tipWidth) / 2) },
+        { top: clampTop(rect.top - tipHeight - gap), left: clampLeft(rect.left + (rect.width - tipWidth) / 2) },
+        { top: clampTop(rect.top + (rect.height - tipHeight) / 2), left: clampLeft(rect.right + gap) },
+        { top: clampTop(rect.top + (rect.height - tipHeight) / 2), left: clampLeft(rect.left - tipWidth - gap) },
+      ];
+      const overlapOf = (c) => {
+        const w = Math.min(spot.r, c.left + tipWidth) - Math.max(spot.l, c.left);
+        const h = Math.min(spot.b, c.top + tipHeight) - Math.max(spot.t, c.top);
+        return w > 0 && h > 0 ? w * h : 0;
+      };
+      let best = candidates[0];
+      let bestOverlap = overlapOf(best);
+      for (let i = 1; i < candidates.length && bestOverlap > 0; i++) {
+        const o = overlapOf(candidates[i]);
+        if (o < bestOverlap) { best = candidates[i]; bestOverlap = o; }
       }
+      const tipTop = best.top;
+      const tipLeft = best.left;
 
       tooltipBox.style.top = `${tipTop}px`;
       tooltipBox.style.left = `${tipLeft}px`;
@@ -4219,12 +4965,33 @@
     }
   }
 
+  // 導覽期間鎖定頁面捲動 (滾輪 / 觸控 / 鍵盤)；僅程式 scrollIntoView 可移動畫面
+  const TOUR_SCROLL_KEYS = new Set([' ', 'PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown']);
+  function blockTourScroll(e) {
+    if (!isTourActive) return;
+    e.preventDefault();
+  }
+  function blockTourScrollKeys(e) {
+    if (!isTourActive) return;
+    if (TOUR_SCROLL_KEYS.has(e.key) && !(e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName))) {
+      e.preventDefault();
+    }
+  }
+
   function bindTourKeyboard() {
     document.addEventListener('keydown', handleTourKeyDown, true);
+    document.addEventListener('keydown', blockTourScrollKeys, true);
+    window.addEventListener('wheel', blockTourScroll, { passive: false, capture: true });
+    window.addEventListener('touchmove', blockTourScroll, { passive: false, capture: true });
+    document.documentElement.classList.add('tour-scroll-lock');
   }
 
   function unbindTourKeyboard() {
     document.removeEventListener('keydown', handleTourKeyDown, true);
+    document.removeEventListener('keydown', blockTourScrollKeys, true);
+    window.removeEventListener('wheel', blockTourScroll, { capture: true });
+    window.removeEventListener('touchmove', blockTourScroll, { capture: true });
+    document.documentElement.classList.remove('tour-scroll-lock');
   }
 
   function setupSpotlightTourEvents() {

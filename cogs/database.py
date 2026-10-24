@@ -1,4 +1,5 @@
 import copy
+import csv
 import datetime
 import json
 import math
@@ -1833,7 +1834,7 @@ def build_panel_link_view(
 # 個人 Profile 模組 (Bento Grid 網格拖移式個人頁面)
 # ==============================================================================
 
-def get_default_profile_widgets(username: str, display_name: str) -> list[dict[str, Any]]:
+def get_default_profile_widgets(username: str, display_name: str, avatar_url: Optional[str] = None) -> list[dict[str, Any]]:
     """產生預設的 Bento Grid 卡片清單。
 
     規則：優先讀取資料庫中 @patricksu 的設定檔作為第一次登入編輯面板的預設畫面，
@@ -1852,13 +1853,20 @@ def get_default_profile_widgets(username: str, display_name: str) -> list[dict[s
                     raw_widgets = json.loads(row["layout_widgets"])
                     if isinstance(raw_widgets, list) and len(raw_widgets) > 0:
                         cloned_widgets = copy.deepcopy(raw_widgets)
-                        # 個人化更新 header 卡片
+                        # 個人化更新 header 卡片，並清空預設社群連結按鈕
                         for w in cloned_widgets:
                             if w.get("type") == "profile_header" or w.get("id") == "header":
                                 if "content" not in w:
                                     w["content"] = {}
                                 w["content"]["display_name"] = display_name
                                 w["content"]["username"] = username
+                                if avatar_url:
+                                    w["content"]["avatar_url"] = avatar_url
+                            elif w.get("type") == "social_link":
+                                if "content" not in w or not isinstance(w["content"], dict):
+                                    w["content"] = {"title": "社群連結", "links": []}
+                                else:
+                                    w["content"]["links"] = []
                         return cloned_widgets
             finally:
                 conn.close()
@@ -1880,7 +1888,7 @@ def get_default_profile_widgets(username: str, display_name: str) -> list[dict[s
                 "hashtag": "自訂標籤",
                 "hashtags": ["自訂標籤"],
                 "bio": "自訂個性簽名",
-                "avatar_url": "/static/logo.png"
+                "avatar_url": avatar_url or "/static/logo.png"
             }
         },
         {
@@ -1903,32 +1911,7 @@ def get_default_profile_widgets(username: str, display_name: str) -> list[dict[s
             "h": 2,
             "content": {
                 "title": "社群連結",
-                "links": [
-                    {
-                        "id": f"btn-{int(time.time()*1000)}-1",
-                        "platform": "discord",
-                        "username": "usename",
-                        "url": "https://discord.gg",
-                        "style": "avatar",
-                        "avatar_url": ""
-                    },
-                    {
-                        "id": f"btn-{int(time.time()*1000)}-2",
-                        "platform": "instagram",
-                        "username": "username",
-                        "url": "https://instagram.com",
-                        "style": "inline",
-                        "avatar_url": ""
-                    },
-                    {
-                        "id": f"btn-{int(time.time()*1000)}-3",
-                        "platform": "threads",
-                        "username": "username",
-                        "url": "https://threads.net",
-                        "style": "inline",
-                        "avatar_url": ""
-                    }
-                ]
+                "links": []
             }
         },
         {
@@ -1959,32 +1942,7 @@ def get_default_profile_widgets(username: str, display_name: str) -> list[dict[s
             "h": 2,
             "content": {
                 "title": "友列",
-                "links": [
-                    {
-                        "id": f"btn-{int(time.time()*1000)}-4",
-                        "platform": "threads",
-                        "username": "username",
-                        "url": "https://threads.net",
-                        "style": "inline",
-                        "avatar_url": ""
-                    },
-                    {
-                        "id": f"btn-{int(time.time()*1000)}-5",
-                        "platform": "spotify",
-                        "username": "username",
-                        "url": "https://spotify.com",
-                        "style": "inline",
-                        "avatar_url": ""
-                    },
-                    {
-                        "id": f"btn-{int(time.time()*1000)}-6",
-                        "platform": "github",
-                        "username": "username",
-                        "url": "https://github.com",
-                        "style": "avatar",
-                        "avatar_url": ""
-                    }
-                ]
+                "links": []
             }
         },
         {
@@ -2187,7 +2145,7 @@ def seed_default_profile(
     target_bio = bio or ("熱愛開源開發與社群建造。正在打造次世代 Discord 機器人！" if clean_user.lower() == "patricksu" else "這是我的專屬個人檔案主頁。")
 
     default_theme = get_default_profile_theme()
-    default_widgets = get_default_profile_widgets(clean_user, target_display)
+    default_widgets = get_default_profile_widgets(clean_user, target_display, avatar_url=target_avatar)
 
     upsert_user_profile(
         user_id=target_uid,
@@ -2210,26 +2168,54 @@ def seed_default_profile(
     }
 
 
-def get_profile_economy_data(user_id: Any) -> dict[str, Any]:
-    """查詢使用者的機器人經濟系統數據（若尚未建立或為本地測試帳號，回傳安全的模擬數據）。"""
+def get_profile_economy_data(user_id: Any, owner_id: Optional[Any] = None) -> dict[str, Any]:
+    """查詢使用者的機器人經濟系統數據（若尚未建立或為本地測試帳號，回傳安全的模擬數據）。
+    機器人擁有者 (Bot Owner) 不參與金幣富豪排行，且排除於其他玩家的名次計算之外。
+    """
     numeric_id: Optional[int] = None
     try:
         numeric_id = int(user_id)
     except (ValueError, TypeError):
         numeric_id = None
 
+    resolved_owner_id: Optional[int] = None
+    raw_owner = owner_id or os.getenv("DISCORD_OWNER_ID") or os.getenv("OWNER_ID")
+    if raw_owner:
+        try:
+            resolved_owner_id = int(str(raw_owner).strip())
+        except (ValueError, TypeError):
+            resolved_owner_id = None
+    if resolved_owner_id is None:
+        resolved_owner_id = 941935836189065236
+
+    is_owner_account = (
+        (numeric_id is not None and resolved_owner_id is not None and numeric_id == resolved_owner_id)
+        or is_profile_admin(user_id)
+    )
+
     if numeric_id is not None:
         try:
             econ = get_economy_user(numeric_id)
-            if econ and (econ.get("balance", 0) > 0 or econ.get("daily_streak", 0) > 0 or econ.get("total_earned", 0) > 0):
-                # 查詢金幣富豪排行榜名次
-                rank_str = "未上榜"
-                try:
-                    _, rank_info = get_economy_leaderboard(limit=10, user_id=numeric_id)
-                    if rank_info and rank_info.get("rank") is not None:
-                        rank_str = f"第 {rank_info['rank']} 名"
-                except Exception:
-                    pass
+            if econ and (
+                is_owner_account
+                or econ.get("balance", 0) > 0
+                or econ.get("daily_streak", 0) > 0
+                or econ.get("total_earned", 0) > 0
+            ):
+                if is_owner_account:
+                    rank_str = "不參與排行"
+                else:
+                    rank_str = "未上榜"
+                    try:
+                        _, rank_info = get_economy_leaderboard(
+                            limit=10,
+                            user_id=numeric_id,
+                            exclude_user_id=resolved_owner_id,
+                        )
+                        if rank_info and rank_info.get("rank") is not None:
+                            rank_str = f"第 {rank_info['rank']} 名"
+                    except Exception:
+                        pass
 
                 return {
                     "balance": int(econ.get("balance", 0)),
@@ -2246,7 +2232,7 @@ def get_profile_economy_data(user_id: Any) -> dict[str, Any]:
         "balance": 12500,
         "daily_streak": 15,
         "total_earned": 38600,
-        "gold_rank": "第 3 名",
+        "gold_rank": "不參與排行" if is_owner_account else "第 3 名",
         "is_mock": True,
     }
 
@@ -2260,7 +2246,7 @@ def is_profile_admin(user_id: Any) -> bool:
     if not user_id:
         return False
     str_uid = str(user_id).strip()
-    if str_uid in ("dev_user_patricksu", "941935836189065236", "1477930950288478262"):
+    if str_uid in ("dev_user_patricksu", "dev_user_chienjungsu", "941935836189065236", "1477930950288478262"):
         return True
 
     # 檢查環境變數中的 owner_id
@@ -2645,6 +2631,169 @@ def update_support_ticket_status(ticket_id: int, status: str, admin_note: str = 
             return False
         finally:
             conn.close()
+
+
+# ==============================================================================
+# 個人檔案瀏覽次數 (CSV + SQLite 雙重持久化與純 SVG 向量走勢作圖)
+# ==============================================================================
+
+PROFILE_VIEWS_CSV = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "profile_views.csv")
+
+
+def init_profile_views_tables():
+    """初始化瀏覽次數資料表與 CSV 儲存檔案。"""
+    init_db()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS profile_views (
+                    username TEXT PRIMARY KEY,
+                    total_views INTEGER NOT NULL DEFAULT 0,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS profile_daily_views (
+                    username TEXT NOT NULL,
+                    view_date TEXT NOT NULL,
+                    views INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (username, view_date)
+                );
+                """
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    try:
+        os.makedirs(os.path.dirname(PROFILE_VIEWS_CSV), exist_ok=True)
+        if not os.path.exists(PROFILE_VIEWS_CSV):
+            with open(PROFILE_VIEWS_CSV, "w", encoding="utf-8", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(["date", "username", "views"])
+    except Exception as exc:
+        print(f"[WARN] 初始化 profile_views.csv 失敗: {exc}")
+
+
+def record_profile_view(username: str, increment: bool = True) -> dict[str, Any]:
+    """紀錄並取得個人檔案瀏覽次數與 SVG 趨勢走勢圖。
+    同時儲存至 SQLite 資料庫與 data/profile_views.csv，支援 CSV 驅動作圖。
+    """
+    clean_username = username.strip().lower()
+    if not clean_username:
+        return {"total_views": 1, "sparkline_d": "M 36 17 Q 52 13, 68 10", "trend": [1]}
+
+    init_profile_views_tables()
+    today_str = datetime.date.today().isoformat()
+
+    total_views = 0
+    today_views = 0
+
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            if increment:
+                # 累加總次數
+                cursor.execute(
+                    """
+                    INSERT INTO profile_views (username, total_views, updated_at)
+                    VALUES (?, 1, CURRENT_TIMESTAMP)
+                    ON CONFLICT(username) DO UPDATE SET
+                        total_views = total_views + 1,
+                        updated_at = CURRENT_TIMESTAMP;
+                    """,
+                    (clean_username,),
+                )
+                # 累加每日次數
+                cursor.execute(
+                    """
+                    INSERT INTO profile_daily_views (username, view_date, views)
+                    VALUES (?, ?, 1)
+                    ON CONFLICT(username, view_date) DO UPDATE SET
+                        views = views + 1;
+                    """,
+                    (clean_username, today_str),
+                )
+                conn.commit()
+
+            cursor.execute("SELECT total_views FROM profile_views WHERE username = ?;", (clean_username,))
+            row = cursor.fetchone()
+            total_views = int(row["total_views"]) if row else 1
+
+            cursor.execute("SELECT views FROM profile_daily_views WHERE username = ? AND view_date = ?;", (clean_username, today_str))
+            drow = cursor.fetchone()
+            today_views = int(drow["views"]) if drow else 1
+        finally:
+            conn.close()
+
+    # 同步寫入或更新 data/profile_views.csv
+    try:
+        csv_rows = []
+        found = False
+        if os.path.exists(PROFILE_VIEWS_CSV):
+            with open(PROFILE_VIEWS_CSV, "r", encoding="utf-8") as f:
+                reader = csv.reader(f)
+                header = next(reader, None)
+                for r in reader:
+                    if len(r) >= 3:
+                        d_col, u_col, v_col = r[0].strip(), r[1].strip().lower(), r[2].strip()
+                        if d_col == today_str and u_col == clean_username:
+                            csv_rows.append([d_col, u_col, str(today_views)])
+                            found = True
+                        else:
+                            csv_rows.append([d_col, u_col, v_col])
+        if not found:
+            csv_rows.append([today_str, clean_username, str(today_views)])
+
+        with open(PROFILE_VIEWS_CSV, "w", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["date", "username", "views"])
+            writer.writerows(csv_rows)
+    except Exception as exc:
+        print(f"[WARN] 寫入 profile_views.csv 失敗: {exc}")
+
+    # 從 CSV / SQLite 查詢最近 7 天的每日走勢圖 (Sparkline SVG path)
+    trend_vals = []
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            for i in range(6, -1, -1):
+                past_date = (datetime.date.today() - datetime.timedelta(days=i)).isoformat()
+                cursor.execute("SELECT views FROM profile_daily_views WHERE username = ? AND view_date = ?;", (clean_username, past_date))
+                r = cursor.fetchone()
+                trend_vals.append(int(r["views"]) if r else 0)
+        finally:
+            conn.close()
+
+    # 若為剛建立帳號或今日初次瀏覽，補底維持曲線美感
+    if not any(trend_vals):
+        trend_vals[-1] = max(1, total_views)
+
+    min_v = min(trend_vals)
+    max_v = max(trend_vals)
+    points = []
+    for i, v in enumerate(trend_vals):
+        x = round(36 + i * 5.33, 1)
+        if max_v == min_v:
+            y = 15.0
+        else:
+            y = round(21.0 - ((v - min_v) / (max_v - min_v)) * 11.0, 1)
+        points.append(f"{x} {y}")
+
+    sparkline_d = "M " + " L ".join(points)
+
+    return {
+        "total_views": total_views,
+        "sparkline_d": sparkline_d,
+        "trend": trend_vals,
+    }
 
 
 

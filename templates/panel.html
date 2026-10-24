@@ -69,7 +69,7 @@
             {% if can_edit_profile %}
             <a class="dropdown-item dropdown-profile-link" href="/profile">
               <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
+                <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
               </svg>
               <span>個人主頁</span>
             </a>
@@ -198,28 +198,6 @@
       </div>
 
       <div class="server-cards-grid">
-        {% if can_edit_profile %}
-        <!-- 個人檔案專屬入口卡片 (僅已獲授權者可見) -->
-        <a href="/profile" class="server-chip server-select-card profile-entry-card" style="border-color: rgba(56, 189, 248, 0.4); background: linear-gradient(135deg, rgba(56, 189, 248, 0.12), rgba(15, 23, 42, 0.6)); text-decoration: none;">
-          <div class="card-server-icon-wrapper" style="border-color: rgba(56, 189, 248, 0.5);">
-            <img class="server-icon-img" src="{{ user.avatar_url }}" alt="個人主頁" style="width: 100%; height: 100%; object-fit: cover;" />
-          </div>
-          <div class="card-server-details server-info">
-            <h4 class="server-name card-server-name" style="color: #38bdf8;">{{ user.global_name or user.username }} 的個人檔案</h4>
-            <div class="card-server-status">
-              <span class="server-status in-guild status-badge" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; border-color: rgba(56, 189, 248, 0.3);">✨ 網格主頁編輯器</span>
-            </div>
-          </div>
-          <div class="card-server-action">
-            <span class="btn-manage-guild" style="background: rgba(56, 189, 248, 0.2); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.4);">
-              <span>進入編輯</span>
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                <path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41z"/>
-              </svg>
-            </span>
-          </div>
-        </a>
-        {% endif %}
         {% for g in guilds %}
         <div class="server-chip server-select-card" data-guild-id="{{ g.id }}" data-guild-name="{{ g.name }}" data-bot-in="{{ 'true' if g.bot_in_guild else 'false' }}">
           <div class="card-server-icon-wrapper">
@@ -571,7 +549,7 @@
         <div id="tab-owner" class="tab-pane">
           <div class="pane-header">
             <div class="tag">Admin Settings</div>
-            <h2>⚙️ 管理員設定</h2>
+            <h2>管理員設定</h2>
             <p class="pane-desc">
               配置全域經濟系統參數、玩家金幣帳戶、模組線上熱重載以及外部 API 調用配額。
             </p>
@@ -654,7 +632,7 @@
                   <span>編輯權限與申請審核</span>
                 </button>
                 <button class="owner-subtab-btn" data-subtab="owner-sub-blocked-users" type="button">
-                  <span>🚫 封鎖黑名單管理</span>
+                  <span>封鎖黑名單管理</span>
                 </button>
               </div>
             </div>
@@ -663,7 +641,7 @@
           <form id="form-owner-economy" class="panel-form">
             <!-- 子分頁 1-1: 基礎貨幣與簽到設定 -->
             <div id="owner-sub-economy-base" class="owner-subpane active">
-              <h4 class="subpane-group-title">🪙 基礎貨幣與轉帳設定</h4>
+              <h4 class="subpane-group-title">基礎貨幣與轉帳設定</h4>
               <div class="form-row-2">
                 <div class="form-group">
                   <label>貨幣名稱</label>
@@ -831,7 +809,7 @@
           <!-- 子分頁 1-3: 玩家金幣帳戶管理 -->
           <div id="owner-sub-users" class="owner-subpane">
             <div class="user-manage-box">
-              <h4 class="subpane-group-title">🔍 查詢 Discord 玩家金幣與 AI 貨幣帳戶</h4>
+              <h4 class="subpane-group-title">查詢 Discord 玩家金幣與 AI 貨幣帳戶</h4>
               <div class="search-user-row">
                 <input type="text" id="manage-user-id" class="form-control" placeholder="輸入 Discord User ID" />
                 <button id="btn-fetch-user-balance" class="btn primary" type="button">
@@ -901,12 +879,12 @@
             <div class="reload-manage-box">
               <div class="reload-header-flex">
                 <div>
-                  <h4 class="subpane-group-title">🔄 Cog 模組線上熱重載 (免重啟機器人)</h4>
+                  <h4 class="subpane-group-title">Cog 模組線上熱重載 (免重啟機器人)</h4>
                   <p class="pane-desc">代碼更新後可點擊重載對應模組，系統會自動在重載後將最新指令樹同步到 Discord 官方伺服器。</p>
                 </div>
                 <div class="cta-row" style="margin-top: 0;">
                   <button id="btn-reload-all-cogs" class="btn primary" type="button">
-                    <span>⚡ 全部模組一鍵重載</span>
+                    <span>全部模組一鍵重載</span>
                   </button>
                 </div>
               </div>
@@ -922,18 +900,18 @@
             <div class="reload-manage-box">
               <div class="reload-header-flex">
                 <div>
-                  <h4 class="subpane-group-title">📡 指令樹手動同步與運作日誌</h4>
+                  <h4 class="subpane-group-title">指令樹手動同步與運作日誌</h4>
                   <p class="pane-desc">手動強制向 Discord 官方重新同步斜線指令樹，並檢視即時重載與同步反饋。</p>
                 </div>
                 <div class="cta-row" style="margin-top: 0;">
                   <button id="btn-sync-all-commands" class="btn primary" type="button">
-                    <span>📡 強制同步指令樹</span>
+                    <span>強制同步指令樹</span>
                   </button>
                 </div>
               </div>
 
               <div class="sync-log-card">
-                <h5>📜 即時重載與同步日誌：</h5>
+                <h5>即時重載與同步日誌：</h5>
                 <pre id="reload-sync-output" class="sync-console">等待操作...</pre>
               </div>
             </div>
@@ -941,7 +919,7 @@
 
           <!-- 子分頁 2-3: 外部 API 配額 -->
           <div id="owner-sub-quota" class="owner-subpane">
-            <h4 class="subpane-group-title">📊 外部 API 每日調用配額監控</h4>
+            <h4 class="subpane-group-title">外部 API 每日調用配額監控</h4>
             <div class="quota-grid">
               <div class="quota-card">
                 <span class="quota-service-name">中央氣象署 CWA API (/weather)</span>
@@ -988,7 +966,7 @@
           <!-- 子分頁 3-2: 機器人全域預設設定 -->
           <div id="owner-sub-bot-defaults" class="owner-subpane">
             <div class="user-manage-box">
-              <h4 class="subpane-group-title">⚙️ 所有伺服器通用預設設定 (Bot Global Defaults)</h4>
+              <h4 class="subpane-group-title">所有伺服器通用預設設定 (Bot Global Defaults)</h4>
               <p class="form-hint" style="margin-bottom: 20px;">
                 此處設定的值將作為<strong>所有新伺服器或未個別自訂伺服器</strong>的預設基礎。您亦可點擊「一鍵套用至所有伺服器」將目前的預設值強制覆蓋更新至所有已加入的伺服器。
               </p>
@@ -1038,7 +1016,7 @@
                     <span>儲存為預設設定</span>
                   </button>
                   <button type="button" id="btn-apply-defaults-all" class="btn warning" style="flex: 1 1 200px;">
-                    <span>⚡ 一鍵套用至所有伺服器</span>
+                    <span>一鍵套用至所有伺服器</span>
                   </button>
                 </div>
               </form>
@@ -1048,7 +1026,7 @@
           <!-- 子分頁 5-1: 個人主頁編輯權限與申請審核 -->
           <div id="owner-sub-profile-auth" class="owner-subpane">
             <div class="user-manage-box">
-              <h4 class="subpane-group-title">🪪 手動發放個人檔案編輯權限</h4>
+              <h4 class="subpane-group-title">手動發放個人檔案編輯權限</h4>
               <p class="form-hint" style="margin-bottom: 16px;">
                 輸入使用者的 <strong>Discord User ID</strong> 即可直接為其開通個人主頁編輯與建立權限。
               </p>
@@ -1068,7 +1046,7 @@
                 </button>
               </form>
 
-              <h4 class="subpane-group-title" style="margin-top: 32px;">📋 已授權使用者名單</h4>
+              <h4 class="subpane-group-title" style="margin-top: 32px;">已授權使用者名單</h4>
               <div class="table-responsive" style="margin-bottom: 36px; max-height: 260px; overflow-y: auto;">
                 <table class="data-table" id="table-profile-permissions">
                   <thead>
@@ -1088,9 +1066,9 @@
               </div>
 
               <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 32px; margin-bottom: 8px;">
-                <h4 class="subpane-group-title" style="margin: 0;">📩 個人檔案申請審核 (來自 /support 提交)</h4>
+                <h4 class="subpane-group-title" style="margin: 0;">個人檔案申請審核 (來自 /support 提交)</h4>
                 <button type="button" class="btn-refresh-list" id="btn-refresh-profile-applications" style="background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.14); color: var(--text); padding: 5px 12px; border-radius: 8px; font-size: 12px; cursor: pointer;">
-                  🔄 重新整理單據
+                  重新整理單據
                 </button>
               </div>
               <p class="form-hint" style="margin-bottom: 16px;">
@@ -1100,16 +1078,15 @@
                 <table class="data-table" id="table-profile-applications">
                   <thead>
                     <tr>
-                      <th>提交者</th>
-                      <th>Discord ID</th>
-                      <th>申請理由與用途說明</th>
-                      <th>提交時間</th>
-                      <th>狀態</th>
+                      <th style="width: 220px;">提交者</th>
+                      <th style="width: 100px; text-align: center;">申請理由</th>
+                      <th style="width: 140px;">提交時間</th>
+                      <th style="width: 90px; text-align: center;">狀態</th>
                       <th style="text-align: right;">審核操作</th>
                     </tr>
                   </thead>
                   <tbody id="tbody-profile-applications">
-                    <tr><td colspan="6" style="text-align:center; color: var(--muted); padding: 18px;">載入中...</td></tr>
+                    <tr><td colspan="5" style="text-align:center; color: var(--muted); padding: 18px;">載入中...</td></tr>
                   </tbody>
                 </table>
               </div>
@@ -1119,7 +1096,7 @@
           <!-- 子分頁 5-2: 封鎖黑名單管理 (手動封鎖與解除封鎖) -->
           <div id="owner-sub-blocked-users" class="owner-subpane">
             <div class="user-manage-box">
-              <h4 class="subpane-group-title">🚫 手動封鎖違規使用者</h4>
+              <h4 class="subpane-group-title">手動封鎖違規使用者</h4>
               <p class="form-hint" style="margin-bottom: 16px;">
                 輸入濫用機器人、惡意高頻提交問題回報或違反個人檔案服務條款的使用者 <strong>Discord User ID</strong>，將其列入全域黑名單。列入黑名單後，該使用者將無法提交任何支援單據與儲存個人主頁。
               </p>
@@ -1135,14 +1112,14 @@
                   </div>
                 </div>
                 <button type="submit" class="btn warning" id="btn-submit-block-user" style="max-width: 220px; background: rgba(239, 68, 68, 0.2); border: 1px solid #ef4444; color: #f87171;">
-                  <span>🚫 加入封鎖黑名單</span>
+                  <span>加入封鎖黑名單</span>
                 </button>
               </form>
 
               <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 32px; margin-bottom: 8px;">
-                <h4 class="subpane-group-title" style="margin: 0;">📋 目前被封鎖的使用者名單</h4>
+                <h4 class="subpane-group-title" style="margin: 0;">目前被封鎖的使用者名單</h4>
                 <button type="button" class="btn-refresh-list" id="btn-refresh-blocked-users" style="background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.14); color: var(--text); padding: 5px 12px; border-radius: 8px; font-size: 12px; cursor: pointer;">
-                  🔄 重新整理黑名單
+                  重新整理黑名單
                 </button>
               </div>
               <p class="form-hint" style="margin-bottom: 16px;">
@@ -1307,6 +1284,28 @@
             </button>
             <button type="button" id="modal-confirm-ok" class="btn btn-confirm-danger">
               <span>確認清除</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+        <!-- 查看個人檔案申請理由 Modal 彈出視窗 -->
+    <div id="modal-view-app-reason" class="modal-backdrop" style="display: none;" aria-hidden="true">
+      <div class="modal-card" style="max-width: 480px; width: 92%;">
+        <div class="modal-header">
+          <h3 id="modal-view-app-reason-title">個人檔案申請理由</h3>
+          <button id="modal-view-app-reason-close" class="btn-close-modal" type="button" aria-label="關閉">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div style="margin-bottom: 12px; font-size: 13px; color: var(--muted);">
+            提交者：<span id="modal-view-app-user" style="color: var(--text); font-weight: 600;"></span>
+          </div>
+          <div style="background: rgba(0, 0, 0, 0.3); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; padding: 14px; font-size: 14px; line-height: 1.6; color: var(--text); white-space: pre-wrap; word-break: break-all; max-height: 280px; overflow-y: auto;" id="modal-view-app-reason-text">
+          </div>
+          <div class="modal-footer" style="margin-top: 18px; display: flex; justify-content: flex-end;">
+            <button type="button" id="modal-view-app-reason-ok" class="btn secondary">
+              <span>關閉</span>
             </button>
           </div>
         </div>
