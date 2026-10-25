@@ -85,48 +85,49 @@
   {% include '_site_shell.html' %}
 
   <main class="support-main">
+    {% if not user %}
+    <!-- 未登入狀態：極簡現代卡片 (與 panel 登入介面完全一致) -->
+    <section class="unauth-card">
+      <div class="unauth-logo" aria-hidden="true">
+        <svg viewBox="0 0 127.14 96.36">
+          <path d="M107.7,8.07A105.15,105.15,0,0,0,81.47,0a72.06,72.06,0,0,0-3.36,6.83A97.68,97.68,0,0,0,49,6.83,72.37,72.37,0,0,0,45.64,0,105.89,105.89,0,0,0,19.39,8.09C2.79,32.65-1.71,56.6.54,80.21h0A105.73,105.73,0,0,0,32.71,96.36,77.7,77.7,0,0,0,39.6,85.25a68.42,68.42,0,0,1-10.85-5.18c.91-.66,1.8-1.34,2.66-2a75.57,75.57,0,0,0,64.32,0c.87.71,1.76,1.39,2.66,2a68.68,68.68,0,0,1-10.87,5.19,77,77,0,0,0,6.89,11.1A105.25,105.25,0,0,0,126.6,80.22h0C129.24,52.84,122.09,29.11,107.7,8.07ZM42.45,65.69C36.18,65.69,31,60,31,53s5-12.74,11.43-12.74S54,45.91,53.89,53,48.84,65.69,42.45,65.69Zm42.24,0C78.41,65.69,73.25,60,73.25,53s5-12.74,11.44-12.74S96.23,45.91,96.12,53,91.08,65.69,84.69,65.69Z"/>
+        </svg>
+      </div>
+      <h2 class="unauth-title">登入服務支援</h2>
+      <p class="unauth-desc">請使用 Discord 帳號登入，以提交個人檔案申請或問題回報。</p>
+      <a class="btn-discord-login" href="/login?next=/support{% if initial_category %}?category={{ initial_category }}{% endif %}">
+        <svg viewBox="0 0 127.14 96.36" aria-hidden="true">
+          <path d="M107.7,8.07A105.15,105.15,0,0,0,81.47,0a72.06,72.06,0,0,0-3.36,6.83A97.68,97.68,0,0,0,49,6.83,72.37,72.37,0,0,0,45.64,0,105.89,105.89,0,0,0,19.39,8.09C2.79,32.65-1.71,56.6.54,80.21h0A105.73,105.73,0,0,0,32.71,96.36,77.7,77.7,0,0,0,39.6,85.25a68.42,68.42,0,0,1-10.85-5.18c.91-.66,1.8-1.34,2.66-2a75.57,75.57,0,0,0,64.32,0c.87.71,1.76,1.39,2.66,2a68.68,68.68,0,0,1-10.87,5.19,77,77,0,0,0,6.89,11.1A105.25,105.25,0,0,0,126.6,80.22h0C129.24,52.84,122.09,29.11,107.7,8.07ZM42.45,65.69C36.18,65.69,31,60,31,53s5-12.74,11.43-12.74S54,45.91,53.89,53,48.84,65.69,42.45,65.69Zm42.24,0C78.41,65.69,73.25,60,73.25,53s5-12.74,11.44-12.74S96.23,45.91,96.12,53,91.08,65.69,84.69,65.69Z"/>
+        </svg>
+        <span>透過 Discord 登入</span>
+      </a>
+      <div>
+        <a class="unauth-back-link" href="/">返回首頁</a>
+      </div>
+    </section>
+
+    {% elif is_blocked %}
+    <!-- 帳號封鎖提示 -->
+    <section class="unauth-card">
+      <div class="unauth-logo is-danger" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8 0-1.85.63-3.55 1.69-4.9L16.9 18.31C15.55 19.37 13.85 20 12 20zm6.31-3.1L7.1 5.69C8.45 4.63 10.15 4 12 4c4.42 0 8 3.58 8 8 0 1.85-.63 3.55-1.69 4.9z"/>
+        </svg>
+      </div>
+      <h2 class="unauth-title">帳號已被封鎖</h2>
+      <p class="unauth-desc">您的帳號因違反服務條款或濫用服務已被系統管理員封鎖，無法提交支援單據。</p>
+      <div>
+        <a class="unauth-back-link" href="/">返回首頁</a>
+      </div>
+    </section>
+
+    {% else %}
     <section class="hero" id="card-form-container">
       <div class="support-header">
         <div class="tag">SUPPORT &amp; REQUESTS</div>
         <h2>服務支援與申請</h2>
         <p class="support-subtitle">提交個人檔案頁面申請或問題回報，管理團隊將同步審核處理。</p>
       </div>
-
-      {% if not user %}
-      <!-- 未登入提示區塊 -->
-      <div class="support-center">
-        <div class="unauth-logo">
-          <svg viewBox="0 0 24 24" width="30" height="30" fill="currentColor">
-            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z"/>
-          </svg>
-        </div>
-        <h3 class="unauth-title">需要登入 Discord 帳號</h3>
-        <p class="unauth-desc">
-          為了記錄您的申請者身分並在審核通過後自動發放權限，提交申請前請先登入 Discord。
-        </p>
-        <div class="state-actions">
-          <a href="/login?next=/support{% if initial_category %}?category={{ initial_category }}{% endif %}" class="btn-discord-login"><span>透過 Discord 登入</span></a>
-        </div>
-      </div>
-
-      {% elif is_blocked %}
-      <!-- 帳號封鎖提示 -->
-      <div class="support-center">
-        <div class="unauth-logo is-danger">
-          <svg viewBox="0 0 24 24" width="30" height="30" fill="currentColor">
-            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8 0-1.85.63-3.55 1.69-4.9L16.9 18.31C15.55 19.37 13.85 20 12 20zm6.31-3.1L7.1 5.69C8.45 4.63 10.15 4 12 4c4.42 0 8 3.58 8 8 0 1.85-.63 3.55-1.69 4.9z"/>
-          </svg>
-        </div>
-        <h3 class="unauth-title">帳號已被封鎖</h3>
-        <p class="unauth-desc">
-          您的帳號因違反服務條款或濫用服務已被系統管理員封鎖，無法提交支援單據。
-        </p>
-        <div class="state-actions">
-          <a href="/" class="btn secondary"><span>返回首頁</span></a>
-        </div>
-      </div>
-
-      {% else %}
       <!-- 申請者身分標籤 -->
       <div class="user-pill">
         <img class="user-pill-avatar" src="{{ user.avatar_url or '/static/logo.png' }}" alt="{{ user.username }}" onerror="this.src='/static/logo.png'" />
@@ -196,8 +197,8 @@
           <a href="/" class="btn secondary"><span>返回首頁</span></a>
         </div>
       </div>
-      {% endif %}
     </section>
+    {% endif %}
   </main>
 
   <!-- 確認送出提示彈窗 -->

@@ -124,3 +124,16 @@
   color: #ffffff !important;
 }
 
+@media (max-width: 640px) {
+  .unauth-card {
+    max-width: 100%;
+    margin: 40px auto 60px;
+    padding: 30px 20px;
+    border-radius: 18px;
+  }
+
+  .unauth-title {
+    font-size: 1.25rem;
+  }
+}
+
