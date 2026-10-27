@@ -17,12 +17,15 @@ from discord import app_commands, ui
 from discord.ext import commands, tasks
 
 if TYPE_CHECKING:
-    import wavelink as wavelink_module
-
-try:
     import wavelink
-except ImportError:  # 尚未安裝 wavelink 時，讓其他 Cog 仍可正常運作
-    wavelink = None
+    import wavelink as wavelink_module
+else:
+    try:
+        import wavelink
+        wavelink_module = wavelink
+    except ImportError:  # 尚未安裝 wavelink 時，讓其他 Cog 仍可正常運作
+        wavelink = None
+        wavelink_module = None
 
 # Lavalink 連線逾時秒數，可用環境變數覆寫，避免連線卡住拖垮整個 bot 啟動流程
 LAVALINK_CONNECT_TIMEOUT = float(os.getenv('LAVALINK_CONNECT_TIMEOUT', '15'))
@@ -255,9 +258,10 @@ def build_now_playing_container(
             str(source_raw).lower(), str(source_raw).capitalize() if source_raw else "Lavalink"
         )
 
+        # 底部資訊：左側為點播者，右側為音訊來源（使用全形空格推至右側，無分隔點，完全貼合手繪 wireframe 架構）
         footer_text = (
             f"**📜 下一首預告**：{next_preview}\n"
-            f"-# 由 {requester_name} 點播　　　•　　　來源：{source_display}"
+            f"-# 由 {requester_name} 點播　　　　　　　　　　　　　　來源：{source_display}"
         )
         children.append(ui.TextDisplay(footer_text))
 
