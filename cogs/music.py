@@ -195,12 +195,12 @@ def build_now_playing_container(
         # 2. 作者與循環模式
         author = getattr(track, "author", None) or "未知"
         loop_mode = getattr(player, "loop_mode", "off")
-        loop_label = LOOP_LABELS.get(loop_mode, "關閉")
+        loop_label = LOOP_LABELS.get(loop_mode, "🔁 循環：關閉")
 
         header = ui.TextDisplay(
             f"### {status_icon} {status_text}\n"
             f"## {title_display}\n"
-            f"**👤 {author}**　•　**🔁 循環：{loop_label}**"
+            f"**👤 {author}**　•　**{loop_label}**"
         )
         children.append(header)
         children.append(ui.Separator(visible=False, spacing=discord.SeparatorSpacing.small))
