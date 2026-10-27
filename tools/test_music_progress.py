@@ -340,13 +340,16 @@ def test_build_now_playing_container():
     header = comps[0]
     check("🎶 正在播放" in header["content"], "頂部 Badge 包含 '🎶 正在播放'")
     check("[夜に駆ける](https://example.com/yoasobi)" in header["content"], "標題包含 Markdown 超連結")
-    check("YOASOBI" in header["content"], "包含作者資訊")
 
     # Section 與 Thumbnail
     sec = [c for c in comps if c["type"] == 9][0]
+    sec_content = sec["components"][0]["content"]
+    check("YOASOBI" in sec_content, "Section 包含作者資訊")
+    check("🔁 循環：關閉" in sec_content, "Section 包含循環模式資訊")
+    check("YOASOBI" in sec_content and "🔁 循環：關閉" in sec_content and "\n" in sec_content, "作者與循環模式分行顯示並加寬行距")
     check(sec["accessory"]["media"]["url"] == "https://example.com/art.png", "Section 正確附帶封面 Thumbnail accessory")
-    check("01:23 / 04:20" in sec["components"][0]["content"], "Section 文字包含換算後的播放進度條")
-    check("80%" in sec["components"][0]["content"], "Section 文字包含音量條")
+    check("01:23 / 04:20" in sec_content, "Section 文字包含換算後的播放進度條")
+    check("80%" in sec_content, "Section 文字包含音量條")
 
     # 3. 帶有提示 Banner
     c_notice = build_now_playing_container(mock_player, notice="➕ **已新增至待播清單（第 1 位）**")

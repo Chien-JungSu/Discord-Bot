@@ -199,13 +199,12 @@ def build_now_playing_container(
 
         header = ui.TextDisplay(
             f"### {status_icon} {status_text}\n"
-            f"## {title_display}\n"
-            f"**👤 {author}**　•　**{loop_label}**"
+            f"## {title_display}"
         )
         children.append(header)
         children.append(ui.Separator(visible=False, spacing=discord.SeparatorSpacing.small))
 
-        # 3. 中間區塊：進度條 + 音量條（右側）與封面縮圖（左側 accessory）
+        # 3. 中間區塊：作者、循環、進度條、音量條與封面縮圖（右側 accessory）
         pos_ms = getattr(player, "position", 0)
         len_ms = getattr(track, "length", None)
         is_stream = bool(getattr(track, "is_stream", False))
@@ -216,7 +215,15 @@ def build_now_playing_container(
         except (ValueError, TypeError):
             vol = 100
         vol_str = build_volume_bar(vol, width=12)
-        middle_text = f"{progress_str}\n{vol_str}"
+
+        # 作者與循環模式分行顯示，並適度加寬行距提升視覺呼吸感
+        middle_lines = [
+            f"**👤 {author}**",
+            f"**{loop_label}**\n",
+            f"{progress_str}\n",
+            f"{vol_str}",
+        ]
+        middle_text = "\n".join(middle_lines)
 
         artwork = getattr(track, "artwork", None)
         if artwork:
@@ -250,7 +257,7 @@ def build_now_playing_container(
 
         footer_text = (
             f"**📜 下一首預告**：{next_preview}\n"
-            f"-# 由 {requester_name} 點播　•　來源：{source_display}"
+            f"-# 由 {requester_name} 點播　　　•　　　來源：{source_display}"
         )
         children.append(ui.TextDisplay(footer_text))
 
