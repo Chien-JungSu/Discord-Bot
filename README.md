@@ -80,6 +80,29 @@
   - 各伺服器控制面板訊息以 `guild_id` 字典嚴格隔離，互不干擾。
   - 統一於 `interaction_check` 檢查操作者是否與 Bot 處於同一個語音頻道，非同頻道成員無法操作。
 
+
+### 動態 Embed 與進度條渲染（第 6 週新增）
+
+在播放音樂時，控制面板 Embed 整合即時中繼資料與定時動態進度條，為聽歌成員提供視覺化播放狀態：
+
+- **動態曲目中繼資料 Embed**：
+  - 呈現曲目標題（可點擊 Markdown 超連結）、作者、音量百分比、循環模式、封面縮圖（Thumbnail，直接使用 URL 不額外快取圖片本體以節省 Render 512MB RAM 限制）、音訊來源站（YouTube / SoundCloud 等）與點播者標籤。
+  - 隨播放狀態動態改變：播放中顯示藍紫色與 `🎶 正在播放`，暫停中即時切換為橘色與 `⏸️ 已暫停`，播放結束切換為淺灰色與 `⏹️ 播放已結束`。
+  - 佇列即時預告：自伺服器獨立 `song_queue` 取出下一首即將播放歌曲名稱與連結，無待播歌曲時顯示「無」。
+  - 缺漏中繼資料時提供完整預設 fallback（如作者為「未知」、長度為「🔴 直播中」），確保穩定不拋例外。
+- **純函式進度條換算（`build_progress_bar` & `format_time`）**：
+  - 換算公式：`ratio = safe_pos / total_len`，指標位置 `index = int(round(ratio * (width - 1)))`，渲染出如 `▬▬▬🔘▬▬▬▬▬▬ 01:23 / 04:05` 的進度指示。
+  - 支援超過一小時曲目自動轉換 `h:mm:ss`（例如 `1:02:03`），小於一小時維持 `mm:ss`。
+  - 邊界情況防呆：`is_stream=True`、長度為 0、None、負值、或大於 24 小時（極大值）皆安全識別為「🔴 直播中」，不繪製進度條；進度位置超出或小於 0 則自動夾在 100% 或 0%。
+- **全域背景迴圈與 API Rate Limit 節流防護**：
+  - 單一全域背景迴圈（`@tasks.loop(seconds=PROGRESS_UPDATE_INTERVAL)`，預設 5 秒集中常數可調），逐一處理所有播放中伺服器，不為各伺服器獨立開啟 task。
+  - 三重智慧節流（Skip Condition）：
+    1. 播放器暫停中（`player.paused`）進度不變，跳過 edit。
+    2. 渲染後的進度條字串與上次更新完全相同時跳過 edit。
+    3. 語音頻道內無真人使用者（僅剩 Bot）時跳過 edit。
+  - 採用 `channel.get_partial_message(message_id).edit()` 直接以 PATCH 更新，省去每次先 GET 的冗餘 HTTP 請求。
+  - 捕捉 `discord.NotFound`（訊息被刪）時自動清除記錄並重新發送面板；遭遇 HTTP 429 Rate Limit 時依據 `retry_after` 退避並記錄冷卻截止時間，各伺服器狀態嚴格隔離。
+
 專案也包含 `cogs/web_server.py`，會在背景啟動一個 Flask 網頁伺服器（搭配 `templates/index.html` 儀表板），提供機器人狀態 API（伺服器數、延遲、運行時間等），方便部署於需要存活檢查的雲端平台。
 
 ## 專案需求

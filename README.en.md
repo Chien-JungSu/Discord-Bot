@@ -80,6 +80,29 @@ When a track begins playing (`on_wavelink_track_start`), the bot automatically s
   - Panel tracking messages are strictly isolated per `guild_id` in memory, ensuring operations in one server never interfere with another.
   - Operator voice state is checked uniformly in `interaction_check`; users not in the bot's voice channel are denied with an ephemeral message.
 
+### Dynamic Now-Playing Embed & Progress Bar Rendering (Week 6)
+
+During playback, the music control panel integrates real-time track metadata and periodic in-place progress bar updates:
+
+- **Dynamic Track Metadata Embed**:
+  - Displays track title (clickable Markdown URL), artist/author, volume percentage, loop mode, artwork thumbnail (set via direct URL without caching raw image bytes in memory, saving Render's 512MB RAM limit), audio source (YouTube, SoundCloud, etc.), and requester tag.
+  - Dynamically changes with playback states: blurple with `🎶 正在播放` while playing, orange with `⏸️ 已暫停` when paused, and light grey with `⏹️ 播放已結束` when playback ends.
+  - Upcoming track preview: peeks the server's isolated `song_queue` to preview the next track title and link (shows "無" if the queue is empty).
+  - Robust fallbacks: missing or `None` attributes fall back to safe defaults (e.g. author defaults to "未知", length defaults to "🔴 直播中") without raising unhandled exceptions.
+- **Pure-Function Progress Bar (`build_progress_bar` & `format_time`)**:
+  - Calculation formula: `ratio = safe_pos / total_len`, indicator index `index = int(round(ratio * (width - 1)))`, rendering e.g. `▬▬▬🔘▬▬▬▬▬▬ 01:23 / 04:05`.
+  - Automatically formats hours as `h:mm:ss` (e.g. `1:02:03`) and sub-hour tracks as `mm:ss`.
+  - Edge cases: live streams (`is_stream=True`, length is 0, None, negative, or >= 24h) safely render `🔴 直播中` without a progress bar; out-of-bound playback positions are clamped to 0% or 100%.
+- **Single Global Task Loop & API Rate-Limit Protection**:
+  - Runs a single background task (`@tasks.loop(seconds=PROGRESS_UPDATE_INTERVAL)`, default 5s constant) across all playing guilds rather than spawning a separate task per guild.
+  - Triple intelligent throttling:
+    1. Skips edit if player is paused (`player.paused == True`).
+    2. Skips edit if the rendered progress bar string is unchanged from the last successful edit.
+    3. Skips edit if the voice channel has no human members (bots only).
+  - Uses `channel.get_partial_message(message_id).edit()` to perform direct PATCH requests, eliminating redundant GET roundtrips.
+  - Gracefully recovers from `discord.NotFound` (auto-resends panel) and backs off per-guild during HTTP 429 rate limits according to `retry_after`.
+
+
 The project also includes `cogs/web_server.py`, which starts a Flask web server in the background (backing a `templates/index.html` dashboard) that exposes bot status APIs (guild count, latency, uptime, etc.) for cloud deployments that require a keep-alive endpoint.
 
 ## Requirements

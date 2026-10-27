@@ -42,6 +42,9 @@ LAVALINK_PROBE_TIMEOUT = 5.0
 # 沒有冷卻的話，health check 每 NODE_HEALTH_CHECK_INTERVAL 秒就會重連一次，節點長時間故障時會變成洗版式重試。
 LAVALINK_RECONNECT_COOLDOWN = float(os.getenv('LAVALINK_RECONNECT_COOLDOWN', '60'))
 
+# 第 6 週新增：播放面板進度條定時更新間隔（秒，集中常數設定，至少 5 秒防 API rate limit）
+PROGRESS_UPDATE_INTERVAL = float(os.getenv('PROGRESS_UPDATE_INTERVAL', '5.0'))
+
 
 def format_duration(length_ms: int | None) -> str:
     """將 wavelink Playable.length（毫秒）轉成 mm:ss 字串，供 Embed 顯示用。"""
@@ -88,6 +91,155 @@ def format_position(ms: int) -> str:
     h, rem = divmod(total, 3600)
     m, sec = divmod(rem, 60)
     return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
+
+
+# ---------- 第 6 週新增：進度條渲染與動態 Embed ----------
+def format_time(ms: int | float | None) -> str:
+    """第 6 週新增：將毫秒時間格式化為 mm:ss 或 h:mm:ss 字串。
+
+    - ms 為 None 或負值時夾在 00:00。
+    - 超過一小時時以 h:mm:ss 格式呈現（例如 1:02:03）。
+    - 小於一小時以 mm:ss 格式呈現（例如 04:05、00:00）。
+    """
+    if ms is None or ms < 0:
+        total_seconds = 0
+    else:
+        total_seconds = int(ms) // 1000
+
+    hours, rem = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(rem, 60)
+    if hours > 0:
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes:02d}:{seconds:02d}"
+
+
+def build_progress_bar(
+    position_ms: int | float | None,
+    length_ms: int | float | None,
+    width: int = 20,
+    is_stream: bool = False,
+) -> str:
+    """第 6 週新增：純函式渲染進度條字串，例如 `▬▬▬🔘▬▬▬▬▬▬ 01:23 / 04:05`。
+
+    邊界情況處理：
+    - is_stream 為 True、length_ms 為 0、None、負值、或極大值（>= 86,400,000 即 24 小時以上視為直播）
+      -> 顯示「🔴 直播中」，不繪製進度條。
+    - position_ms 負值 -> 夾在 0%。
+    - position_ms 超過 length_ms -> 夾在 100%。
+    - width 小於 2 時自動調整為預設 20。
+    - 本函式不依賴 Discord 物件，方便單元測試與狀態比對。
+    """
+    if is_stream or length_ms is None or length_ms <= 0 or length_ms >= 86_400_000:
+        return "🔴 直播中"
+
+    total_len = int(length_ms)
+    pos = 0 if position_ms is None else int(position_ms)
+    safe_pos = max(0, min(pos, total_len))
+
+    w = width if width > 1 else 20
+    ratio = safe_pos / total_len if total_len > 0 else 0.0
+    index = int(round(ratio * (w - 1)))
+    index = max(0, min(w - 1, index))
+
+    bar = "▬" * index + "🔘" + "▬" * (w - 1 - index)
+    return f"{bar} {format_time(safe_pos)} / {format_time(total_len)}"
+
+
+def build_now_playing_embed(player: Any) -> discord.Embed:
+    """第 6 週新增：建立音樂播放面板的動態 Embed。
+
+    從 wavelink.Playable 取出：標題、作者、長度、封面（artwork，縮圖）、連結（uri）、來源（source）。
+    內容包含：
+    - 標題（可點擊連結）、作者
+    - 播放進度條（包含時間換算）
+    - 音量、目前循環模式
+    - 下一首預告（取自 song_queue 第一首，沒有則顯示「無」）
+    - 頁尾顯示點播者與來源
+    - 外觀依播放/暫停狀態切換圖示與顏色（播放中藍紫色，暫停橘色，結束淺灰色）
+    - 缺少封面或欄位時提供預設值，絕不拋出例外。
+    """
+    if player is None or getattr(player, "current", None) is None:
+        return discord.Embed(
+            title="⏹️ 播放已結束",
+            description="目前沒有正在播放的歌曲。可使用 `/music_play` 點歌！",
+            color=discord.Color.light_grey(),
+        )
+
+    track = player.current
+    is_paused = bool(getattr(player, "paused", False))
+    status_icon = "⏸️" if is_paused else "🎶"
+    status_text = "已暫停" if is_paused else "正在播放"
+
+    # 標題與超連結
+    raw_title = getattr(track, "title", None) or "未知曲目"
+    uri = getattr(track, "uri", None)
+    title_display = f"[{raw_title}]({uri})" if uri else raw_title
+
+    embed = discord.Embed(
+        title=f"{status_icon} {status_text}",
+        description=title_display,
+        color=discord.Color.orange() if is_paused else discord.Color.blurple(),
+        timestamp=discord.utils.utcnow(),
+    )
+
+    # 封面縮圖（不快取圖片本體以節省 Render 512MB RAM）
+    artwork = getattr(track, "artwork", None)
+    if artwork:
+        embed.set_thumbnail(url=str(artwork))
+
+    # 作者
+    author = getattr(track, "author", None) or "未知"
+    embed.add_field(name="👤 作者", value=author, inline=True)
+
+    # 音量
+    try:
+        volume = int(getattr(player, "volume", 100))
+    except (ValueError, TypeError):
+        volume = 100
+    embed.add_field(name="🔊 音量", value=f"{volume}%", inline=True)
+
+    # 循環模式
+    loop_mode = getattr(player, "loop_mode", "off")
+    loop_label = LOOP_LABELS.get(loop_mode, "關閉")
+    embed.add_field(name="🔁 循環模式", value=loop_label, inline=True)
+
+    # 進度條與時間換算
+    pos_ms = getattr(player, "position", 0)
+    len_ms = getattr(track, "length", None)
+    is_stream = bool(getattr(track, "is_stream", False))
+    progress_bar = build_progress_bar(pos_ms, len_ms, width=20, is_stream=is_stream)
+    embed.add_field(name="⏱️ 播放進度", value=progress_bar, inline=False)
+
+    # 下一首預告（取自 song_queue 第一首）
+    song_queue = getattr(player, "song_queue", None)
+    next_preview = "無"
+    if song_queue and len(song_queue) > 0:
+        first_item = song_queue[0]
+        next_track = first_item[0] if isinstance(first_item, tuple) else first_item
+        next_title = getattr(next_track, "title", None) or "未知曲目"
+        next_uri = getattr(next_track, "uri", None)
+        next_preview = f"[{next_title}]({next_uri})" if next_uri else next_title
+
+    embed.add_field(name="📜 下一首預告", value=next_preview, inline=False)
+
+    # 頁尾：點播者與音訊來源
+    requester_name = getattr(player, "current_requester", None)
+    source_raw = getattr(track, "source", None) or ""
+    source_map = {
+        "youtube": "YouTube",
+        "soundcloud": "SoundCloud",
+        "spotify": "Spotify",
+        "applemusic": "Apple Music",
+    }
+    source_display = source_map.get(str(source_raw).lower(), str(source_raw).capitalize() if source_raw else "Lavalink")
+
+    footer_parts = []
+    if requester_name:
+        footer_parts.append(f"由 {requester_name} 點播")
+    footer_parts.append(f"來源：{source_display}")
+    embed.set_footer(text=" • ".join(footer_parts))
+
+    return embed
 
 
 # ---------- Lavalink 節點連線診斷 ----------
@@ -656,6 +808,11 @@ class Music(commands.Cog):
         self._stop_votes: dict[int, StopVoteView] = {}
         # 被拒絕過的曲目（同一首歌被拒後不得再提請求）：key=track identifier
         self._rejected_track_keys: dict = {}
+        # 第 6 週新增：進度條渲染節流與 429 退避記錄
+        # key: guild_id, value: 上次成功更新的進度條字串，進度字串沒變時跳過 edit
+        self._last_progress_str: dict[int, str] = {}
+        # key: guild_id, value: 觸發 429 暫停更新的截止時間戳（time.monotonic()）
+        self._rate_limit_until: dict[int, float] = {}
 
     async def cog_unload(self):
         """Cog 被卸載時（例如重新載入模組）順便取消所有還在跑的自動離開計時器，
@@ -671,6 +828,11 @@ class Music(commands.Cog):
         self._rejected_track_keys.clear()
         self.panel_messages.clear()
         self._pending_panel_interaction.clear()
+        # 第 6 週新增：取消進度條背景迴圈並清空節流快取
+        if self.progress_update_loop.is_running():
+            self.progress_update_loop.cancel()
+        self._last_progress_str.clear()
+        self._rate_limit_until.clear()
 
         if self.node_health_check.is_running():
             self.node_health_check.cancel()
@@ -687,6 +849,9 @@ class Music(commands.Cog):
         """
         # 第 5 週新增：註冊持久化控制面板 View，讓 Bot 重開機後舊按鈕仍可被派發處理
         self.bot.add_view(MusicControlView(self))
+        # 第 6 週新增：啟動進度條定時更新背景迴圈
+        if not self.progress_update_loop.is_running():
+            self.progress_update_loop.start()
         if wavelink is None:
             print("⚠️ 尚未安裝 wavelink，Music Cog 的 /join /leave /play 將無法運作。"
                   "請先執行 pip install wavelink 並設定 Lavalink 節點。")
@@ -926,6 +1091,105 @@ class Music(commands.Cog):
     async def before_node_health_check(self):
         # 等 bot 完全 ready（含 on_ready 觸發過一次）再開始跑，
         # 避免啟動初期 wavelink.Pool 還沒建立好就先檢查、白跑一次。
+        await self.bot.wait_until_ready()
+
+    # ---------- 第 6 週新增：全域播放面板進度條更新背景迴圈 ----------
+    @tasks.loop(seconds=PROGRESS_UPDATE_INTERVAL)
+    async def progress_update_loop(self):
+        """第 6 週新增：單一全域背景迴圈，定時刷新所有播放中伺服器的 Embed 進度條。
+
+        節流與 API Rate Limit 保護機制：
+        1. 集中常數 PROGRESS_UPDATE_INTERVAL（預設 5 秒），避免頻繁呼叫 Discord API。
+        2. 檢查 HTTP 429 退避時間戳（_rate_limit_until），在冷卻期間內跳過該伺服器。
+        3. 若播放器暫停（player.paused），進度不變，直接跳過 edit。
+        4. 語音頻道內沒有非機器人使用者時，跳過更新以省資源。
+        5. 若計算出的進度條字串與上次完全相同（_last_progress_str），跳過 edit。
+        6. 使用 partial message 編輯，省去 GET 訊息請求。
+        7. 捕獲 discord.NotFound（訊息被刪）時清除並嘗試重新發送；捕獲 429 時依 retry_after 退避。
+        """
+        now = time.monotonic()
+        guild_ids = list(self.panel_messages.keys())
+        for guild_id in guild_ids:
+            try:
+                # 1. 檢查 429 退避冷卻
+                cooldown_until = self._rate_limit_until.get(guild_id, 0.0)
+                if now < cooldown_until:
+                    continue
+
+                guild = self.bot.get_guild(guild_id)
+                if guild is None:
+                    continue
+
+                player: Any = getattr(guild, "voice_client", None)
+                # 若 player 不存在或未播放曲目，跳過
+                if player is None or getattr(player, "current", None) is None:
+                    continue
+
+                # 2. 播放器暫停時進度條無變化，跳過 edit 避免消耗 API 額度
+                if getattr(player, "paused", False):
+                    continue
+
+                # 3. 語音頻道是否有真人成員（排除機器人）
+                vc = getattr(player, "channel", None)
+                if vc is not None:
+                    members = getattr(vc, "members", [])
+                    if not any(not getattr(m, "bot", False) for m in members):
+                        continue
+
+                # 4. 取得當前進度字串並檢查是否與上次相同
+                track = player.current
+                is_stream = bool(getattr(track, "is_stream", False))
+                pos_ms = getattr(player, "position", 0)
+                len_ms = getattr(track, "length", None)
+                current_progress_str = build_progress_bar(pos_ms, len_ms, is_stream=is_stream)
+
+                if self._last_progress_str.get(guild_id) == current_progress_str:
+                    continue
+
+                # 5. 取得面板資訊
+                panel_info = self.panel_messages.get(guild_id)
+                if not panel_info:
+                    continue
+                channel_id, message_id = panel_info
+
+                channel = self.bot.get_channel(channel_id)
+                if channel is None:
+                    try:
+                        channel = await self.bot.fetch_channel(channel_id)
+                    except Exception:
+                        channel = None
+                if channel is None:
+                    continue
+
+                embed = build_now_playing_embed(player)
+                view = MusicControlView(self)
+                view.refresh_buttons(player)
+
+                # 6. 使用 partial_message 編輯，直接發送 PATCH 請求，省去 fetch_message 的 GET 請求
+                msg = channel.get_partial_message(message_id)
+                await msg.edit(embed=embed, view=view)
+                self._last_progress_str[guild_id] = current_progress_str
+
+            except discord.NotFound:
+                print(f"ℹ️ [進度條更新] 伺服器 {guild_id} 控制面板訊息已被刪除，嘗試重新發送面板...")
+                self.panel_messages.pop(guild_id, None)
+                self._last_progress_str.pop(guild_id, None)
+                try:
+                    await self._sync_panel(guild_id, player)
+                except Exception as exc:
+                    print(f"⚠️ [進度條更新] 重新發送面板失敗 (guild_id={guild_id}): {exc}")
+            except discord.HTTPException as exc:
+                if getattr(exc, "status", None) == 429:
+                    retry_after = float(getattr(exc, "retry_after", 5.0) or 5.0)
+                    print(f"⚠️ [進度條更新] 伺服器 {guild_id} 觸發 Discord API Rate Limit (429)，將暫停更新 {retry_after:.1f} 秒")
+                    self._rate_limit_until[guild_id] = time.monotonic() + retry_after
+                else:
+                    print(f"⚠️ [進度條更新] 伺服器 {guild_id} 遭遇 HTTPException (status={getattr(exc, 'status', None)}): {exc}")
+            except Exception as exc:
+                print(f"❌ [進度條更新] 伺服器 {guild_id} 發生未知異常：{exc}")
+
+    @progress_update_loop.before_loop
+    async def before_progress_update_loop(self):
         await self.bot.wait_until_ready()
 
     # ---------- wavelink 自訂事件 ----------
@@ -1497,50 +1761,8 @@ class Music(commands.Cog):
         return embed
 
     def _build_panel_embed(self, player: "wavelink_module.Player | None") -> discord.Embed:
-        """建立音樂控制面板的即時資訊 Embed（第 5 週：基本曲目資訊，無進度條）。"""
-        if player is None or getattr(player, "current", None) is None:
-            return discord.Embed(
-                title="⏹️ 播放已結束",
-                description="目前沒有正在播放的歌曲。可使用 `/music_play` 點歌！",
-                color=discord.Color.light_grey(),
-            )
-
-        track = player.current
-        is_paused = getattr(player, "paused", False)
-        status_icon = "⏸️" if is_paused else "🎶"
-        status_text = "已暫停" if is_paused else "正在播放"
-
-        embed = discord.Embed(
-            title=f"{status_icon} {status_text}",
-            description=f"[{track.title}]({track.uri})" if getattr(track, "uri", None) else track.title,
-            color=discord.Color.orange() if is_paused else discord.Color.blurple(),
-            timestamp=discord.utils.utcnow(),
-        )
-        artwork = getattr(track, "artwork", None)
-        if artwork:
-            embed.set_thumbnail(url=artwork)
-
-        embed.add_field(name="👤 作者", value=getattr(track, "author", None) or "未知", inline=True)
-        embed.add_field(name="⏱️ 長度", value=format_duration(getattr(track, "length", None)), inline=True)
-        try:
-            volume = int(getattr(player, "volume", 100))
-        except (ValueError, TypeError):
-            volume = 100
-        embed.add_field(name="🔊 音量", value=f"{volume}%", inline=True)
-
-        song_queue = getattr(player, "song_queue", None) or deque()
-        loop_mode = getattr(player, "loop_mode", "off")
-        loop_label = LOOP_LABELS.get(loop_mode, "關閉")
-        embed.add_field(name="📜 待播清單", value=f"{len(song_queue)} 首", inline=True)
-        embed.add_field(name="🔁 循環模式", value=loop_label, inline=True)
-
-        requester_name = getattr(player, "current_requester", None)
-        if requester_name:
-            embed.set_footer(text=f"由 {requester_name} 點播 • 控制面板")
-        else:
-            embed.set_footer(text="控制面板")
-
-        return embed
+        """建立音樂控制面板的即時資訊 Embed（第 6 週：委派至 build_now_playing_embed）。"""
+        return build_now_playing_embed(player)
 
     async def _sync_panel(
         self,
@@ -1577,6 +1799,11 @@ class Music(commands.Cog):
                     await interaction.response.edit_message(embed=embed, view=view)
                 else:
                     await interaction.edit_original_response(embed=embed, view=view)
+                if player is not None and getattr(player, "current", None) is not None:
+                    pos = getattr(player, "position", 0)
+                    length = getattr(player.current, "length", 0)
+                    is_stream = bool(getattr(player.current, "is_stream", False))
+                    self._last_progress_str[guild_id] = build_progress_bar(pos, length, is_stream=is_stream)
                 return
             except (discord.NotFound, discord.HTTPException) as exc:
                 print(f">>> 透過 interaction 更新面板失敗，改走 fetch_message：{exc}")
@@ -1598,10 +1825,16 @@ class Music(commands.Cog):
                 try:
                     msg = await channel.fetch_message(message_id)
                     await msg.edit(embed=embed, view=view)
+                    if player is not None and getattr(player, "current", None) is not None:
+                        pos = getattr(player, "position", 0)
+                        length = getattr(player.current, "length", 0)
+                        is_stream = bool(getattr(player.current, "is_stream", False))
+                        self._last_progress_str[guild_id] = build_progress_bar(pos, length, is_stream=is_stream)
                     return
                 except discord.NotFound:
                     print(f"ℹ️ 控制面板訊息已被刪除 (message_id={message_id})，將重新發送新面板。")
                     self.panel_messages.pop(guild_id, None)
+                    self._last_progress_str.pop(guild_id, None)
                 except discord.HTTPException as exc:
                     print(f"⚠️ 編輯控制面板訊息失敗：{exc}")
 
@@ -1610,6 +1843,10 @@ class Music(commands.Cog):
             try:
                 new_msg = await target_channel.send(embed=embed, view=view)
                 self.panel_messages[guild_id] = (target_channel.id, new_msg.id)
+                pos = getattr(player, "position", 0)
+                length = getattr(player.current, "length", 0)
+                is_stream = bool(getattr(player.current, "is_stream", False))
+                self._last_progress_str[guild_id] = build_progress_bar(pos, length, is_stream=is_stream)
             except discord.HTTPException as exc:
                 print(f"❌ 發送新控制面板訊息失敗：{exc}")
 
@@ -1617,6 +1854,8 @@ class Music(commands.Cog):
         self, guild_id: int, interaction: discord.Interaction | None = None
     ):
         """將伺服器的控制面板標記為已結束（全部按鈕 disabled）。"""
+        self._last_progress_str.pop(guild_id, None)
+        self._rate_limit_until.pop(guild_id, None)
         await self._sync_panel(guild_id, player=None, interaction=interaction)
 
     @app_commands.command(name="music_play", description="搜尋並播放音樂，若目前正在播放則排入佇列（可輸入關鍵字或直接貼網址）")
