@@ -546,7 +546,7 @@ class MusicControlView(ui.View):
         super().__init__(timeout=None)
         self.cog = cog
 
-    def refresh_buttons(self, player: "wavelink.Player | None" = None):
+    def refresh_buttons(self, player: "wavelink_module.Player | None" = None):
         """統一依據 player 播放狀態設定每顆按鈕的 label / emoji / disabled 狀態。
 
         - 沒有正在播放的曲目（或 player 為 None）：全部按鈕 disabled。
@@ -682,7 +682,7 @@ class MusicControlView(ui.View):
         row=0,
     )
     async def toggle_pause(self, interaction: discord.Interaction, button: ui.Button):
-        player: "wavelink.Player" = interaction.guild.voice_client
+        player: "wavelink_module.Player" = interaction.guild.voice_client
         cog: "Music" = self.cog or interaction.client.get_cog("Music")
 
         is_paused = getattr(player, "paused", False)
@@ -698,7 +698,7 @@ class MusicControlView(ui.View):
         row=0,
     )
     async def skip(self, interaction: discord.Interaction, button: ui.Button):
-        player: "wavelink.Player" = interaction.guild.voice_client
+        player: "wavelink_module.Player" = interaction.guild.voice_client
         cog: "Music" = self.cog or interaction.client.get_cog("Music")
 
         await interaction.response.defer()
@@ -723,7 +723,7 @@ class MusicControlView(ui.View):
         row=0,
     )
     async def stop(self, interaction: discord.Interaction, button: ui.Button):
-        player: "wavelink.Player" = interaction.guild.voice_client
+        player: "wavelink_module.Player" = interaction.guild.voice_client
         cog: "Music" = self.cog or interaction.client.get_cog("Music")
 
         await interaction.response.defer()
@@ -749,7 +749,7 @@ class MusicControlView(ui.View):
         row=0,
     )
     async def volume_down(self, interaction: discord.Interaction, button: ui.Button):
-        player: "wavelink.Player" = interaction.guild.voice_client
+        player: "wavelink_module.Player" = interaction.guild.voice_client
         cog: "Music" = self.cog or interaction.client.get_cog("Music")
 
         current_vol = getattr(player, "volume", 100)
@@ -766,7 +766,7 @@ class MusicControlView(ui.View):
         row=0,
     )
     async def volume_up(self, interaction: discord.Interaction, button: ui.Button):
-        player: "wavelink.Player" = interaction.guild.voice_client
+        player: "wavelink_module.Player" = interaction.guild.voice_client
         cog: "Music" = self.cog or interaction.client.get_cog("Music")
 
         current_vol = getattr(player, "volume", 100)
