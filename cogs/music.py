@@ -145,6 +145,129 @@ def build_progress_bar(
     return f"{bar} {format_time(safe_pos)} / {format_time(total_len)}"
 
 
+def build_volume_bar(volume: int | float | None, width: int = 12) -> str:
+    """第 6 週新增：換算音量百分比為進度條字串：🔊 − ▬▬▬▬🔘▬▬▬▬ + 80%"""
+    try:
+        vol = 100 if volume is None else max(0, min(100, int(volume)))
+    except (ValueError, TypeError):
+        vol = 100
+    w = max(5, width)
+    ratio = vol / 100.0
+    index = max(0, min(w - 1, int(round(ratio * (w - 1)))))
+    bar = "▬" * index + "🔘" + "▬" * (w - 1 - index)
+    return f"🔊 − {bar} + {vol}%"
+
+
+def build_now_playing_container(
+    player: Any,
+    notice: str | None = None,
+    action_rows: list[ui.ActionRow] | None = None,
+) -> ui.Container:
+    """第 6 週新增：依照手繪架構使用 Discord Components V2 建構播放器主面板 Container：
+    - 頂部 Badge 狀態標籤（🎶 正在播放 / ⏸️ 已暫停 / ⏹️ 播放已結束）
+    - 曲目標題（Markdown 超連結）
+    - 作者與循環模式
+    - 中間區塊：左側封面縮圖（Thumbnail），右側播放進度條與音量條
+    - 底部資訊：下一首預告、點播者與音訊來源
+    - 操作按鈕區（ActionRow）
+    - 最下方可選之動態提示 Banner（例如：已新增至待播清單，逾時自動移除）
+    """
+    children: list[discord.ui.Item] = []
+
+    if player is None or getattr(player, "current", None) is None:
+        accent_color = 0x979C9F  # light_grey
+        header = ui.TextDisplay(
+            "### ⏹️ 播放已結束\n目前沒有正在播放的歌曲。可使用 `/music_play` 點歌！"
+        )
+        children.append(header)
+    else:
+        track = player.current
+        is_paused = bool(getattr(player, "paused", False))
+        accent_color = 0xE67E22 if is_paused else 0x5865F2
+        status_icon = "⏸️" if is_paused else "🎶"
+        status_text = "已暫停" if is_paused else "正在播放"
+
+        # 1. 標題與超連結
+        raw_title = getattr(track, "title", None) or "未知曲目"
+        uri = getattr(track, "uri", None)
+        title_display = f"[{raw_title}]({uri})" if uri else raw_title
+
+        # 2. 作者與循環模式
+        author = getattr(track, "author", None) or "未知"
+        loop_mode = getattr(player, "loop_mode", "off")
+        loop_label = LOOP_LABELS.get(loop_mode, "關閉")
+
+        header = ui.TextDisplay(
+            f"### {status_icon} {status_text}\n"
+            f"## {title_display}\n"
+            f"**👤 {author}**　•　**🔁 循環：{loop_label}**"
+        )
+        children.append(header)
+        children.append(ui.Separator(visible=False, spacing=discord.SeparatorSpacing.small))
+
+        # 3. 中間區塊：進度條 + 音量條（右側）與封面縮圖（左側 accessory）
+        pos_ms = getattr(player, "position", 0)
+        len_ms = getattr(track, "length", None)
+        is_stream = bool(getattr(track, "is_stream", False))
+        progress_str = build_progress_bar(pos_ms, len_ms, width=14, is_stream=is_stream)
+
+        try:
+            vol = int(getattr(player, "volume", 100))
+        except (ValueError, TypeError):
+            vol = 100
+        vol_str = build_volume_bar(vol, width=12)
+        middle_text = f"{progress_str}\n{vol_str}"
+
+        artwork = getattr(track, "artwork", None)
+        if artwork:
+            middle_section = ui.Section(ui.TextDisplay(middle_text), accessory=ui.Thumbnail(str(artwork)))
+        else:
+            middle_section = ui.TextDisplay(middle_text)
+        children.append(middle_section)
+        children.append(ui.Separator(visible=False, spacing=discord.SeparatorSpacing.small))
+
+        # 4. 下一首預告與點播者/來源
+        song_queue = getattr(player, "song_queue", None)
+        next_preview = "無"
+        if song_queue and len(song_queue) > 0:
+            first_item = song_queue[0]
+            next_track = first_item[0] if isinstance(first_item, tuple) else first_item
+            next_title = getattr(next_track, "title", None) or "未知曲目"
+            next_uri = getattr(next_track, "uri", None)
+            next_preview = f"[{next_title}]({next_uri})" if next_uri else next_title
+
+        requester_name = getattr(player, "current_requester", None) or "未知"
+        source_raw = getattr(track, "source", None) or ""
+        source_map = {
+            "youtube": "YouTube",
+            "soundcloud": "SoundCloud",
+            "spotify": "Spotify",
+            "applemusic": "Apple Music",
+        }
+        source_display = source_map.get(
+            str(source_raw).lower(), str(source_raw).capitalize() if source_raw else "Lavalink"
+        )
+
+        footer_text = (
+            f"**📜 下一首預告**：{next_preview}\n"
+            f"-# 由 {requester_name} 點播　•　來源：{source_display}"
+        )
+        children.append(ui.TextDisplay(footer_text))
+
+    # 5. 操作按鈕（若有傳入 ActionRows）
+    if action_rows:
+        children.append(ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small))
+        for row in action_rows:
+            children.append(row)
+
+    # 6. 最下方提示 Banner（若有）
+    if notice and notice.strip():
+        children.append(ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small))
+        children.append(ui.TextDisplay(notice.strip()))
+
+    return ui.Container(*children, accent_color=accent_color)
+
+
 def build_now_playing_embed(player: Any) -> discord.Embed:
     """第 6 週新增：建立音樂播放面板的動態 Embed。
 
@@ -514,100 +637,181 @@ class StopVoteView(ui.View):
 _PANEL_PLAYER_UNSET = object()
 
 
-class MusicControlView(ui.View):
-    """第 5 週新增：多按鈕音樂控制面板 View（持久化 View，timeout=None）。
+class MusicControlView(ui.LayoutView):
+    """第 5 & 6 週新增：多按鈕音樂控制面板 LayoutView（持久化 View，timeout=None）。
 
     設計理由與技術架構：
     1. 持久化（bot.add_view()）：
        - timeout 必須設為 None：若設有逾時，Bot 在重開機或長時間運作後，舊訊息上的按鈕
          將無法再觸發 Discord 事件。設為 None 並指定唯一的 custom_id，可確保任何時候
          按鈕被點擊都能正常被 Gateway 與 Bot 派發。
-       - 所有按鈕皆設定固定且唯一的 custom_id（music:toggle_pause, music:skip 等）。
+       - 所有按鈕皆設定固定且唯一的 custom_id（music:toggle_pause, music:rewind_10, music:forward_10 等）。
        - View 本身不綁定特定的 Guild 物件或 Player 實例。在按鈕被點擊時，統一透過
          interaction.guild 取得該伺服器的 Player，實現單一 View 類別跨伺服器複用，且狀態嚴格隔離。
-    2. 逾時與生命週期替代方案：
+    2. Components V2 容器化架構：
+       - 繼承 ui.LayoutView，以 ui.Container 包裝上方 Badge、曲目資訊、Section 封面與雙進度條、
+         下一首預告、按鈕 ActionRow、以及最下方動態提示 Banner。
+    3. 逾時與生命週期替代方案：
        - 持久化面板不依賴 View 內建的 on_timeout，而是將生命週期綁定播放狀態：
          當播放結束、佇列清空、或 Bot 離開語音頻道時，由 Music Cog 主動將該伺服器的面板按鈕全部 disabled。
        - 若 Bot 重啟後，舊面板按鈕被按下（此時記憶體中 Player 已不存在），於 interaction_check 中優雅攔截，
          回覆 ephemeral 提示「目前沒有播放中的內容」，並嘗試將舊訊息上的按鈕全部 disable，避免拋出未處理例外。
-    3. 權限防呆（interaction_check）：
+    4. 權限防呆（interaction_check & requester check）：
        - 操作者必須與 Bot 處於同一個語音頻道，否則以 ephemeral 訊息提示並拒絕。
-    4. 統一更新邏輯（refresh_buttons）：
+       - 快進與倒退按鈕繼承點歌者專屬保護邏輯（_check_requester_control），並於直播時自動 disable。
+    5. 統一更新邏輯（refresh_buttons）：
        - 統一依 player 狀態設定每顆按鈕的 label / emoji / disabled，避免狀態邏輯散落各處。
     """
 
     CUSTOM_ID_TOGGLE_PAUSE = "music:toggle_pause"
+    CUSTOM_ID_REWIND_10 = "music:rewind_10"
+    CUSTOM_ID_FORWARD_10 = "music:forward_10"
     CUSTOM_ID_SKIP = "music:skip"
     CUSTOM_ID_STOP = "music:stop"
     CUSTOM_ID_VOL_DOWN = "music:vol_down"
     CUSTOM_ID_VOL_UP = "music:vol_up"
 
-    def __init__(self, cog: "Music | None" = None):
+    def __init__(
+        self,
+        cog: "Music | None" = None,
+        player: "wavelink_module.Player | None" = None,
+        notice: str | None = None,
+    ):
         super().__init__(timeout=None)
         self.cog = cog
+
+        # 按鈕實例建立
+        self.btn_toggle = ui.Button(
+            label="暫停",
+            emoji="⏸️",
+            style=discord.ButtonStyle.primary,
+            custom_id=self.CUSTOM_ID_TOGGLE_PAUSE,
+        )
+        self.btn_toggle.callback = self.toggle_pause
+
+        self.btn_rewind = ui.Button(
+            label="-10s",
+            emoji="⏪",
+            style=discord.ButtonStyle.secondary,
+            custom_id=self.CUSTOM_ID_REWIND_10,
+        )
+        self.btn_rewind.callback = self.rewind_10
+
+        self.btn_forward = ui.Button(
+            label="+10s",
+            emoji="⏩",
+            style=discord.ButtonStyle.secondary,
+            custom_id=self.CUSTOM_ID_FORWARD_10,
+        )
+        self.btn_forward.callback = self.forward_10
+
+        self.btn_skip = ui.Button(
+            label="切歌",
+            emoji="⏭️",
+            style=discord.ButtonStyle.secondary,
+            custom_id=self.CUSTOM_ID_SKIP,
+        )
+        self.btn_skip.callback = self.skip
+
+        self.btn_stop = ui.Button(
+            label="停止",
+            emoji="⏹️",
+            style=discord.ButtonStyle.danger,
+            custom_id=self.CUSTOM_ID_STOP,
+        )
+        self.btn_stop.callback = self.stop
+
+        self.btn_vol_down = ui.Button(
+            label="音量 −",
+            emoji="🔉",
+            style=discord.ButtonStyle.secondary,
+            custom_id=self.CUSTOM_ID_VOL_DOWN,
+        )
+        self.btn_vol_down.callback = self.volume_down
+
+        self.btn_vol_up = ui.Button(
+            label="音量 +",
+            emoji="🔊",
+            style=discord.ButtonStyle.secondary,
+            custom_id=self.CUSTOM_ID_VOL_UP,
+        )
+        self.btn_vol_up.callback = self.volume_up
+
+        # 組裝成兩列 ActionRow：Row 1 (5 顆)，Row 2 (2 顆)
+        self.row1 = ui.ActionRow(
+            self.btn_toggle,
+            self.btn_rewind,
+            self.btn_forward,
+            self.btn_skip,
+            self.btn_stop,
+        )
+        self.row2 = ui.ActionRow(self.btn_vol_down, self.btn_vol_up)
+
+        # 組裝 Container
+        self.container = build_now_playing_container(
+            player=player,
+            notice=notice,
+            action_rows=[self.row1, self.row2],
+        )
+        self.add_item(self.container)
+        self.refresh_buttons(player)
 
     def refresh_buttons(self, player: "wavelink_module.Player | None" = None):
         """統一依據 player 播放狀態設定每顆按鈕的 label / emoji / disabled 狀態。
 
         - 沒有正在播放的曲目（或 player 為 None）：全部按鈕 disabled。
         - 暫停中：切換按鈕顯示「繼續」、綠色；播放中：顯示「暫停」、藍色。
+        - 直播中或無法 Seek：快進／倒退按鈕 disabled。
         - 佇列沒有下一首：切歌按鈕 disabled。
         - 音量到 0% 時，「−」disabled；音量到 100% 時，「+」disabled。
         """
-        btn_map: dict[str, ui.Button] = {}
-        for child in self.children:
-            if isinstance(child, ui.Button) and child.custom_id:
-                btn_map[child.custom_id] = child
-
-        btn_toggle = btn_map.get(self.CUSTOM_ID_TOGGLE_PAUSE)
-        btn_skip = btn_map.get(self.CUSTOM_ID_SKIP)
-        btn_stop = btn_map.get(self.CUSTOM_ID_STOP)
-        btn_vol_down = btn_map.get(self.CUSTOM_ID_VOL_DOWN)
-        btn_vol_up = btn_map.get(self.CUSTOM_ID_VOL_UP)
+        has_current = player is not None and getattr(player, "current", None) is not None
+        is_paused = bool(getattr(player, "paused", False)) if player else False
 
         # 狀態 1：沒有播放中的曲目或 player 不存在 -> 全部 disabled
-        if player is None or getattr(player, "current", None) is None:
-            for child in self.children:
-                child.disabled = True
-            if btn_toggle:
-                btn_toggle.label = "暫停"
-                btn_toggle.emoji = "⏯️"
-                btn_toggle.style = discord.ButtonStyle.secondary
+        if not has_current:
+            for item in self.walk_children():
+                if isinstance(item, ui.Button):
+                    item.disabled = True
+            self.btn_toggle.label = "暫停"
+            self.btn_toggle.emoji = "⏸️"
+            self.btn_toggle.style = discord.ButtonStyle.secondary
             return
 
-        current_track = player.current
+        track = player.current
         song_queue = getattr(player, "song_queue", None) or deque()
-        is_paused = getattr(player, "paused", False)
+        is_stream = bool(getattr(track, "is_stream", False))
+        is_seekable = bool(getattr(track, "is_seekable", True)) and not is_stream
+
         try:
             volume = int(getattr(player, "volume", 100))
         except (ValueError, TypeError):
             volume = 100
 
         # 暫停 / 繼續切換按鈕
-        if btn_toggle:
-            btn_toggle.disabled = False
-            if is_paused:
-                btn_toggle.label = "繼續"
-                btn_toggle.emoji = "▶️"
-                btn_toggle.style = discord.ButtonStyle.success
-            else:
-                btn_toggle.label = "暫停"
-                btn_toggle.emoji = "⏸️"
-                btn_toggle.style = discord.ButtonStyle.primary
+        self.btn_toggle.disabled = False
+        if is_paused:
+            self.btn_toggle.label = "繼續"
+            self.btn_toggle.emoji = "▶️"
+            self.btn_toggle.style = discord.ButtonStyle.success
+        else:
+            self.btn_toggle.label = "暫停"
+            self.btn_toggle.emoji = "⏸️"
+            self.btn_toggle.style = discord.ButtonStyle.primary
+
+        # 倒退 / 快進按鈕：直播或不支援 Seek 則 disabled
+        self.btn_rewind.disabled = not is_seekable
+        self.btn_forward.disabled = not is_seekable
 
         # 切歌按鈕：佇列沒有下一首時 disabled
-        if btn_skip:
-            btn_skip.disabled = (len(song_queue) == 0)
+        self.btn_skip.disabled = (len(song_queue) == 0)
 
         # 停止按鈕
-        if btn_stop:
-            btn_stop.disabled = False
+        self.btn_stop.disabled = False
 
         # 音量按鈕：邊界 disabled (0% ~ 100%)
-        if btn_vol_down:
-            btn_vol_down.disabled = (volume <= 0)
-        if btn_vol_up:
-            btn_vol_up.disabled = (volume >= 100)
+        self.btn_vol_down.disabled = (volume <= 0)
+        self.btn_vol_up.disabled = (volume >= 100)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         """統一權限與狀態防呆：
@@ -622,20 +826,15 @@ class MusicControlView(ui.View):
         player = interaction.guild.voice_client
 
         # 情況 A：機器人不在語音頻道，或沒有正在播放的曲目（例如 Bot 重開機後按舊面板）
-        if player is None or not isinstance(player, wavelink.Player) or getattr(player, "current", None) is None:
-            disabled_view = MusicControlView(self.cog)
+        if player is None or (wavelink is not None and not isinstance(player, wavelink.Player)) or getattr(player, "current", None) is None:
+            disabled_view = MusicControlView(self.cog, player=None)
             disabled_view.refresh_buttons(None)
 
             await interaction.response.send_message("目前沒有播放中的內容", ephemeral=True)
 
             try:
                 if interaction.message:
-                    embed = discord.Embed(
-                        title="⏹️ 播放已結束",
-                        description="目前沒有正在播放的歌曲。可使用 `/music_play` 點歌！",
-                        color=discord.Color.light_grey(),
-                    )
-                    await interaction.message.edit(embed=embed, view=disabled_view)
+                    await interaction.message.edit(content=None, embed=None, view=disabled_view)
             except (discord.NotFound, discord.HTTPException):
                 pass
             return False
@@ -674,14 +873,7 @@ class MusicControlView(ui.View):
         except discord.HTTPException:
             pass
 
-    @ui.button(
-        emoji="⏸️",
-        label="暫停",
-        style=discord.ButtonStyle.primary,
-        custom_id=CUSTOM_ID_TOGGLE_PAUSE,
-        row=0,
-    )
-    async def toggle_pause(self, interaction: discord.Interaction, button: ui.Button):
+    async def toggle_pause(self, interaction: discord.Interaction, button: ui.Button | None = None):
         player: "wavelink_module.Player" = interaction.guild.voice_client
         cog: "Music" = self.cog or interaction.client.get_cog("Music")
 
@@ -690,14 +882,54 @@ class MusicControlView(ui.View):
         if cog:
             await cog._sync_panel(interaction.guild.id, player, interaction=interaction)
 
-    @ui.button(
-        emoji="⏭️",
-        label="切歌",
-        style=discord.ButtonStyle.secondary,
-        custom_id=CUSTOM_ID_SKIP,
-        row=0,
-    )
-    async def skip(self, interaction: discord.Interaction, button: ui.Button):
+    async def rewind_10(self, interaction: discord.Interaction, button: ui.Button | None = None):
+        player: "wavelink_module.Player" = interaction.guild.voice_client
+        cog: "Music" = self.cog or interaction.client.get_cog("Music")
+
+        # 繼承既有防濫用檢驗：點歌者保護
+        if cog and not await cog._check_requester_control(interaction):
+            return
+
+        track = getattr(player, "current", None)
+        if not track:
+            await interaction.response.send_message("ℹ️ 目前沒有正在播放的歌曲。", ephemeral=True)
+            return
+
+        if not getattr(track, "is_seekable", True) or getattr(track, "is_stream", False):
+            await interaction.response.send_message("❌ 這首歌不支援跳轉（可能是直播）。", ephemeral=True)
+            return
+
+        current_pos = getattr(player, "position", 0)
+        target = max(0, current_pos - 10000)
+        await player.seek(target)
+        if cog:
+            await cog._sync_panel(interaction.guild.id, player, interaction=interaction)
+
+    async def forward_10(self, interaction: discord.Interaction, button: ui.Button | None = None):
+        player: "wavelink_module.Player" = interaction.guild.voice_client
+        cog: "Music" = self.cog or interaction.client.get_cog("Music")
+
+        # 繼承既有防濫用檢驗：點歌者保護
+        if cog and not await cog._check_requester_control(interaction):
+            return
+
+        track = getattr(player, "current", None)
+        if not track:
+            await interaction.response.send_message("ℹ️ 目前沒有正在播放的歌曲。", ephemeral=True)
+            return
+
+        if not getattr(track, "is_seekable", True) or getattr(track, "is_stream", False):
+            await interaction.response.send_message("❌ 這首歌不支援跳轉（可能是直播）。", ephemeral=True)
+            return
+
+        current_pos = getattr(player, "position", 0)
+        track_len = getattr(track, "length", 0) or 0
+        target = max(0, min(current_pos + 10000, max(track_len - 1000, 0)))
+        await player.seek(target)
+        if cog:
+            await cog._sync_panel(interaction.guild.id, player, interaction=interaction)
+
+    async def skip(self, interaction: discord.Interaction, button: ui.Button | None = None):
         player: "wavelink_module.Player" = interaction.guild.voice_client
         cog: "Music" = self.cog or interaction.client.get_cog("Music")
 
@@ -715,14 +947,7 @@ class MusicControlView(ui.View):
                 cog._pending_panel_interaction.pop(interaction.guild.id, None)
             raise
 
-    @ui.button(
-        emoji="⏹️",
-        label="停止",
-        style=discord.ButtonStyle.danger,
-        custom_id=CUSTOM_ID_STOP,
-        row=0,
-    )
-    async def stop(self, interaction: discord.Interaction, button: ui.Button):
+    async def stop(self, interaction: discord.Interaction, button: ui.Button | None = None):
         player: "wavelink_module.Player" = interaction.guild.voice_client
         cog: "Music" = self.cog or interaction.client.get_cog("Music")
 
@@ -741,14 +966,7 @@ class MusicControlView(ui.View):
         if cog:
             await cog._update_panel_ended(interaction.guild.id, interaction=interaction)
 
-    @ui.button(
-        emoji="🔉",
-        label="音量 −",
-        style=discord.ButtonStyle.secondary,
-        custom_id=CUSTOM_ID_VOL_DOWN,
-        row=0,
-    )
-    async def volume_down(self, interaction: discord.Interaction, button: ui.Button):
+    async def volume_down(self, interaction: discord.Interaction, button: ui.Button | None = None):
         player: "wavelink_module.Player" = interaction.guild.voice_client
         cog: "Music" = self.cog or interaction.client.get_cog("Music")
 
@@ -758,14 +976,7 @@ class MusicControlView(ui.View):
         if cog:
             await cog._sync_panel(interaction.guild.id, player, interaction=interaction)
 
-    @ui.button(
-        emoji="🔊",
-        label="音量 +",
-        style=discord.ButtonStyle.secondary,
-        custom_id=CUSTOM_ID_VOL_UP,
-        row=0,
-    )
-    async def volume_up(self, interaction: discord.Interaction, button: ui.Button):
+    async def volume_up(self, interaction: discord.Interaction, button: ui.Button | None = None):
         player: "wavelink_module.Player" = interaction.guild.voice_client
         cog: "Music" = self.cog or interaction.client.get_cog("Music")
 
@@ -813,6 +1024,9 @@ class Music(commands.Cog):
         self._last_progress_str: dict[int, str] = {}
         # key: guild_id, value: 觸發 429 暫停更新的截止時間戳（time.monotonic()）
         self._rate_limit_until: dict[int, float] = {}
+        # 第 6 週新增：面板底部即時提示字串 (guild_id -> notice string) 與自動清除計時任務 (guild_id -> Task)
+        self._panel_notices: dict[int, str] = {}
+        self._panel_notice_tasks: dict[int, asyncio.Task] = {}
 
     async def cog_unload(self):
         """Cog 被卸載時（例如重新載入模組）順便取消所有還在跑的自動離開計時器，
@@ -833,6 +1047,13 @@ class Music(commands.Cog):
             self.progress_update_loop.cancel()
         self._last_progress_str.clear()
         self._rate_limit_until.clear()
+
+        # 取消所有面板提示自動清除任務
+        for task in self._panel_notice_tasks.values():
+            if not task.done():
+                task.cancel()
+        self._panel_notice_tasks.clear()
+        self._panel_notices.clear()
 
         if self.node_health_check.is_running():
             self.node_health_check.cancel()
@@ -1161,13 +1382,16 @@ class Music(commands.Cog):
                 if channel is None:
                     continue
 
-                embed = build_now_playing_embed(player)
-                view = MusicControlView(self)
+                view = MusicControlView(
+                    self,
+                    player=player,
+                    notice=self._panel_notices.get(guild_id),
+                )
                 view.refresh_buttons(player)
 
                 # 6. 使用 partial_message 編輯，直接發送 PATCH 請求，省去 fetch_message 的 GET 請求
                 msg = channel.get_partial_message(message_id)
-                await msg.edit(embed=embed, view=view)
+                await msg.edit(content=None, embed=None, view=view)
                 self._last_progress_str[guild_id] = current_progress_str
 
             except discord.NotFound:
@@ -1361,33 +1585,8 @@ class Music(commands.Cog):
                     pass
             return
 
-        # 單曲循環重播時不發通知，避免同一首歌每次播完都洗版
-        if channel is not None and not is_repeat:
-            embed = self._build_track_embed(
-                title="🎶 接下來播放",
-                track=next_track,
-                requester_name=next_requester,
-                color=discord.Color.blurple(),
-                footer_prefix="佇列自動播放 - 由",
-            )
-            # 佇列裡還有歌時，順帶提示「下一首」是哪首，讓聽的人有預期
-            # （走到這裡時 next_track 已從佇列 popleft，所以 song_queue[0] 就是下一首）
-            if song_queue:
-                upcoming_track, upcoming_requester, _ = self._split_queue_item(song_queue[0])
-                upcoming_value = (
-                    f"[{upcoming_track.title}]({upcoming_track.uri})"
-                    if getattr(upcoming_track, "uri", None)
-                    else upcoming_track.title
-                )
-                embed.add_field(
-                    name="📜 下一首",
-                    value=f"{upcoming_value}\n由 {upcoming_requester} 點播",
-                    inline=False,
-                )
-            try:
-                await channel.send(embed=embed)
-            except discord.HTTPException as exc:
-                print(f">>> 傳送佇列自動播放通知失敗: {exc}")
+        # 第 6 週更新：播放下一首時不再單獨發送通知 Embed，統一由 on_wavelink_track_start
+        # 觸發 _sync_panel 即時編輯並刷新主面板 Container，避免洗版與刷掉控制面板。
 
     # ---------- 語音頻道空房自動離開 ----------
     @commands.Cog.listener()
@@ -1764,13 +1963,36 @@ class Music(commands.Cog):
         """建立音樂控制面板的即時資訊 Embed（第 6 週：委派至 build_now_playing_embed）。"""
         return build_now_playing_embed(player)
 
+    def _set_panel_notice(self, guild_id: int, notice: str, duration: float = 8.0) -> None:
+        """第 6 週新增：設定伺服器控制面板最下方的提示文字，並在一段時間後自動移除並重新同步面板。"""
+        old_task = self._panel_notice_tasks.get(guild_id)
+        if old_task and not old_task.done():
+            old_task.cancel()
+
+        self._panel_notices[guild_id] = notice
+
+        async def _auto_clear():
+            try:
+                await asyncio.sleep(duration)
+                if self._panel_notices.get(guild_id) == notice:
+                    self._panel_notices.pop(guild_id, None)
+                    await self._sync_panel(guild_id)
+            except asyncio.CancelledError:
+                pass
+            finally:
+                if self._panel_notice_tasks.get(guild_id) is cur_task:
+                    self._panel_notice_tasks.pop(guild_id, None)
+
+        cur_task = asyncio.create_task(_auto_clear())
+        self._panel_notice_tasks[guild_id] = cur_task
+
     async def _sync_panel(
         self,
         guild_id: int,
         player: "wavelink_module.Player | None" = _PANEL_PLAYER_UNSET,
         interaction: discord.Interaction | None = None,
     ):
-        """同步指定伺服器的控制面板（動態刷新按鈕狀態與 Embed）。
+        """同步指定伺服器的控制面板（動態刷新按鈕狀態與 Container）。
 
         - 狀態以 guild 為單位完全隔離。
         - 若傳入 interaction 或有掛起的切歌 interaction，優先透過 edit_message / edit_original_response 回應。
@@ -1788,17 +2010,20 @@ class Music(commands.Cog):
         if interaction is None and guild_id in self._pending_panel_interaction:
             interaction = self._pending_panel_interaction.pop(guild_id, None)
 
-        view = MusicControlView(self)
+        view = MusicControlView(
+            self,
+            player=player,
+            notice=self._panel_notices.get(guild_id),
+        )
         view.refresh_buttons(player)
-        embed = self._build_panel_embed(player)
 
         # 優先以 interaction 回應
         if interaction is not None:
             try:
                 if not interaction.response.is_done():
-                    await interaction.response.edit_message(embed=embed, view=view)
+                    await interaction.response.edit_message(content=None, embed=None, view=view)
                 else:
-                    await interaction.edit_original_response(embed=embed, view=view)
+                    await interaction.edit_original_response(content=None, embed=None, view=view)
                 if player is not None and getattr(player, "current", None) is not None:
                     pos = getattr(player, "position", 0)
                     length = getattr(player.current, "length", 0)
@@ -1824,7 +2049,7 @@ class Music(commands.Cog):
             if channel is not None:
                 try:
                     msg = await channel.fetch_message(message_id)
-                    await msg.edit(embed=embed, view=view)
+                    await msg.edit(content=None, embed=None, view=view)
                     if player is not None and getattr(player, "current", None) is not None:
                         pos = getattr(player, "position", 0)
                         length = getattr(player.current, "length", 0)
@@ -1841,7 +2066,7 @@ class Music(commands.Cog):
         # 既有訊息不存在或已遭刪除時，若仍在播放中，於 target_channel 發送新面板
         if target_channel is not None and player is not None and getattr(player, "current", None) is not None:
             try:
-                new_msg = await target_channel.send(embed=embed, view=view)
+                new_msg = await target_channel.send(view=view)
                 self.panel_messages[guild_id] = (target_channel.id, new_msg.id)
                 pos = getattr(player, "position", 0)
                 length = getattr(player.current, "length", 0)
@@ -1856,6 +2081,10 @@ class Music(commands.Cog):
         """將伺服器的控制面板標記為已結束（全部按鈕 disabled）。"""
         self._last_progress_str.pop(guild_id, None)
         self._rate_limit_until.pop(guild_id, None)
+        task = self._panel_notice_tasks.pop(guild_id, None)
+        if task and not task.done():
+            task.cancel()
+        self._panel_notices.pop(guild_id, None)
         await self._sync_panel(guild_id, player=None, interaction=interaction)
 
     @app_commands.command(name="music_play", description="搜尋並播放音樂，若目前正在播放則排入佇列（可輸入關鍵字或直接貼網址）")
@@ -1886,20 +2115,21 @@ class Music(commands.Cog):
         # ---- 第3週更新：有佇列了，不再直接蓋掉正在播放的歌曲 ----
         # player.playing 代表現在有歌在播、player.paused 代表暫停中但還沒播完，
         # 這兩種狀態都視為「有東西在佔用播放器」，新點的歌一律排到佇列尾端（FIFO）。
-        # 這裡把「點播者是誰」也一起存進佇列（track, requester_name），
-        # 這樣輪到這首歌自動播放時，通知訊息才能顯示是誰點的。
+        # 第 6 週更新：刪除「已新增樂曲」獨立 Embed，改在 Container 底部即時顯示提示 Banner，
+        # 一段時間後自動清除，並刪除 defer 訊息避免洗版。
         if player.playing or player.paused:
             player.song_queue.append((track, interaction.user.display_name, interaction.user.id))
             position = len(player.song_queue)
+            track_title = getattr(track, "title", "未知曲目")
+            track_uri = getattr(track, "uri", None)
+            title_display = f"[{track_title}]({track_uri})" if track_uri else track_title
+            notice = f"➕ **已新增至待播清單（第 {position} 位）**：{title_display} 由 {interaction.user.display_name} 點播"
+            self._set_panel_notice(interaction.guild.id, notice, duration=8.0)
             await self._sync_panel(interaction.guild.id, player)
-            embed = self._build_track_embed(
-                title="➕ 已加入佇列",
-                track=track,
-                requester_name=interaction.user.display_name,
-                color=discord.Color.blurple(),
-            )
-            embed.add_field(name="📌 排隊位置", value=f"第 {position} 位", inline=False)
-            await interaction.followup.send(embed=embed)
+            try:
+                await interaction.delete_original_response()
+            except (discord.NotFound, discord.HTTPException):
+                pass
             return
 
         # ---- 佇列與播放器都是空的，直接開始播放 ----
@@ -1913,10 +2143,11 @@ class Music(commands.Cog):
             await interaction.followup.send("❌ 播放音樂時發生錯誤，已回報開發者。", ephemeral=True)
             return
 
-        embed = self._build_track_embed(
-            title="🎶 開始播放", track=track, requester_name=interaction.user.display_name, color=discord.Color.blurple()
-        )
-        await interaction.followup.send(embed=embed)
+        # 刪除 defer 訊息，避免洗版與刷掉控制面板（面板由 on_wavelink_track_start 自動產生或更新）
+        try:
+            await interaction.delete_original_response()
+        except (discord.NotFound, discord.HTTPException):
+            pass
 
     @app_commands.command(name="music_play_next", description="（插播）搜尋一首歌曲並插入佇列最前面，下一首就會播放它")
     @app_commands.describe(query="歌曲名稱 / 關鍵字，或是 YouTube、SoundCloud 網址")
@@ -1944,17 +2175,18 @@ class Music(commands.Cog):
 
         if player.playing or player.paused:
             # 插播的重點：用 appendleft 塞到 FIFO 佇列的最前面，
-            # 而不是照排隊順序 append 到最後面；同樣把點播者名稱存起來。
+            # 第 6 週更新：在 Container 底部即時顯示插播提示 Banner，一段時間後自動移除
             player.song_queue.appendleft((track, interaction.user.display_name, interaction.user.id))
+            track_title = getattr(track, "title", "未知曲目")
+            track_uri = getattr(track, "uri", None)
+            title_display = f"[{track_title}]({track_uri})" if track_uri else track_title
+            notice = f"⏭️ **已插播至待播清單（下一首）**：{title_display} 由 {interaction.user.display_name} 點播"
+            self._set_panel_notice(interaction.guild.id, notice, duration=8.0)
             await self._sync_panel(interaction.guild.id, player)
-            embed = self._build_track_embed(
-                title="⏭️ 已插播",
-                track=track,
-                requester_name=interaction.user.display_name,
-                color=discord.Color.orange(),
-            )
-            embed.add_field(name="📌 排隊位置", value="下一首", inline=False)
-            await interaction.followup.send(embed=embed)
+            try:
+                await interaction.delete_original_response()
+            except (discord.NotFound, discord.HTTPException):
+                pass
             return
 
         # 目前沒有東西在播，插播跟一般 /play 沒有差別，直接播放。
@@ -1968,10 +2200,10 @@ class Music(commands.Cog):
             await interaction.followup.send("❌ 播放音樂時發生錯誤，已回報開發者。", ephemeral=True)
             return
 
-        embed = self._build_track_embed(
-            title="🎶 開始播放", track=track, requester_name=interaction.user.display_name, color=discord.Color.blurple()
-        )
-        await interaction.followup.send(embed=embed)
+        try:
+            await interaction.delete_original_response()
+        except (discord.NotFound, discord.HTTPException):
+            pass
 
     @app_commands.command(name="music_queue", description="顯示目前伺服器的播放佇列")
     @app_commands.guild_only()

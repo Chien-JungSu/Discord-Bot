@@ -48,6 +48,9 @@ from cogs.music import (
     format_time,
     build_progress_bar,
     build_now_playing_embed,
+    build_volume_bar,
+    build_now_playing_container,
+    MusicControlView,
 )
 
 PASS: list[str] = []
@@ -278,12 +281,153 @@ def test_throttling_and_rate_limit():
     check(guild_b_blocked is False, "伺服器 B 處於正常狀態，不受伺服器 A 退避影響（多伺服器隔離）")
 
 
+
+
+def test_build_volume_bar():
+    """測試 5: build_volume_bar 音量條渲染與邊界測試。"""
+    print("\n--- 測試 5: build_volume_bar 渲染 ---")
+    # 0%
+    v0 = build_volume_bar(0, width=12)
+    check("🔘" in v0 and "0%" in v0 and v0.startswith("🔊 − 🔘"), "0% 音量：按鈕在最前端")
+    # 100%
+    v100 = build_volume_bar(100, width=12)
+    check("🔘" in v100 and "100%" in v100 and "🔘 +" in v100, "100% 音量：按鈕在最後端")
+    # 50%
+    v50 = build_volume_bar(50, width=12)
+    check("🔘" in v50 and "50%" in v50, "50% 音量：包含按鈕與 50%")
+    # 負值防呆
+    check(build_volume_bar(-20, width=12) == v0, "負值音量安全夾在 0%")
+    # 超出 100% 防呆
+    check(build_volume_bar(150, width=12) == v100, "超出 100% 音量安全夾在 100%")
+    # None 防呆
+    check(build_volume_bar(None, width=12) == v100, "None 音量預設回退為 100%")
+    # 字串轉型防呆
+    check("80%" in build_volume_bar("80", width=12), "字串 '80' 安全轉型為 80%")
+
+
+def test_build_now_playing_container():
+    """測試 6: build_now_playing_container Components V2 渲染。"""
+    print("\n--- 測試 6: build_now_playing_container 渲染 ---")
+    # 1. 無 Player 時顯示播放已結束
+    c_ended = build_now_playing_container(None)
+    data_ended = c_ended.to_component_dict()
+    check(data_ended["type"] == 17, "Container component type 為 17")
+    check(data_ended["accent_color"] == 0x979C9F, "結束狀態容器 accent_color 為灰底 0x979C9F")
+    check(any("播放已結束" in comp.get("content", "") for comp in data_ended["components"]), "結束狀態包含 '播放已結束' 文字")
+
+    # 2. 播放中狀態
+    mock_player = MagicMock()
+    mock_track = MagicMock()
+    mock_track.title = "夜に駆ける"
+    mock_track.uri = "https://example.com/yoasobi"
+    mock_track.author = "YOASOBI"
+    mock_track.length = 260000
+    mock_track.is_stream = False
+    mock_track.artwork = "https://example.com/art.png"
+    mock_track.source = "youtube"
+    mock_player.current = mock_track
+    mock_player.position = 83000
+    mock_player.volume = 80
+    mock_player.paused = False
+    mock_player.loop_mode = "off"
+    mock_player.song_queue = deque()
+    mock_player.current_requester = "小明"
+
+    c_playing = build_now_playing_container(mock_player)
+    data_playing = c_playing.to_component_dict()
+    check(data_playing["accent_color"] == 0x5865F2, "播放中容器 accent_color 為 blurple 0x5865F2")
+    comps = data_playing["components"]
+    header = comps[0]
+    check("🎶 正在播放" in header["content"], "頂部 Badge 包含 '🎶 正在播放'")
+    check("[夜に駆ける](https://example.com/yoasobi)" in header["content"], "標題包含 Markdown 超連結")
+    check("YOASOBI" in header["content"], "包含作者資訊")
+
+    # Section 與 Thumbnail
+    sec = [c for c in comps if c["type"] == 9][0]
+    check(sec["accessory"]["media"]["url"] == "https://example.com/art.png", "Section 正確附帶封面 Thumbnail accessory")
+    check("01:23 / 04:20" in sec["components"][0]["content"], "Section 文字包含換算後的播放進度條")
+    check("80%" in sec["components"][0]["content"], "Section 文字包含音量條")
+
+    # 3. 帶有提示 Banner
+    c_notice = build_now_playing_container(mock_player, notice="➕ **已新增至待播清單（第 1 位）**")
+    data_notice = c_notice.to_component_dict()
+    check(any("已新增至待播清單" in comp.get("content", "") for comp in data_notice["components"]), "底端成功附加動態提示 Banner")
+
+    # 4. 暫停中狀態
+    mock_player.paused = True
+    c_paused = build_now_playing_container(mock_player)
+    data_paused = c_paused.to_component_dict()
+    check(data_paused["accent_color"] == 0xE67E22, "暫停狀態容器 accent_color 為 orange 0xE67E22")
+    check("⏸️ 已暫停" in data_paused["components"][0]["content"], "頂部 Badge 切換為 '⏸️ 已暫停'")
+
+
+def test_music_control_view_components_v2():
+    """測試 7: MusicControlView Components V2 持久化與按鈕邏輯。"""
+    print("\n--- 測試 7: MusicControlView 持久化與按鈕狀態 ---")
+    view = MusicControlView()
+    check(view.timeout is None, "MusicControlView timeout 為 None（符合持久化要求）")
+    check(view.is_persistent() is True, "MusicControlView is_persistent() 為 True")
+
+    # 驗證 7 顆按鈕之 custom_id
+    button_custom_ids = [getattr(item, "custom_id", None) for item in view.walk_children() if isinstance(item, discord.ui.Button)]
+    expected_ids = [
+        "music:toggle_pause",
+        "music:rewind_10",
+        "music:forward_10",
+        "music:skip",
+        "music:stop",
+        "music:vol_down",
+        "music:vol_up",
+    ]
+    check(button_custom_ids == expected_ids, f"7 顆按鈕之 custom_id 正確且符合規格 ({button_custom_ids})")
+
+    # 無歌曲時全部按鈕 disabled
+    view.refresh_buttons(None)
+    all_disabled = all(getattr(item, "disabled", False) for item in view.walk_children() if isinstance(item, discord.ui.Button))
+    check(all_disabled is True, "無播放曲目時，所有按鈕自動設為 disabled")
+
+    # 直播串流時快進與倒退按鈕 disabled
+    mock_player = MagicMock()
+    mock_stream_track = MagicMock()
+    mock_stream_track.is_stream = True
+    mock_stream_track.is_seekable = False
+    mock_player.current = mock_stream_track
+    mock_player.paused = False
+    mock_player.volume = 50
+    mock_player.song_queue = deque()
+    view.refresh_buttons(mock_player)
+
+    check(view.btn_rewind.disabled is True, "直播串流時倒退 10 秒按鈕 (-10s) 自動 disabled")
+    check(view.btn_forward.disabled is True, "直播串流時快進 10 秒按鈕 (+10s) 自動 disabled")
+    check(view.btn_toggle.disabled is False, "直播串流時暫停/繼續按鈕保持可用")
+    check(view.btn_skip.disabled is True, "佇列為空時切歌按鈕 disabled")
+
+    # 佇列有歌時切歌按鈕啟用
+    mock_player.song_queue.append((MagicMock(), "User", 123))
+    view.refresh_buttons(mock_player)
+    check(view.btn_skip.disabled is False, "佇列有歌曲時切歌按鈕啟用")
+
+    # 音量邊界：vol=0 時音量減 disabled，vol=100 時音量加 disabled
+    mock_player.volume = 0
+    view.refresh_buttons(mock_player)
+    check(view.btn_vol_down.disabled is True, "音量為 0% 時音量減按鈕 disabled")
+    check(view.btn_vol_up.disabled is False, "音量為 0% 時音量加按鈕啟用")
+
+    mock_player.volume = 100
+    view.refresh_buttons(mock_player)
+    check(view.btn_vol_down.disabled is False, "音量為 100% 時音量減按鈕啟用")
+    check(view.btn_vol_up.disabled is True, "音量為 100% 時音量加按鈕 disabled")
+
+
 def main():
     print("=== 開始執行第 6 週動態 Embed 與進度條渲染單元測試 ===")
     test_format_time()
     test_build_progress_bar()
     test_build_now_playing_embed()
     test_throttling_and_rate_limit()
+    test_build_volume_bar()
+    test_build_now_playing_container()
+    test_music_control_view_components_v2()
 
     total = len(PASS) + len(FAIL)
     print(f"\n==========================================")
