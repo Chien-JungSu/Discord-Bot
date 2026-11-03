@@ -16,6 +16,14 @@ import discord
 from discord import app_commands, ui
 from discord.ext import commands, tasks
 
+from services.spotify import (
+    SpotifyClient,
+    SpotifyError,
+    SpotifyTrack,
+    looks_like_spotify,
+    parse_spotify_url,
+)
+
 if TYPE_CHECKING:
     import wavelink
     import wavelink as wavelink_module
@@ -47,6 +55,18 @@ LAVALINK_RECONNECT_COOLDOWN = float(os.getenv('LAVALINK_RECONNECT_COOLDOWN', '60
 
 # 第 6 週新增：播放面板進度條定時更新間隔（秒，集中常數設定，至少 5 秒防 API rate limit）
 PROGRESS_UPDATE_INTERVAL = float(os.getenv('PROGRESS_UPDATE_INTERVAL', '5.0'))
+
+# ---------- 第 7 週新增：Spotify 批次匯入設定（集中常數，方便依機器效能調整） ----------
+# 同時進行的 Lavalink 搜尋數量。免費方案 0.1 CPU／512MB，並發太高會壓垮節點與記憶體，預設只開 3 個。
+IMPORT_CONCURRENCY = max(1, int(os.getenv('IMPORT_CONCURRENCY', '3')))
+# 單次匯入的曲目上限，超過會截斷並提示；避免超大歌單長時間佔用背景任務與搜尋額度。
+IMPORT_MAX_TRACKS = max(1, int(os.getenv('IMPORT_MAX_TRACKS', '200')))
+# 單首搜尋逾時秒數：避免某一首卡死拖住整批。
+IMPORT_SEARCH_TIMEOUT = float(os.getenv('IMPORT_SEARCH_TIMEOUT', '15'))
+# 每批同時建立的搜尋任務數：分批處理，避免一次替 200 首建立 200 個協程物件。
+IMPORT_BATCH_SIZE = max(IMPORT_CONCURRENCY, int(os.getenv('IMPORT_BATCH_SIZE', '9')))
+# 匯入進度訊息的最短更新間隔：沿用第 6 週節流原則（至少 5 秒），避免觸發 Discord 429。
+IMPORT_PROGRESS_INTERVAL = max(5.0, PROGRESS_UPDATE_INTERVAL)
 
 
 def format_duration(length_ms: int | None) -> str:
@@ -963,6 +983,9 @@ class MusicControlView(ui.LayoutView):
         cog: "Music" = self.cog or interaction.client.get_cog("Music")
 
         await interaction.response.defer()
+        # 第 7 週：停止時先取消背景匯入，已解析但未加入佇列的曲目一併丟棄
+        if cog:
+            cog._cancel_import(interaction.guild.id)
         song_queue = getattr(player, "song_queue", None)
         if song_queue:
             song_queue.clear()
@@ -975,7 +998,11 @@ class MusicControlView(ui.LayoutView):
                 await player.pause(False)
             await player.skip(force=True)
         if cog:
-            await cog._update_panel_ended(interaction.guild.id, interaction=interaction)
+            await cog._update_panel_ended(
+                interaction.guild.id,
+                interaction=interaction,
+                reason=f"⏹️ 已停止播放並清空佇列（操作者：{interaction.user.display_name}）",
+            )
 
     async def volume_down(self, interaction: discord.Interaction, button: ui.Button | None = None):
         player: "wavelink_module.Player" = interaction.guild.voice_client
@@ -1038,11 +1065,20 @@ class Music(commands.Cog):
         # 第 6 週新增：面板底部即時提示字串 (guild_id -> notice string) 與自動清除計時任務 (guild_id -> Task)
         self._panel_notices: dict[int, str] = {}
         self._panel_notice_tasks: dict[int, asyncio.Task] = {}
+        # 第 7 週新增：Spotify 服務（整個 Cog 共用一個 aiohttp session）與各伺服器的背景匯入任務。
+        # 任務必須存參照：asyncio 只對 Task 保留弱引用，沒人持有就可能被垃圾回收而中途消失。
+        # key: guild_id，每個伺服器同時最多一個匯入任務；任務結束時會由 done callback 自行移除。
+        self.spotify = SpotifyClient(os.getenv('SPOTIFY_CLIENT_ID'), os.getenv('SPOTIFY_CLIENT_SECRET'))
+        self._import_tasks: dict[int, asyncio.Task] = {}
 
     async def cog_unload(self):
         """Cog 被卸載時（例如重新載入模組）順便取消所有還在跑的自動離開計時器，
         避免計時器任務變成孤兒，之後莫名其妙把機器人踢出語音頻道。
         """
+        # 第 7 週新增：取消所有背景匯入任務並關閉 Spotify 的 HTTP session，避免任務與連線殘留。
+        for gid in list(self._import_tasks.keys()):
+            self._cancel_import(gid)
+        await self.spotify.close()
         for task in self.empty_channel_timers.values():
             if not task.done():
                 task.cancel()
@@ -1502,8 +1538,14 @@ class Music(commands.Cog):
                 extra_info=f"on_wavelink_track_exception track={track_title} severity={severity} cause={cause}",
             )
 
+        # 第 7 週：失敗通知改顯示在面板 Container 底部（15 秒後自動消失），不再另外發訊息；
+        # 只有該伺服器還沒有面板（例如第一首就載入失敗）時才退回頻道訊息，否則使用者完全看不到原因。
+        fail_text = f"⚠️ 播放「{track_title}」失敗，Lavalink 節點無法載入這首歌曲。{reason_hint}"
+        guild_obj = getattr(player, "guild", None)
+        if guild_obj is not None and await self._notify_panel(guild_obj.id, fail_text, duration=15.0):
+            return
         try:
-            await channel.send(f"⚠️ 播放「{track_title}」失敗，Lavalink 節點無法載入這首歌曲。{reason_hint}")
+            await channel.send(fail_text)
         except discord.HTTPException as e:
             print(f">>> 傳送 TrackException 通知訊息失敗: {e}")
 
@@ -1570,16 +1612,26 @@ class Music(commands.Cog):
         if next_item is None:
             player.current_requester = None
             player.current_requester_id = None
-            if getattr(player, "guild", None):
-                await self._update_panel_ended(player.guild.id)
-            if channel is not None:
-                try:
-                    await channel.send("📭 播放佇列已經全部播完囉，輸入 `/music_play` 繼續點歌吧！")
-                except discord.HTTPException:
-                    pass
+            # 第 7 週：背景匯入還在跑時，佇列暫時是空的只是因為「下一批還沒解析完」，
+            # 不能當成播放結束（否則面板會被拋棄，匯入完成後也沒人接著播）。
+            # 匯入任務每批加入佇列後會呼叫 _start_if_idle 接手播放。
+            guild_obj = getattr(player, "guild", None)
+            if guild_obj is not None and guild_obj.id in self._import_tasks:
+                return
+            if guild_obj is not None:
+                # 第 7 週：「播放完畢」改寫在面板最終狀態裡，不再另外發訊息
+                shown = await self._update_panel_ended(
+                    guild_obj.id, reason="📭 播放佇列已經全部播完囉，輸入 `/music_play` 繼續點歌吧！"
+                )
+                if not shown and channel is not None:
+                    try:
+                        await channel.send("📭 播放佇列已經全部播完囉，輸入 `/music_play` 繼續點歌吧！")
+                    except discord.HTTPException:
+                        pass
             return
 
         next_track, next_requester, next_requester_id = self._split_queue_item(next_item)
+        player.advancing = True  # 告知匯入任務「我正在接下一首」，避免兩邊同時 play 造成互相覆蓋
         try:
             await self._play_track(player, next_track, next_requester, next_requester_id)
         except Exception as e:
@@ -1587,14 +1639,18 @@ class Music(commands.Cog):
             await self.bot.notify_owner_error(
                 e, extra_info=f"on_wavelink_track_end 自動播放失敗 track={getattr(next_track, 'title', '?')}"
             )
-            if channel is not None:
+            # 第 7 週：錯誤通知改顯示在面板內；沒有面板時才退回頻道訊息
+            err_text = f"⚠️ 自動播放「{getattr(next_track, 'title', '未知曲目')}」時發生錯誤，已回報開發者。"
+            guild_obj = getattr(player, "guild", None)
+            shown = guild_obj is not None and await self._notify_panel(guild_obj.id, err_text, duration=15.0)
+            if not shown and channel is not None:
                 try:
-                    await channel.send(
-                        f"⚠️ 自動播放「{getattr(next_track, 'title', '未知曲目')}」時發生錯誤，已回報開發者。"
-                    )
+                    await channel.send(err_text)
                 except discord.HTTPException:
                     pass
             return
+        finally:
+            player.advancing = False
 
         # 第 6 週更新：播放下一首時不再單獨發送通知 Embed，統一由 on_wavelink_track_start
         # 觸發 _sync_panel 即時編輯並刷新主面板 Container，避免洗版與刷掉控制面板。
@@ -1627,6 +1683,11 @@ class Music(commands.Cog):
             # 但保險起見還是清一次，避免機器人被強制斷線（例如被踢出頻道）
             # 導致計時器變成孤兒、永遠不會被觸發也永遠不會被取消。
             self._cancel_empty_channel_timer(guild.id)
+            # 第 7 週：Bot 被踢出／斷線時，背景匯入也要取消，並把面板收成最終狀態
+            if guild.id in self._import_tasks:
+                self._cancel_import(guild.id)
+            if member.id == self.bot.user.id and guild.id in self.panel_messages:
+                await self._update_panel_ended(guild.id, reason="👋 我已離開語音頻道，想聽歌再 `/music_play` 一次就可以！")
             return
 
         bot_channel = player.channel
@@ -1703,7 +1764,13 @@ class Music(commands.Cog):
             song_queue.clear()
 
         home_channel = getattr(player, "home_channel", None)
-        await self._update_panel_ended(guild_id)
+        # 第 7 週：空房離開時一併取消背景匯入，並把原因寫進面板最終狀態（不另外發訊息）
+        self._cancel_import(guild_id)
+        leave_text = (
+            f"📤 語音頻道已經空了超過 {EMPTY_VOICE_CHANNEL_TIMEOUT:.0f} 秒，"
+            "我先自動離開並清空佇列了，想聽歌再 `/music_play` 一次就可以！"
+        )
+        shown = await self._update_panel_ended(guild_id, reason=leave_text)
 
         try:
             await player.disconnect()
@@ -1716,12 +1783,10 @@ class Music(commands.Cog):
             f"👋 語音頻道已經沒有真人成員超過 {EMPTY_VOICE_CHANNEL_TIMEOUT:.0f} 秒，"
             f"已自動離開（guild_id={guild_id}）。"
         )
-        if home_channel is not None:
+        # 沒有面板可顯示時才退回頻道訊息
+        if not shown and home_channel is not None:
             try:
-                await home_channel.send(
-                    f"📤 語音頻道已經空了超過 {EMPTY_VOICE_CHANNEL_TIMEOUT:.0f} 秒，"
-                    "我先自動離開並清空佇列了，想聽歌再 `/music_play` 一次就可以！"
-                )
+                await home_channel.send(leave_text)
             except discord.HTTPException:
                 pass
 
@@ -1906,7 +1971,12 @@ class Music(commands.Cog):
         song_queue = getattr(voice_client, "song_queue", None)
         if song_queue:
             song_queue.clear()
-        await self._update_panel_ended(interaction.guild.id)
+        # 第 7 週：離開時取消背景匯入（已解析但未加入的曲目直接丟棄），原因寫進面板最終狀態
+        self._cancel_import(interaction.guild.id)
+        await self._update_panel_ended(
+            interaction.guild.id,
+            reason=f"👋 已離開 {channel_mention}（操作者：{interaction.user.display_name}）",
+        )
         await voice_client.disconnect()
         await interaction.response.send_message(f"👋 已離開 {channel_mention}。", ephemeral=True)
 
@@ -1974,13 +2044,19 @@ class Music(commands.Cog):
         """建立音樂控制面板的即時資訊 Embed（第 6 週：委派至 build_now_playing_embed）。"""
         return build_now_playing_embed(player)
 
-    def _set_panel_notice(self, guild_id: int, notice: str, duration: float = 8.0) -> None:
-        """第 6 週新增：設定伺服器控制面板最下方的提示文字，並在一段時間後自動移除並重新同步面板。"""
-        old_task = self._panel_notice_tasks.get(guild_id)
+    def _set_panel_notice(self, guild_id: int, notice: str, duration: float | None = 8.0) -> None:
+        """第 6 週新增：設定伺服器控制面板最下方的提示文字，並在一段時間後自動移除並重新同步面板。
+
+        第 7 週更新：duration=None 代表「持久提示」（例如匯入進度），不排程自動清除，
+        由呼叫端在工作結束時自行更新或清除。
+        """
+        old_task = self._panel_notice_tasks.pop(guild_id, None)
         if old_task and not old_task.done():
             old_task.cancel()
 
         self._panel_notices[guild_id] = notice
+        if duration is None:
+            return
 
         async def _auto_clear():
             try:
@@ -1997,11 +2073,44 @@ class Music(commands.Cog):
         cur_task = asyncio.create_task(_auto_clear())
         self._panel_notice_tasks[guild_id] = cur_task
 
+    async def _notify_panel(self, guild_id: int, text: str, duration: float | None = 8.0) -> bool:
+        """第 7 週新增：把「通知」顯示在該伺服器的面板 Container 底部，而不是另外發訊息。
+
+        設計理由：每多發一則公開訊息，面板就會被往上擠；所有通知統一走面板 notice，
+        聊天頻道才能維持單一則乾淨的面板。回傳 False 代表該伺服器目前沒有面板，
+        呼叫端可自行決定要不要退回其他方式（例如 ephemeral 回覆）。
+        """
+        if guild_id not in self.panel_messages:
+            return False
+        self._set_panel_notice(guild_id, text, duration=duration)
+        await self._sync_panel(guild_id)
+        return True
+
+    async def _announce(self, interaction: discord.Interaction, text: str, duration: float = 8.0) -> None:
+        """第 7 週新增：指令的公開成功回覆改顯示在面板上，並收掉 Discord 的互動回應避免洗版。
+
+        沒有面板可顯示時才退回原本的公開訊息，確保使用者一定看得到結果。
+        """
+        if await self._notify_panel(interaction.guild.id, text, duration=duration):
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.defer(ephemeral=True)
+                await interaction.delete_original_response()
+            except (discord.NotFound, discord.HTTPException):
+                pass
+            return
+        if interaction.response.is_done():
+            await interaction.followup.send(text)
+        else:
+            await interaction.response.send_message(text)
+
     async def _sync_panel(
         self,
         guild_id: int,
         player: "wavelink_module.Player | None" = _PANEL_PLAYER_UNSET,
         interaction: discord.Interaction | None = None,
+        notice_override: str | None = None,
+        final: bool = False,
     ):
         """同步指定伺服器的控制面板（動態刷新按鈕狀態與 Container）。
 
@@ -2009,6 +2118,9 @@ class Music(commands.Cog):
         - 若傳入 interaction 或有掛起的切歌 interaction，優先透過 edit_message / edit_original_response 回應。
         - 否則透過 channel.fetch_message 編輯既有訊息，避免洗版。
         - 若舊面板訊息被刪除（NotFound），重新發送新面板並更新記錄。
+        - 第 7 週新增 notice_override：以指定文字取代底部提示（用於「已結束」原因）。
+        - 第 7 週新增 final：最終狀態（播放結束／離開）。此模式下一定會編輯「記錄中的面板訊息」，
+          即使 interaction 按的是另一則舊面板，確保被拋棄的面板不會殘留可操作的外觀。
         """
         guild = self.bot.get_guild(guild_id)
         if guild is None:
@@ -2024,7 +2136,7 @@ class Music(commands.Cog):
         view = MusicControlView(
             self,
             player=player,
-            notice=self._panel_notices.get(guild_id),
+            notice=notice_override if notice_override is not None else self._panel_notices.get(guild_id),
         )
         view.refresh_buttons(player)
 
@@ -2040,7 +2152,11 @@ class Music(commands.Cog):
                     length = getattr(player.current, "length", 0)
                     is_stream = bool(getattr(player.current, "is_stream", False))
                     self._last_progress_str[guild_id] = build_progress_bar(pos, length, is_stream=is_stream)
-                return
+                # final 模式：只有「被按的那則就是記錄中的面板」才算處理完，否則繼續編輯記錄中的面板
+                tracked = self.panel_messages.get(guild_id)
+                msg_id = getattr(getattr(interaction, "message", None), "id", None)
+                if not final or tracked is None or tracked[1] == msg_id:
+                    return
             except (discord.NotFound, discord.HTTPException) as exc:
                 print(f">>> 透過 interaction 更新面板失敗，改走 fetch_message：{exc}")
 
@@ -2087,16 +2203,281 @@ class Music(commands.Cog):
                 print(f"❌ 發送新控制面板訊息失敗：{exc}")
 
     async def _update_panel_ended(
-        self, guild_id: int, interaction: discord.Interaction | None = None
-    ):
-        """將伺服器的控制面板標記為已結束（全部按鈕 disabled）。"""
+        self,
+        guild_id: int,
+        interaction: discord.Interaction | None = None,
+        reason: str | None = None,
+    ) -> bool:
+        """將伺服器的控制面板標記為已結束（全部按鈕 disabled），並「拋棄」這個 Container。
+
+        第 7 週修正：以前結束後仍保留 panel_messages 的記錄，所以下次點歌時
+        _sync_panel 會去編輯那則舊面板（它可能早就被聊天訊息擠到很上面），看起來像「沿用舊 container」。
+        現在結束時把記錄移除：舊面板停在「已結束」的最終狀態，下次點歌 on_wavelink_track_start
+        找不到記錄，就會在頻道最下方送出一則全新的 Container。
+
+        reason：結束原因（播完／停止／自動離開…）直接寫在這則最終面板的底部，
+        不再另外發送訊息。回傳 True 代表有面板可顯示（呼叫端據此決定是否需要退回其他回覆方式）。
+        """
         self._last_progress_str.pop(guild_id, None)
         self._rate_limit_until.pop(guild_id, None)
         task = self._panel_notice_tasks.pop(guild_id, None)
         if task and not task.done():
             task.cancel()
-        self._panel_notices.pop(guild_id, None)
-        await self._sync_panel(guild_id, player=None, interaction=interaction)
+        pending = self._panel_notices.pop(guild_id, None)
+        self._pending_panel_interaction.pop(guild_id, None)
+
+        # 失敗類（⚠️）提示要保留給使用者看；其他提示（如「已新增」）在結束時就沒意義了。
+        parts = [p for p in ((pending if pending and pending.startswith("⚠️") else None), reason) if p]
+        notice = "\n".join(parts)
+
+        had_panel = guild_id in self.panel_messages or interaction is not None
+        await self._sync_panel(
+            guild_id, player=None, interaction=interaction, notice_override=notice, final=True
+        )
+        # 拋棄：之後點歌會建立新的 Container
+        self.panel_messages.pop(guild_id, None)
+        return had_panel
+
+    # ---------- 第 7 週新增：Spotify 歌單批次匯入 ----------
+    # 整體設計（為何這樣拆）：
+    # 1. /music_play 收到 Spotify 連結只做「驗證 + 建立背景任務」就立刻返回，
+    #    Gateway 事件迴圈與其他指令（/pause、/skip…）完全不會被匯入拖慢。
+    # 2. 背景任務：先取得曲目清單 → 逐首嘗試直到第一首解析成功就立刻播放 →
+    #    其餘曲目「分批」解析（每批最多 IMPORT_BATCH_SIZE 首，批內用 Semaphore 限制並發），
+    #    每批結果依原順序一次加入佇列。
+    # 3. 只在批次解析完成後「同步地」append，沒有 await 夾在中間，所以被取消時
+    #    已解析但尚未加入的曲目自然被丟棄，不會留下半批資料。
+    @staticmethod
+    def _is_player_idle(player) -> bool:
+        """播放器是否閒置：沒有曲目在播／暫停，且沒有正在接下一首（避免與 track_end 互搶）。"""
+        return (
+            not (player.playing or player.paused)
+            and getattr(player, "current", None) is None
+            and not getattr(player, "advancing", False)
+        )
+
+    async def _start_if_idle(self, player) -> None:
+        """播放器閒置且佇列有歌時，取出第一首開始播放（匯入的第一批曲目、或播完後才到的下一批）。"""
+        if not self._is_player_idle(player) or not player.song_queue:
+            return
+        track, requester_name, requester_id = self._split_queue_item(player.song_queue.popleft())
+        await self._play_track(player, track, requester_name, requester_id)
+
+    def _cancel_import(self, guild_id: int) -> bool:
+        """取消指定伺服器的背景匯入任務並清理狀態；回傳是否真的有任務被取消。
+
+        會立刻把任務從字典移除（不等任務真正結束），所以同一伺服器可以馬上開始新的匯入；
+        任務結束時的 done callback 只會移除「自己」，不會誤刪新任務。
+        """
+        task = self._import_tasks.pop(guild_id, None)
+        cancelled = False
+        if task is not None and not task.done():
+            task.cancel()
+            cancelled = True
+        # 匯入進度提示（📥 開頭）要立刻清掉，否則取消後面板會一直顯示「匯入中」
+        notice = self._panel_notices.get(guild_id)
+        if notice and notice.startswith("📥"):
+            self._panel_notices.pop(guild_id, None)
+        return cancelled
+
+    async def _ephemeral_error(self, interaction: discord.Interaction, text: str) -> None:
+        """defer 之後要回報錯誤給使用者看（只有自己看得到）。
+
+        先刪掉公開的「思考中」訊息再送 ephemeral：defer 出來的第一則 followup 會變成原訊息，
+        無法再改成 ephemeral，所以先刪掉才不會把錯誤訊息公開在頻道上。
+        """
+        try:
+            await interaction.delete_original_response()
+        except (discord.NotFound, discord.HTTPException):
+            pass
+        try:
+            await interaction.followup.send(text, ephemeral=True)
+        except discord.HTTPException as e:
+            print(f">>> 傳送 Spotify 錯誤訊息失敗: {e}")
+
+    async def _search_spotify_track(self, sem: asyncio.Semaphore, st: SpotifyTrack):
+        """把一首 Spotify 曲目轉成可播放的 Playable：搜尋「曲名 第一位歌手」，取第一筆。
+
+        Semaphore 限制同時搜尋數量（保護 Lavalink 節點與 512MB 記憶體）；
+        單首逾時／失敗只回傳 None，不影響整批。
+        """
+        async with sem:
+            try:
+                found = await asyncio.wait_for(
+                    wavelink.Playable.search(st.search_query()), timeout=IMPORT_SEARCH_TIMEOUT
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # 含 TimeoutError：單首失敗只記錄，不中斷整批
+                print(f">>> Spotify 曲目搜尋失敗（略過）「{st.search_query()}」：{type(e).__name__}: {e}")
+                return None
+        if not found:
+            return None
+        if isinstance(found, wavelink.Playlist):
+            return found.tracks[0] if found.tracks else None
+        return found[0]
+
+    async def _start_spotify_import(self, interaction: discord.Interaction, player, query: str) -> None:
+        """/music_play 的 Spotify 入口：驗證後建立背景任務並立刻返回（呼叫端已 defer）。"""
+        parsed = parse_spotify_url(query)
+        if parsed is None:
+            await self._ephemeral_error(
+                interaction,
+                "❌ 無法辨識這個 Spotify 連結。目前支援歌單／專輯／單曲，例如 "
+                "`https://open.spotify.com/playlist/...` 或 `spotify:album:...`。",
+            )
+            return
+        if not self.spotify.enabled:
+            await self._ephemeral_error(
+                interaction, "ℹ️ Spotify 匯入功能目前未啟用（管理員尚未設定 Spotify 金鑰），請改用歌名或 YouTube 連結點歌。"
+            )
+            return
+
+        guild_id = interaction.guild.id
+        running = self._import_tasks.get(guild_id)
+        if running is not None and not running.done():
+            await self._ephemeral_error(
+                interaction, "⌛ 這個伺服器已經有一份 Spotify 歌單正在匯入，請等它完成（或先 `/music_stop`）再匯入新的。"
+            )
+            return
+
+        kind, spotify_id = parsed
+        task = asyncio.create_task(self._run_spotify_import(interaction, player, kind, spotify_id))
+        self._import_tasks[guild_id] = task
+
+        def _on_done(t: asyncio.Task, gid: int = guild_id) -> None:
+            # 只移除「自己」：任務可能已被取消並由新任務取代
+            if self._import_tasks.get(gid) is t:
+                self._import_tasks.pop(gid, None)
+
+        task.add_done_callback(_on_done)
+
+    async def _run_spotify_import(self, interaction: discord.Interaction, player, kind: str, spotify_id: str) -> None:
+        """背景匯入主流程（每個伺服器同時最多一個）。"""
+        guild_id = interaction.guild.id
+        requester_name = interaction.user.display_name
+        requester_id = interaction.user.id
+        ok = fail = done = 0
+        thinking_cleared = False
+
+        async def clear_thinking():
+            nonlocal thinking_cleared
+            if thinking_cleared:
+                return
+            thinking_cleared = True
+            try:
+                await interaction.delete_original_response()
+            except (discord.NotFound, discord.HTTPException):
+                pass
+
+        def alive() -> bool:
+            guild = self.bot.get_guild(guild_id)
+            return guild is not None and guild.voice_client is player and getattr(player, "connected", True)
+
+        try:
+            # ---- 1. 取得曲目清單（只保留曲名／歌手／時長）----
+            try:
+                result = await self.spotify.fetch_tracks(kind, spotify_id, IMPORT_MAX_TRACKS)
+            except SpotifyError as e:
+                await self._ephemeral_error(interaction, f"❌ {e.message}")
+                return
+            tracks = result.tracks
+            total = len(tracks)
+            if total == 0:
+                await self._ephemeral_error(interaction, "😕 這份 Spotify 內容裡沒有可以匯入的曲目。")
+                return
+
+            sem = asyncio.Semaphore(IMPORT_CONCURRENCY)
+            index = 0
+            queued_position = 0   # 單曲被排進佇列時的位置（0 代表直接開始播放）
+
+            # ---- 2. 第一首：逐首嘗試到成功為止，立刻開始播放，使用者不必等整批 ----
+            while index < total and ok == 0:
+                st = tracks[index]
+                index += 1
+                done += 1
+                playable = await self._search_spotify_track(sem, st)
+                if playable is None:
+                    fail += 1
+                    continue
+                if not alive():
+                    return
+                was_idle = self._is_player_idle(player)
+                player.song_queue.append((playable, requester_name, requester_id))
+                ok += 1
+                if not was_idle:
+                    queued_position = len(player.song_queue)
+                await self._start_if_idle(player)
+                await clear_thinking()
+
+            if ok == 0:
+                await self._ephemeral_error(interaction, "😕 這份 Spotify 內容的曲目都找不到對應的音源，請稍後再試。")
+                return
+
+            # ---- 3. 其餘曲目：分批解析、依原順序加入佇列 ----
+            trunc_hint = f"（已截斷至前 {IMPORT_MAX_TRACKS} 首）" if result.truncated else ""
+            last_progress = 0.0
+            while index < total:
+                batch = tracks[index:index + IMPORT_BATCH_SIZE]
+                index += len(batch)
+                results = await asyncio.gather(*(self._search_spotify_track(sem, st) for st in batch))
+                if not alive():
+                    return  # 已離開語音頻道：解析好的曲目直接丟棄
+                # 這一段沒有 await：整批「全進或全不進」，被取消時不會留下半批
+                for playable in results:
+                    done += 1
+                    if playable is None:
+                        fail += 1
+                        continue
+                    player.song_queue.append((playable, requester_name, requester_id))
+                    ok += 1
+                await self._start_if_idle(player)
+
+                # 進度更新節流：沿用第 6 週的間隔與 429 退避記錄，避免頻繁 edit 觸發 rate limit
+                now = time.monotonic()
+                if now - last_progress >= IMPORT_PROGRESS_INTERVAL and now >= self._rate_limit_until.get(guild_id, 0.0):
+                    last_progress = now
+                    self._set_panel_notice(
+                        guild_id,
+                        f"📥 **Spotify 匯入中**：已處理 {done}/{total}（成功 {ok}／失敗 {fail}）{trunc_hint}",
+                        duration=None,
+                    )
+                    await self._sync_panel(guild_id, player)
+
+            # ---- 4. 結果回報（寫在面板底部，一段時間後自動消失）----
+            if total == 1:
+                if queued_position:
+                    st_title = tracks[0].title
+                    await self._notify_panel(
+                        guild_id,
+                        f"➕ **已新增至待播清單（第 {queued_position} 位）**：{st_title} 由 {requester_name} 點播",
+                    )
+            else:
+                extras = []
+                if result.truncated:
+                    extras.append(f"超過上限，僅匯入前 {IMPORT_MAX_TRACKS} 首")
+                if result.skipped:
+                    extras.append(f"略過 {result.skipped} 首無法轉譯的項目")
+                tail = f"（{'；'.join(extras)}）" if extras else ""
+                self._panel_notices.pop(guild_id, None)
+                await self._notify_panel(
+                    guild_id, f"✅ **Spotify 匯入完成**：成功 {ok} 首／失敗 {fail} 首{tail}", duration=15.0
+                )
+
+            # 匯入期間曲目可能已全部播完（面板在 track_end 時刻意沒有收尾），此時補上結束狀態
+            if alive() and self._is_player_idle(player) and not player.song_queue:
+                await self._update_panel_ended(guild_id, reason="📭 播放佇列已經全部播完囉，輸入 `/music_play` 繼續點歌吧！")
+        except asyncio.CancelledError:
+            raise  # 被 /stop、/leave 等取消：清理已在 _cancel_import 完成
+        except Exception as e:
+            print(f">>> Spotify 匯入發生未預期錯誤：{e}")
+            await self.bot.notify_owner_error(e, interaction, extra_info=f"Spotify 匯入失敗 kind={kind}")
+            await self._ephemeral_error(interaction, "❌ 匯入 Spotify 內容時發生錯誤，已回報開發者。")
+        finally:
+            # 保險：若任務是自然結束／出錯，清掉殘留的「匯入中」提示
+            notice = self._panel_notices.get(guild_id)
+            if notice and notice.startswith("📥"):
+                self._panel_notices.pop(guild_id, None)
 
     @app_commands.command(name="music_play", description="搜尋並播放音樂，若目前正在播放則排入佇列（可輸入關鍵字或直接貼網址）")
     @app_commands.describe(query="歌曲名稱 / 關鍵字，或是 YouTube、SoundCloud 網址")
@@ -2118,6 +2499,11 @@ class Music(commands.Cog):
         player = await self._ensure_player(interaction)
         if player is None:
             return  # 錯誤訊息已經在 _ensure_player 內送出
+
+        # 第 7 週新增：Spotify 連結改走背景匯入流程（立刻返回，不阻塞 Gateway 與其他指令）
+        if looks_like_spotify(query):
+            await self._start_spotify_import(interaction, player, query)
+            return
 
         track = await self._search_one_track(interaction, query)
         if track is None:
@@ -2178,6 +2564,10 @@ class Music(commands.Cog):
 
         player = await self._ensure_player(interaction)
         if player is None:
+            return
+
+        if looks_like_spotify(query):
+            await self._ephemeral_error(interaction, "ℹ️ 插播暫不支援 Spotify 連結，請改用 `/music_play` 匯入。")
             return
 
         track = await self._search_one_track(interaction, query)
@@ -2280,6 +2670,8 @@ class Music(commands.Cog):
 
         removed_count = len(song_queue)
         song_queue.clear()
+        # 第 7 週：清空佇列時一併取消背景匯入，已解析但未加入的曲目丟棄，避免清完又被塞回來
+        self._cancel_import(interaction.guild.id)
         await self._sync_panel(interaction.guild.id, player)
         await interaction.response.send_message(
             f"🗑️ 已清空佇列，移除了 {removed_count} 首歌曲（正在播放的歌曲不受影響）。", ephemeral=True
@@ -2549,15 +2941,13 @@ class Music(commands.Cog):
                 await interaction.followup.send("ℹ️ 現在沒有可以暫停的歌曲。", ephemeral=True)
                 return
             await player.pause(True)
-            await self._sync_panel(interaction.guild.id, player)
-            await interaction.followup.send(f"⏸️ 已暫停{self._operator_stamp(interaction)}")
+            await self._announce(interaction, f"⏸️ 已暫停{self._operator_stamp(interaction)}")
         else:
             if not player.paused:
                 await interaction.followup.send("ℹ️ 目前不是暫停狀態。", ephemeral=True)
                 return
             await player.pause(False)
-            await self._sync_panel(interaction.guild.id, player)
-            await interaction.followup.send(f"▶️ 繼續播放{self._operator_stamp(interaction)}")
+            await self._announce(interaction, f"▶️ 繼續播放{self._operator_stamp(interaction)}")
 
     async def _handle_pause_resume_request(self, interaction: discord.Interaction, player, want_pause: bool):
         """pause / resume 的攔截邏輯：非點歌者使用時，改為向點歌者請求允許。
@@ -2623,8 +3013,7 @@ class Music(commands.Cog):
                 await interaction.response.send_message("ℹ️ 已經是暫停狀態了。", ephemeral=True)
                 return
             await player.pause(True)
-            await self._sync_panel(interaction.guild.id, player)
-            await interaction.response.send_message(f"⏸️ 已暫停{self._operator_stamp(interaction)}")
+            await self._announce(interaction, f"⏸️ 已暫停{self._operator_stamp(interaction)}")
             return
 
         await self._handle_pause_resume_request(interaction, player, want_pause=True)
@@ -2643,8 +3032,7 @@ class Music(commands.Cog):
                 await interaction.response.send_message("ℹ️ 目前不是暫停狀態。", ephemeral=True)
                 return
             await player.pause(False)
-            await self._sync_panel(interaction.guild.id, player)
-            await interaction.response.send_message(f"▶️ 繼續播放{self._operator_stamp(interaction)}")
+            await self._announce(interaction, f"▶️ 繼續播放{self._operator_stamp(interaction)}")
             return
 
         await self._handle_pause_resume_request(interaction, player, want_pause=False)
@@ -2664,8 +3052,9 @@ class Music(commands.Cog):
             await interaction.response.send_message("ℹ️ 目前沒有正在播放的歌曲。", ephemeral=True)
             return
 
-        await interaction.response.send_message(
-            f"⏭️ 已跳過：**{current.title}**{self._operator_stamp(interaction)}"
+        # 第 7 週：「已跳過」改顯示在面板底部，不再公開發送訊息把面板擠上去
+        await self._announce(
+            interaction, f"⏭️ 已跳過：**{current.title}**{self._operator_stamp(interaction)}"
         )
         try:
             # 暫停中直接 skip 的話，下一首可能會沿用暫停狀態，先解除
@@ -2680,16 +3069,30 @@ class Music(commands.Cog):
             await self.bot.notify_owner_error(e, interaction, extra_info="/music_skip 失敗")
             await interaction.followup.send("❌ 跳過歌曲時發生錯誤，已回報開發者。", ephemeral=True)
 
-    async def _execute_stop(self, interaction: discord.Interaction, player):
-        """實際執行停止：清佇列、關循環、停播。投票通過或（未來）直接授權時共用。"""
+    async def _execute_stop(self, interaction: discord.Interaction, player, delete_thinking: bool = False):
+        """實際執行停止：清佇列、關循環、停播。投票通過或（未來）直接授權時共用。
+
+        第 7 週：停止結果直接寫進面板最終狀態；delete_thinking 為 True 代表這次互動是
+        defer 出來的「思考中」訊息，要收掉避免多一則公開訊息。
+        """
         song_queue: deque = getattr(player, "song_queue", None)
+        # 先取消背景匯入：已解析但還沒加入佇列的曲目直接丟棄，避免停止後又被塞回佇列
+        self._cancel_import(interaction.guild.id)
         # 順序很重要：先清佇列、關循環，再停止；否則 track_end 會又撈出下一首或重播
         if song_queue:
             song_queue.clear()
         player.loop_mode = "off"
         self._clear_rejection(getattr(player, "current", None))
-        await self._update_panel_ended(interaction.guild.id)
-        await interaction.followup.send(f"⏹️ 已停止播放並清空佇列{self._operator_stamp(interaction)}")
+        stop_text = f"⏹️ 已停止播放並清空佇列{self._operator_stamp(interaction)}"
+        shown = await self._update_panel_ended(interaction.guild.id, reason=stop_text)
+        if delete_thinking:
+            try:
+                await interaction.delete_original_response()
+            except (discord.NotFound, discord.HTTPException):
+                pass
+        if not shown:
+            # 沒有面板可顯示（例如只剩佇列、沒有曲目在播）才退回公開訊息
+            await interaction.followup.send(stop_text)
         if player.current:
             try:
                 if player.paused:
@@ -2733,7 +3136,7 @@ class Music(commands.Cog):
         # 頻道裡只有操作者自己（或投票資格異常）時不用投票，直接執行
         if not voter_ids or voter_ids == {interaction.user.id}:
             await interaction.response.defer()
-            await self._execute_stop(interaction, player)
+            await self._execute_stop(interaction, player, delete_thinking=True)
             return
 
         view = StopVoteView(
@@ -2770,10 +3173,7 @@ class Music(commands.Cog):
         current_mode = getattr(player, "loop_mode", "off")
         new_mode = mode.value if mode is not None else LOOP_NEXT[current_mode]
         player.loop_mode = new_mode
-        await self._sync_panel(interaction.guild.id, player)
-        await interaction.response.send_message(
-            f"{LOOP_LABELS[new_mode]}{self._operator_stamp(interaction)}"
-        )
+        await self._announce(interaction, f"{LOOP_LABELS[new_mode]}{self._operator_stamp(interaction)}")
 
     @app_commands.command(name="music_seek", description="跳轉到指定時間，例如 90、1:30、+10、-15")
     @app_commands.describe(time="絕對時間（秒 / mm:ss / hh:mm:ss），或以 +/- 開頭的相對秒數")
@@ -2808,9 +3208,10 @@ class Music(commands.Cog):
         # 夾在合法範圍內，結尾留 1 秒，避免直接跳到最後觸發 track_end
         target = max(0, min(target, max(track.length - 1000, 0)))
         await player.seek(target)
-        await interaction.response.send_message(
+        await self._announce(
+            interaction,
             f"⏩ 已跳轉至 `{format_position(target)} / {format_position(track.length)}`"
-            f"{self._operator_stamp(interaction)}"
+            f"{self._operator_stamp(interaction)}",
         )
 
     @app_commands.command(name="music_node_status", description="查看目前 Lavalink 節點的連線狀態")
