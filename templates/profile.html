@@ -17,6 +17,7 @@
 
   <link rel="icon" type="image/png" href="{{ url_for('static', filename='logo.png') }}" />
   <link rel="shortcut icon" href="{{ url_for('static', filename='logo.png') }}" />
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
 
   <!-- 官網統一字體與全站共用樣式 (Apple Liquid Glass Design Language) -->
   <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.output.css') }}" />
@@ -27,7 +28,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack-extra.min.css" />
 
   <!-- Profile 專屬 Liquid Glass Bento Grid 樣式 -->
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/profile.css', v='20261024_v16') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/profile.css') }}" />
 </head>
 
 <body>
@@ -239,6 +240,7 @@
 
   <!-- ==================== 彈出視窗 (Modals) ==================== -->
 
+  {% if is_owner %}
   <!-- 1. 新增卡片類型視覺化互動 Palette Modal (支援縮小版預覽與長按拖曳至版面) -->
   <div class="modal-overlay modal-palette-overlay" id="modal-add-card" aria-hidden="true">
     <div class="modal-dialog modal-palette-dialog">
@@ -386,6 +388,7 @@
       </div>
     </div>
   </div>
+  {% endif %}
 
   <!-- 4. 分享個人檔案 Modal -->
   <div class="modal-overlay" id="modal-share" aria-hidden="true">
@@ -424,6 +427,7 @@
     </div>
   </div>
 
+  {% if is_owner %}
   <!-- 5. Panel 同款刪除確認 Modal (告別瀏覽器原生醜陋 confirm) -->
   <div class="modal-overlay" id="modal-confirm" aria-hidden="true">
     <div class="modal-dialog modal-confirm-card">
@@ -448,7 +452,6 @@
   </div>
 
   <!-- ==================== 5. 首次登入導覽聚光燈 (Spotlight Tour) ==================== -->
-  {% if is_owner %}
   <div class="spotlight-tour-overlay" id="spotlight-tour-overlay" style="display: none;" aria-hidden="true">
     <div class="tour-spotlight-box" id="tour-spotlight-box"></div>
     <div class="tour-tooltip-box" id="tour-tooltip-box" role="dialog" aria-modal="true" aria-labelledby="tour-step-title">
@@ -505,15 +508,15 @@
   </script>
 
   <!-- 引入依賴函式庫 (CDN) -->
-  <script src="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack-all.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/gridstack@10.3.1/dist/gridstack-all.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js" defer></script>
 
   <!-- 官網全站導覽列 JS -->
-  <script src="{{ url_for('static', filename='js/site-nav.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/site-nav.js') }}" defer></script>
 
   <!-- 核心 Profile 邏輯 -->
-  <script src="{{ url_for('static', filename='js/profile.js', v='20261024_v16') }}"></script>
+  <script src="{{ url_for('static', filename='js/profile.js') }}" defer></script>
 </body>
 
 </html>

@@ -20,6 +20,7 @@
         <a class="topbar-brand" href="/">
           <img class="topbar-logo"
             src="{{ url_for('static', filename='logo.png') }}"
+            width="32" height="32" decoding="async"
             alt="炙彗JI器人 Logo" />
           <span class="topbar-name">炙彗JI器人</span>
         </a>
@@ -32,12 +33,12 @@
           <span class="topbar-owner-crown" title="BOT OWNER">👑</span>
           {% endif %}
           <button class="topbar-avatar-btn" id="topbar-user-btn" type="button" aria-expanded="false" aria-label="使用者選單" title="{{ session.get('user').get('global_name') or session.get('user').get('username') }}">
-            <img class="topbar-user-avatar" src="{{ session.get('user').get('avatar_url') }}" alt="頭像" />
+            <img class="topbar-user-avatar" src="{{ session.get('user').get('avatar_url') }}" width="32" height="32" decoding="async" alt="頭像" />
           </button>
 
           <div class="topbar-user-dropdown" id="topbar-user-dropdown">
             <div class="dropdown-user-header">
-              <img class="dropdown-user-avatar" src="{{ session.get('user').get('avatar_url') }}" alt="頭像" />
+              <img class="dropdown-user-avatar" src="{{ session.get('user').get('avatar_url') }}" width="36" height="36" decoding="async" alt="頭像" />
               <div class="dropdown-user-info">
                 <span class="dropdown-user-name">{{ session.get('user').get('global_name') or session.get('user').get('username') }}</span>
                 {% if session.get('user').get('is_owner') %}

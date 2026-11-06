@@ -249,13 +249,12 @@
 
     // 全域左邊緣感知：當滑鼠游標 X 座標 <= 18px 時自動滑出側邊欄
     document.addEventListener('mousemove', (e) => {
+      if (e.clientX > 18) return;
       if (isAnyGlobalMenuOpen()) return;
       if (window.innerWidth > 768 && !docsSidebar.classList.contains('is-open')) {
-        if (e.clientX <= 18) {
-          openSidebar(false);
-        }
+        openSidebar(false);
       }
-    });
+    }, { passive: true });
 
     // 鼠標移入側邊欄本體時保持展開
     docsSidebar.addEventListener('mouseenter', () => {
@@ -324,29 +323,37 @@
         linkMap[card.id] = a;
       });
 
-      // 監聽滾動以高亮當前分類項目
+      // 監聽滾動以高亮當前分類項目（透過 requestAnimationFrame 節流，避免每像素觸發強制重排）
+      let docScrollTicking = false;
       function updateActiveDocSection() {
+        docScrollTicking = false;
         const marker = 140;
         let activeId = cards.length ? cards[0].id : null;
-        cards.forEach((card) => {
-          if (card.getBoundingClientRect().top <= marker) {
-            activeId = card.id;
+        for (let i = 0; i < cards.length; i++) {
+          if (cards[i].getBoundingClientRect().top <= marker) {
+            activeId = cards[i].id;
+          } else {
+            break;
           }
-        });
+        }
 
         Object.keys(linkMap).forEach((id) => {
           linkMap[id].classList.toggle('is-active', id === activeId);
         });
       }
 
-      window.addEventListener('scroll', updateActiveDocSection, { passive: true });
+      window.addEventListener('scroll', () => {
+        if (!docScrollTicking) {
+          docScrollTicking = true;
+          requestAnimationFrame(updateActiveDocSection);
+        }
+      }, { passive: true });
       updateActiveDocSection();
     }
 
     syncSidebarTriggerPosition();
-    window.addEventListener('scroll', syncSidebarTriggerPosition, { passive: true });
-    window.addEventListener('resize', syncSidebarTriggerPosition);
-    window.addEventListener('orientationchange', syncSidebarTriggerPosition);
+    window.addEventListener('resize', syncSidebarTriggerPosition, { passive: true });
+    window.addEventListener('orientationchange', syncSidebarTriggerPosition, { passive: true });
   }
 
   // 全域：點擊任何返回首頁的按鈕/連結時，設定置頂標籤

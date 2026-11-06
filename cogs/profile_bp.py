@@ -36,10 +36,16 @@ from cogs.database import (
 
 profile_bp = Blueprint('profile', __name__)
 
+# 共用連線池與頭像背景同步冷卻表，減少重複握手與阻塞
+_proxy_http_session = requests.Session()
+_avatar_sync_cooldown: Dict[str, float] = {}
+
 
 @profile_bp.after_request
 def add_no_cache_headers(response):
-    """確保個人檔案頁面與 API 響應不被瀏覽器快取，保證每次重新整理獲取最新視覺狀態。"""
+    """確保個人檔案動態頁面與 API 響應不被快取；但保留圖片代理 (image-proxy) 的長效快取標頭。"""
+    if request.path == '/api/profile/image-proxy' and response.status_code == 200:
+        return response
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
@@ -297,14 +303,45 @@ def profile_view(username: str):
         if raw_uid.isdigit():
             try:
                 d_user = bot.get_user(int(raw_uid))
-                if d_user is None and getattr(bot, 'loop', None) and bot.loop.is_running():
-                    fut = asyncio.run_coroutine_threadsafe(bot.fetch_user(int(raw_uid)), bot.loop)
-                    d_user = fut.result(timeout=2.5)
                 if d_user:
                     if getattr(d_user, 'display_avatar', None):
                         latest_avatar = str(d_user.display_avatar.url)
                     if not latest_display:
                         latest_display = getattr(d_user, 'global_name', None) or getattr(d_user, 'name', None)
+                elif getattr(bot, 'loop', None) and bot.loop.is_running():
+                    # 非同步背景抓取頭像並寫回資料庫（加上 10 分鐘冷卻），避免阻塞訪客頁面載入
+                    now_ts = datetime.datetime.now().timestamp()
+                    if now_ts - _avatar_sync_cooldown.get(raw_uid, 0.0) > 600.0:
+                        _avatar_sync_cooldown[raw_uid] = now_ts
+
+                        async def _bg_sync_user_avatar(uid_int: int, uname: str):
+                            try:
+                                u_obj = await bot.fetch_user(uid_int)
+                                if u_obj and getattr(u_obj, 'display_avatar', None):
+                                    av_url = str(u_obj.display_avatar.url)
+                                    d_name = getattr(u_obj, 'global_name', None) or getattr(u_obj, 'name', None)
+                                    curr_prof = get_user_profile_by_username(uname)
+                                    if curr_prof and av_url and av_url != '/static/logo.png':
+                                        w_list = curr_prof.get('layout_widgets') or []
+                                        for w_item in w_list:
+                                            if w_item.get('type') == 'profile_header' or w_item.get('id') == 'header':
+                                                wc = w_item.setdefault('content', {})
+                                                wc['avatar_url'] = av_url
+                                                if d_name and (not wc.get('display_name') or wc.get('display_name') == uname):
+                                                    wc['display_name'] = d_name
+                                        upsert_user_profile(
+                                            user_id=curr_prof['user_id'],
+                                            username=curr_prof['username'],
+                                            display_name=curr_prof.get('display_name') or d_name or uname,
+                                            avatar_url=av_url,
+                                            bio=curr_prof.get('bio', ''),
+                                            theme_config=curr_prof.get('theme_config', {}),
+                                            layout_widgets=w_list,
+                                        )
+                            except Exception:
+                                pass
+
+                        asyncio.run_coroutine_threadsafe(_bg_sync_user_avatar(int(raw_uid), clean_username), bot.loop)
             except Exception:
                 pass
 
@@ -515,17 +552,17 @@ def profile_image_proxy():
 
     try:
         try:
-            resp = requests.get(fetch_url, headers=headers, timeout=10, stream=True)
+            resp = _proxy_http_session.get(fetch_url, headers=headers, timeout=(3.5, 6.0), stream=True)
         except requests.exceptions.SSLError:
-            resp = requests.get(fetch_url, headers=headers, timeout=10, stream=True, verify=False)
+            resp = _proxy_http_session.get(fetch_url, headers=headers, timeout=(3.5, 6.0), stream=True, verify=False)
 
         # 若該網域阻擋同源 Referer (例如 imgur)，嘗試無 Referer 重試
         if resp.status_code in (401, 403):
             headers.pop('Referer', None)
             try:
-                resp = requests.get(fetch_url, headers=headers, timeout=10, stream=True)
+                resp = _proxy_http_session.get(fetch_url, headers=headers, timeout=(3.5, 6.0), stream=True)
             except requests.exceptions.SSLError:
-                resp = requests.get(fetch_url, headers=headers, timeout=10, stream=True, verify=False)
+                resp = _proxy_http_session.get(fetch_url, headers=headers, timeout=(3.5, 6.0), stream=True, verify=False)
 
         if resp.status_code != 200:
             return jsonify({"error": f"遠端圖片伺服器回應狀態碼 {resp.status_code}"}), resp.status_code

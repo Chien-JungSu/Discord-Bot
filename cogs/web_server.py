@@ -1,4 +1,5 @@
 import datetime
+import gzip
 import json
 import math
 import os
@@ -18,7 +19,7 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 import discord
-from flask import Flask, jsonify, render_template, url_for as flask_url_for
+from flask import Flask, jsonify, render_template, request, url_for as flask_url_for
 from waitress import serve
 
 try:
@@ -31,18 +32,15 @@ app = Flask(
     template_folder=os.path.join(BASE_DIR, 'templates'),
     static_folder=os.path.join(BASE_DIR, 'static'),
 )
-# 模板自動重載：production 模式下 Jinja2 預設會快取第一次渲染的模板、之後不再
-# 讀檔，導致改 templates/*.html 後要重啟機器人才會生效。開啟後每次渲染都會
-# 檢查檔案修改時間，改完 HTML 重新整理網頁即可看到新版，不用重啟機器人。
-# 成本只是每次渲染多一次 os.stat，對這種小流量儀表板可忽略。
+# 模板自動重載：開啟後修改 HTML 模板無需重啟機器人即可生效。
 app.config['TEMPLATES_AUTO_RELOAD'] = True
 
-# 靜態檔案自動快取更新（Cache-Busting）：
-# 1. SEND_FILE_MAX_AGE_DEFAULT = 0：告知瀏覽器與反向代理不要對靜態檔案進行長久強快取。
-# 2. override_url_for context processor：自動在 static url_for 附加檔案最後修改時間戳記 (?v=mtime)。
-#    當 CSS、JS 等靜態檔案重新上傳覆蓋後，mtime 自動改變，HTML 產生的網址也隨之改變。
-#    瀏覽器會立即判定為新資源並下載最新內容，無需手動清除快取（免 Ctrl+F5），更無需重啟機器人服務。
-app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
+# 靜態檔案快取與自動版本更新（Cache-Busting）：
+# 1. override_url_for 自動在 static url_for 附加檔案最後修改時間戳記 (?v=mtime)。
+#    當 CSS、JS 等靜態檔案修改後，mtime 改變，網址隨之改變，瀏覽器會立即載入新版。
+# 2. 搭配 SEND_FILE_MAX_AGE_DEFAULT = 86400（1 天），讓未修改的靜態資源可直接命中瀏覽器快取，
+#    大幅加速換頁與重複造訪速度，同時保留改檔即更新的便利性。
+app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 86400
 
 # Session 密鑰與 Cookie 安全設定（供控制面板 OAuth2 登入與權限管理使用）
 app.secret_key = os.getenv('FLASK_SECRET_KEY') or os.getenv('SECRET_KEY') or 'ji-robot-control-panel-secret-key-2026'
@@ -56,6 +54,73 @@ app.register_blueprint(panel_bp)
 from cogs.profile_bp import profile_bp
 app.register_blueprint(profile_bp)
 
+# 靜態檔案 mtime 短期快取（5 秒 TTL，減少每次渲染重複呼叫 os.stat 的磁碟 I/O）
+_static_mtime_cache: dict[str, tuple[float, int]] = {}
+_STATIC_MTIME_TTL = 5.0
+
+# 靜態資源 Gzip 壓縮快取：{(path, mtime_v): compressed_bytes}
+_static_gzip_cache: dict[tuple[str, str], bytes] = {}
+_COMPRESSIBLE_MIMETYPES = frozenset({
+    'text/html',
+    'text/css',
+    'text/plain',
+    'text/javascript',
+    'application/javascript',
+    'application/x-javascript',
+    'application/json',
+    'image/svg+xml',
+})
+
+
+@app.after_request
+def _compress_and_optimize_response(response):
+    """對 HTML / CSS / JS / JSON / SVG 自動進行 Gzip 壓縮，減少 70%~80% 網路傳輸體積。"""
+    if (
+        response.status_code != 200
+        or 'gzip' not in request.headers.get('Accept-Encoding', '').lower()
+        or 'Content-Encoding' in response.headers
+        or response.mimetype not in _COMPRESSIBLE_MIMETYPES
+    ):
+        return response
+
+    try:
+        # 針對 /static/ 靜態 CSS/JS 資源啟用帶版本號的記憶體壓縮快取
+        if request.path.startswith('/static/'):
+            v_key = request.args.get('v', '')
+            cache_key = (request.path, v_key)
+            gz_data = _static_gzip_cache.get(cache_key)
+            if gz_data is None:
+                response.direct_passthrough = False
+                raw_data = response.get_data()
+                if len(raw_data) < 512:
+                    return response
+                gz_data = gzip.compress(raw_data, compresslevel=6)
+                if len(_static_gzip_cache) > 128:
+                    _static_gzip_cache.clear()
+                _static_gzip_cache[cache_key] = gz_data
+            else:
+                response.direct_passthrough = False
+            response.set_data(gz_data)
+            response.headers['Content-Encoding'] = 'gzip'
+            response.headers['Content-Length'] = str(len(gz_data))
+            response.headers['Vary'] = 'Accept-Encoding'
+            return response
+
+        if response.direct_passthrough:
+            return response
+
+        raw_data = response.get_data()
+        if len(raw_data) < 512:
+            return response
+
+        gz_data = gzip.compress(raw_data, compresslevel=6)
+        response.set_data(gz_data)
+        response.headers['Content-Encoding'] = 'gzip'
+        response.headers['Content-Length'] = str(len(gz_data))
+        response.headers['Vary'] = 'Accept-Encoding'
+    except Exception:
+        pass
+    return response
 
 
 @app.context_processor
@@ -68,9 +133,16 @@ def _versioned_url_for(endpoint: str, **values) -> str:
     if endpoint == 'static':
         filename = values.get('filename')
         if filename and app.static_folder:
-            file_path = os.path.join(app.static_folder, filename)
-            if os.path.exists(file_path):
-                values['v'] = int(os.stat(file_path).st_mtime)
+            now = time.monotonic()
+            cached = _static_mtime_cache.get(filename)
+            if cached and (now - cached[0]) < _STATIC_MTIME_TTL:
+                values['v'] = cached[1]
+            else:
+                file_path = os.path.join(app.static_folder, filename)
+                if os.path.exists(file_path):
+                    mtime = int(os.stat(file_path).st_mtime)
+                    _static_mtime_cache[filename] = (now, mtime)
+                    values['v'] = mtime
     return flask_url_for(endpoint, **values)
 
 # ---------- 機器人實際上線時間（以 Discord 連線為準） ----------
@@ -110,7 +182,18 @@ def _format_uptime_seconds(total_seconds: float) -> str:
     return f"{days}天, {hours}小時\n{minutes}分, {seconds}秒"
 
 
-def _fetch_uptime_data():
+# ---------- UptimeRobot 監控資料快取（避免每次造訪首頁都同步阻塞與觸發速率限制） ----------
+_uptime_cache_lock = threading.Lock()
+_uptime_cache: dict[str, Any] = {
+    'timestamp': 0.0,
+    'data': None,
+    'refreshing': False,
+}
+_UPTIME_CACHE_TTL = 90.0       # 成功時快取 90 秒
+_UPTIME_ERROR_CACHE_TTL = 30.0 # 錯誤時冷卻 30 秒
+
+
+def _fetch_uptime_data_uncached() -> dict[str, Any]:
     api_key = os.getenv('UPTIMEROBOT_API_KEY')
     monitor_id = os.getenv('UPTIMEROBOT_MONITOR_ID')
 
@@ -140,7 +223,7 @@ def _fetch_uptime_data():
             headers={'Content-Type': 'application/x-www-form-urlencoded'},
             method='POST',
         )
-        with urllib.request.urlopen(req, timeout=15) as response:
+        with urllib.request.urlopen(req, timeout=10) as response:
             data = json.loads(response.read().decode('utf-8'))
     except Exception as exc:  # pragma: no cover - runtime dependency on external API
         # 修正（M2）：這個 message 會原封不動回傳給任何未認證的網站訪客，
@@ -202,6 +285,42 @@ def _fetch_uptime_data():
         'uptime': uptime,
         'logs': monitor.get('logs') or [],
     }
+
+
+def _refresh_uptime_cache_bg():
+    try:
+        fresh = _fetch_uptime_data_uncached()
+        with _uptime_cache_lock:
+            if fresh.get('status') == 'ok' or _uptime_cache['data'] is None:
+                _uptime_cache['data'] = fresh
+            _uptime_cache['timestamp'] = time.monotonic()
+    finally:
+        with _uptime_cache_lock:
+            _uptime_cache['refreshing'] = False
+
+
+def _fetch_uptime_data() -> dict[str, Any]:
+    now = time.monotonic()
+    cached_data = _uptime_cache['data']
+    if cached_data is not None:
+        ttl = _UPTIME_CACHE_TTL if cached_data.get('status') == 'ok' else _UPTIME_ERROR_CACHE_TTL
+        if (now - _uptime_cache['timestamp']) < ttl:
+            return cached_data
+        # Stale-While-Revalidate：已有快取時立即回傳，並於背景執行緒非同步刷新
+        with _uptime_cache_lock:
+            if not _uptime_cache['refreshing']:
+                _uptime_cache['refreshing'] = True
+                threading.Thread(target=_refresh_uptime_cache_bg, daemon=True).start()
+        return cached_data
+
+    # 首次請求（尚無快取）時同步查詢一次並寫入快取
+    with _uptime_cache_lock:
+        if _uptime_cache['data'] is not None:
+            return _uptime_cache['data']
+        fresh = _fetch_uptime_data_uncached()
+        _uptime_cache['data'] = fresh
+        _uptime_cache['timestamp'] = time.monotonic()
+        return fresh
 
 
 @app.route('/')
@@ -593,7 +712,7 @@ def run():
     """
     port = int(os.environ.get('PORT', 20198))
     print(f"[Web] 伺服器已啟動，請開啟瀏覽器造訪: http://127.0.0.1:{port} 或 http://localhost:{port}", flush=True)
-    serve(app, host='0.0.0.0', port=port, threads=8)
+    serve(app, host='0.0.0.0', port=port, threads=16)
 
 
 def start_web_server():

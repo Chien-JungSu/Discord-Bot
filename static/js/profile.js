@@ -625,15 +625,17 @@
     const activeWidgets = widgets.filter((w) => w.type !== 'divider');
     if (activeWidgets.length === 0) return;
 
+    const itemElMap = new Map();
     document.querySelectorAll('.grid-stack-item[gs-id]').forEach((el) => {
       el.style.height = '';
+      itemElMap.set(el.getAttribute('gs-id'), el);
     });
 
     // 編輯模式：社群連結卡片外框高度隨連結編輯區域縮放 (格位不變，僅外框貼合內容，不影響拖曳座標)
     if (isEditing) {
       activeWidgets.forEach((w) => {
         if (w.type !== 'social_link') return;
-        const el = document.querySelector('.grid-stack-item[gs-id="' + w.id + '"]');
+        const el = itemElMap.get(String(w.id));
         if (!el) return;
         const need = Math.ceil(getWidgetActualContentHeight(w, el) + 18 + 8);
         if (need > 0 && need < (Number(w.h) || 2) * 95) {
@@ -682,6 +684,8 @@
     // 預覽與瀏覽模式：裁掉區塊底部因網格單位化而產生的無效空白 (自適應高度卡片依實際內容高度計算)
     let cumulativeTrimPx = 0;
     const bandTrimTotals = [];
+    const backdropFrag = document.createDocumentFragment();
+    let maxBackdropBottomPx = 0;
 
     // 依 Band 渲染獨立之液態玻璃背板 (支援垂直與水平雙向分離)
     yBands.forEach((band, bandIdx) => {
@@ -712,6 +716,9 @@
       }
       cumulativeTrimPx += bandTrim;
       bandTrimTotals[bandIdx] = cumulativeTrimPx;
+      if (topPx + heightPx > maxBackdropBottomPx) {
+        maxBackdropBottomPx = topPx + heightPx;
+      }
 
       // 檢查此 Band 是否有啟用的左右向垂直分離 (X Splits)，並嚴格過濾不可切過卡片內部
       const bandActiveSplitsX = splitsX.filter((key) => {
@@ -751,10 +758,10 @@
           backdrop.style.height = `${heightPx}px`;
           backdrop.style.left = `calc(${leftPercent}% + ${leftOffset}px)`;
           backdrop.style.width = `calc(${widthPercent}% - ${leftOffset + rightOffset}px)`;
-          backdropContainer.appendChild(backdrop);
+          backdropFrag.appendChild(backdrop);
 
           widgetsInColBand.forEach((w) => {
-            const itemEl = document.querySelector(`.grid-stack-item[gs-id="${w.id}"]`);
+            const itemEl = itemElMap.get(String(w.id));
             if (itemEl) {
               const ty = (bandIdx > 0 ? bandIdx * sectionGap : 0) - bandShiftBefore - (bandLayout ? (bandLayout.shift[w.id] || 0) : 0);
               if (bandLayout && bandLayout.px[w.id] < (Number(w.h) || 2) * cellHeight) itemEl.style.height = bandLayout.px[w.id] + 'px';
@@ -784,10 +791,10 @@
         backdrop.style.height = `${heightPx}px`;
         backdrop.style.left = `calc(${leftPercent}% + ${leftOffset}px)`;
         backdrop.style.width = `calc(${widthPercent}% - ${leftOffset + rightOffset}px)`;
-        backdropContainer.appendChild(backdrop);
+        backdropFrag.appendChild(backdrop);
 
         inBand.forEach((w) => {
-          const itemEl = document.querySelector(`.grid-stack-item[gs-id="${w.id}"]`);
+          const itemEl = itemElMap.get(String(w.id));
           if (itemEl) {
             const tyAll = (bandIdx > 0 ? bandIdx * sectionGap : 0) - bandShiftBefore - (bandLayout ? (bandLayout.shift[w.id] || 0) : 0);
             if (bandLayout && bandLayout.px[w.id] < (Number(w.h) || 2) * cellHeight) itemEl.style.height = bandLayout.px[w.id] + 'px';
@@ -798,19 +805,14 @@
       }
     });
 
+    backdropContainer.appendChild(backdropFrag);
+
     // 動態確保網格與編輯容器高度完整包覆所有平移卡片，杜絕下方界線超出或裁切問題
-    let maxContentBottomPx = 0;
+    let maxContentBottomPx = maxBackdropBottomPx;
     activeWidgets.forEach((w) => {
       const b = viewBottomById[w.id] !== undefined ? viewBottomById[w.id] : (((Number(w.y) || 0) + (Number(w.h) || 2)) * cellHeight);
       if (b > maxContentBottomPx) {
         maxContentBottomPx = b;
-      }
-    });
-    document.querySelectorAll('.grid-section-glass-backdrop').forEach((bd) => {
-      const bTop = parseFloat(bd.style.top) || 0;
-      const bH = parseFloat(bd.style.height) || 0;
-      if (bTop + bH > maxContentBottomPx) {
-        maxContentBottomPx = bTop + bH;
       }
     });
 
@@ -819,13 +821,9 @@
       // 以實際渲染後 (吸附/裁切/平移之後) 的卡片與背板底緣量測內容高度，
       // 並覆寫 GridStack 依「格數」撐出的高度，消除頁面底部多餘空白
       const gridTop = gridEl.getBoundingClientRect().top;
-      let measuredBottom = 0;
-      gridEl.querySelectorAll('.grid-stack-item[gs-id]').forEach((el) => {
+      let measuredBottom = maxBackdropBottomPx;
+      itemElMap.forEach((el) => {
         const b = el.getBoundingClientRect().bottom - gridTop;
-        if (b > measuredBottom) measuredBottom = b;
-      });
-      document.querySelectorAll('.grid-section-glass-backdrop').forEach((bd) => {
-        const b = bd.getBoundingClientRect().bottom - gridTop;
         if (b > measuredBottom) measuredBottom = b;
       });
       const finalPx = Math.ceil(measuredBottom > 0 ? measuredBottom : maxContentBottomPx) + 8;
@@ -847,6 +845,7 @@
 
     const currentSplits = themeConfig.section_splits || [];
     const currentSplitsX = Array.isArray(themeConfig.section_splits_x) ? themeConfig.section_splits_x : [];
+    const scissorFrag = document.createDocumentFragment();
 
     // 1. 渲染上下向（水平）剪刀按鈕 (僅在合法且不穿透卡片的邊界處渲染)
     const possibleY = new Set();
@@ -882,7 +881,7 @@
         </button>
       `;
 
-      gridEl.appendChild(bar);
+      scissorFrag.appendChild(bar);
     });
 
     // 2. 渲染左右向（垂直）剪刀按鈕 (文字直式排列)
@@ -979,10 +978,12 @@
             </button>
           `;
 
-          gridEl.appendChild(vBar);
+          scissorFrag.appendChild(vBar);
         });
       });
     });
+
+    gridEl.appendChild(scissorFrag);
   }
 
   // ==================== 2.9 上下區塊自動磁吸壓實 (分隔線除外) ====================
@@ -1444,11 +1445,11 @@
             </div>
             <div class="header-info">
               <div class="header-title-row">
-                <h1 class="header-name" data-inline-edit="display_name" data-widget-id="${escapeHtml(widget.id)}" title="點擊直接修改名稱">${displayName}</h1>
+                <h1 class="header-name" data-inline-edit="display_name" data-edit-title="點擊直接修改名稱" data-widget-id="${escapeHtml(widget.id)}"${isEditing ? ' title="點擊直接修改名稱"' : ''}>${displayName}</h1>
                 ${tagsHtml}
               </div>
               <div class="header-username">@${username}</div>
-              <p class="header-bio" data-inline-edit="bio" data-widget-id="${escapeHtml(widget.id)}" title="點擊直接修改簡介">${bio}</p>
+              <p class="header-bio" data-inline-edit="bio" data-edit-title="點擊直接修改簡介" data-widget-id="${escapeHtml(widget.id)}"${isEditing ? ' title="點擊直接修改簡介"' : ''}>${bio}</p>
             </div>
           </div>
         </div>
@@ -1625,7 +1626,7 @@
         ${controlsHtml}
         <div class="widget-social-link">
           <div class="social-block-header">
-            <h3 class="social-block-title" data-inline-edit="title" data-widget-id="${escapeHtml(widget.id)}" title="點擊直接修改區塊標題">${title}</h3>
+            <h3 class="social-block-title" data-inline-edit="title" data-edit-title="點擊直接修改區塊標題" data-widget-id="${escapeHtml(widget.id)}"${isEditing ? ' title="點擊直接修改區塊標題"' : ''}>${title}</h3>
           </div>
           <div class="social-buttons-container">
             ${buttonsHtml}
@@ -1635,7 +1636,7 @@
     } else if (type === 'media_embed') {
       let mediaType = content.media_type || 'image';
       const title = escapeHtml(content.title || '精選視覺展示');
-      const caption = escapeHtml(content.caption || '點擊編輯說明文字');
+      const caption = escapeHtml(content.caption || (isEditing ? '點擊編輯說明文字' : ''));
       let rawMediaUrl = String(content.media_url || '').trim();
       if (!rawMediaUrl || rawMediaUrl === '/static/logo.png') {
         rawMediaUrl = 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=800&q=80';
@@ -1681,8 +1682,8 @@
             </div>
             ${showCaption ? `
               <div class="media-caption-overlay">
-                <h4 class="media-title" data-inline-edit="title" data-widget-id="${escapeHtml(widget.id)}" title="點擊直接修改標題">${title}</h4>
-                <p class="media-caption" data-inline-edit="caption" data-widget-id="${escapeHtml(widget.id)}" title="點擊直接修改說明">${caption}</p>
+                <h4 class="media-title" data-inline-edit="title" data-edit-title="點擊直接修改標題" data-widget-id="${escapeHtml(widget.id)}"${isEditing ? ' title="點擊直接修改標題"' : ''}>${title}</h4>
+                <p class="media-caption" data-inline-edit="caption" data-edit-title="點擊直接修改說明" data-widget-id="${escapeHtml(widget.id)}"${isEditing ? ' title="點擊直接修改說明"' : ''}>${caption}</p>
               </div>
             ` : ''}
           </div>
@@ -2259,8 +2260,13 @@
       if (isEditing) {
         el.setAttribute('contenteditable', 'true');
         el.setAttribute('spellcheck', 'false');
+        const editTitle = el.getAttribute('data-edit-title');
+        if (editTitle) {
+          el.setAttribute('title', editTitle);
+        }
       } else {
         el.removeAttribute('contenteditable');
+        el.removeAttribute('title');
       }
     });
   }

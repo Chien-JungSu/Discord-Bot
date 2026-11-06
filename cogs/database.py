@@ -20,21 +20,35 @@ REACTION_ROLES_JSON = os.path.join(BASE_DIR, 'reaction_roles.json')
 COOLDOWNS_JSON = os.path.join(BASE_DIR, 'reaction_roles_cooldowns.json')
 
 _lock = threading.RLock()
+_csv_lock = threading.Lock()
+_db_initialized = False
+_wal_initialized = False
+_profile_views_initialized = False
 
 
 def get_connection() -> sqlite3.Connection:
     """取得 SQLite 連線並啟用 WAL 模式與外鍵限制。"""
+    global _wal_initialized
     conn = sqlite3.connect(DB_FILE, check_same_thread=False, timeout=30.0)
     conn.row_factory = sqlite3.Row
-    with _lock:
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA foreign_keys=ON;")
+    if not _wal_initialized:
+        with _lock:
+            if not _wal_initialized:
+                conn.execute("PRAGMA journal_mode=WAL;")
+                _wal_initialized = True
+    conn.execute("PRAGMA synchronous=NORMAL;")
+    conn.execute("PRAGMA foreign_keys=ON;")
     return conn
 
 
 def init_db():
     """初始化 SQLite 資料表，並自動將現有的 .json 檔案資料遷移至資料庫（不遺失既有設定）。"""
+    global _db_initialized
+    if _db_initialized and os.path.exists(DB_FILE):
+        return
     with _lock:
+        if _db_initialized and os.path.exists(DB_FILE):
+            return
         conn = get_connection()
         try:
             cursor = conn.cursor()
@@ -241,6 +255,7 @@ def init_db():
 
             # ---------- 自動遷移既有 JSON 資料 ----------
             _migrate_from_json(conn)
+            _db_initialized = True
         finally:
             conn.close()
 
@@ -691,9 +706,28 @@ def save_bot_default_settings(data: dict, apply_to_all_guilds: bool = False) -> 
 
 def get_guild_ai_settings(guild_id: str) -> dict:
     """取得特定伺服器的 AI 設定（若未特別設定則自動套用全域預設）。"""
-    all_settings = load_ai_settings()
-    if str(guild_id) in all_settings:
-        return all_settings[str(guild_id)]
+    init_db()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT is_enabled, model, instruction, channel_id, temperature, max_tokens, payer_user_id FROM ai_settings WHERE guild_id = ?;",
+                (str(guild_id),),
+            )
+            row = cursor.fetchone()
+            if row:
+                return {
+                    'is_enabled': bool(row['is_enabled']),
+                    'model': row['model'] or DEFAULT_AI_MODEL,
+                    'instruction': row['instruction'] if row['instruction'] is not None else DEFAULT_AI_INSTRUCTION,
+                    'channel_id': row['channel_id'],
+                    'temperature': float(row['temperature']) if row['temperature'] is not None else DEFAULT_AI_TEMPERATURE,
+                    'max_tokens': DEFAULT_AI_MAX_TOKENS if (row['max_tokens'] is None or int(row['max_tokens']) <= 1000) else int(row['max_tokens']),
+                    'payer_user_id': row['payer_user_id'],
+                }
+        finally:
+            conn.close()
     defaults = get_bot_default_settings()
     return {
         'is_enabled': defaults['ai_is_enabled'],
@@ -2642,8 +2676,13 @@ PROFILE_VIEWS_CSV = os.path.join(os.path.dirname(os.path.dirname(__file__)), "da
 
 def init_profile_views_tables():
     """初始化瀏覽次數資料表與 CSV 儲存檔案。"""
+    global _profile_views_initialized
+    if _profile_views_initialized and os.path.exists(PROFILE_VIEWS_CSV):
+        return
     init_db()
     with _lock:
+        if _profile_views_initialized and os.path.exists(PROFILE_VIEWS_CSV):
+            return
         conn = get_connection()
         try:
             cursor = conn.cursor()
@@ -2670,14 +2709,44 @@ def init_profile_views_tables():
         finally:
             conn.close()
 
-    try:
-        os.makedirs(os.path.dirname(PROFILE_VIEWS_CSV), exist_ok=True)
-        if not os.path.exists(PROFILE_VIEWS_CSV):
+        try:
+            os.makedirs(os.path.dirname(PROFILE_VIEWS_CSV), exist_ok=True)
+            if not os.path.exists(PROFILE_VIEWS_CSV):
+                with open(PROFILE_VIEWS_CSV, "w", encoding="utf-8", newline="") as f:
+                    writer = csv.writer(f)
+                    writer.writerow(["date", "username", "views"])
+            _profile_views_initialized = True
+        except Exception as exc:
+            print(f"[WARN] 初始化 profile_views.csv 失敗: {exc}")
+
+
+def _sync_profile_views_csv(today_str: str, clean_username: str, today_views: int):
+    """在背景安全同步 data/profile_views.csv，不阻塞 HTTP 請求回應。"""
+    with _csv_lock:
+        try:
+            csv_rows = []
+            found = False
+            if os.path.exists(PROFILE_VIEWS_CSV):
+                with open(PROFILE_VIEWS_CSV, "r", encoding="utf-8") as f:
+                    reader = csv.reader(f)
+                    next(reader, None)
+                    for r in reader:
+                        if len(r) >= 3:
+                            d_col, u_col, v_col = r[0].strip(), r[1].strip().lower(), r[2].strip()
+                            if d_col == today_str and u_col == clean_username:
+                                csv_rows.append([d_col, u_col, str(today_views)])
+                                found = True
+                            else:
+                                csv_rows.append([d_col, u_col, v_col])
+            if not found:
+                csv_rows.append([today_str, clean_username, str(today_views)])
+
             with open(PROFILE_VIEWS_CSV, "w", encoding="utf-8", newline="") as f:
                 writer = csv.writer(f)
                 writer.writerow(["date", "username", "views"])
-    except Exception as exc:
-        print(f"[WARN] 初始化 profile_views.csv 失敗: {exc}")
+                writer.writerows(csv_rows)
+        except Exception as exc:
+            print(f"[WARN] 寫入 profile_views.csv 失敗: {exc}")
 
 
 def record_profile_view(username: str, increment: bool = True) -> dict[str, Any]:
@@ -2689,10 +2758,13 @@ def record_profile_view(username: str, increment: bool = True) -> dict[str, Any]
         return {"total_views": 1, "sparkline_d": "M 36 17 Q 52 13, 68 10", "trend": [1]}
 
     init_profile_views_tables()
-    today_str = datetime.date.today().isoformat()
+    today_date = datetime.date.today()
+    today_str = today_date.isoformat()
+    start_date_str = (today_date - datetime.timedelta(days=6)).isoformat()
 
     total_views = 0
     today_views = 0
+    trend_vals = []
 
     with _lock:
         conn = get_connection()
@@ -2726,51 +2798,26 @@ def record_profile_view(username: str, increment: bool = True) -> dict[str, Any]
             row = cursor.fetchone()
             total_views = int(row["total_views"]) if row else 1
 
-            cursor.execute("SELECT views FROM profile_daily_views WHERE username = ? AND view_date = ?;", (clean_username, today_str))
-            drow = cursor.fetchone()
-            today_views = int(drow["views"]) if drow else 1
-        finally:
-            conn.close()
-
-    # 同步寫入或更新 data/profile_views.csv
-    try:
-        csv_rows = []
-        found = False
-        if os.path.exists(PROFILE_VIEWS_CSV):
-            with open(PROFILE_VIEWS_CSV, "r", encoding="utf-8") as f:
-                reader = csv.reader(f)
-                header = next(reader, None)
-                for r in reader:
-                    if len(r) >= 3:
-                        d_col, u_col, v_col = r[0].strip(), r[1].strip().lower(), r[2].strip()
-                        if d_col == today_str and u_col == clean_username:
-                            csv_rows.append([d_col, u_col, str(today_views)])
-                            found = True
-                        else:
-                            csv_rows.append([d_col, u_col, v_col])
-        if not found:
-            csv_rows.append([today_str, clean_username, str(today_views)])
-
-        with open(PROFILE_VIEWS_CSV, "w", encoding="utf-8", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["date", "username", "views"])
-            writer.writerows(csv_rows)
-    except Exception as exc:
-        print(f"[WARN] 寫入 profile_views.csv 失敗: {exc}")
-
-    # 從 CSV / SQLite 查詢最近 7 天的每日走勢圖 (Sparkline SVG path)
-    trend_vals = []
-    with _lock:
-        conn = get_connection()
-        try:
-            cursor = conn.cursor()
+            # 單次查詢取得最近 7 天每日瀏覽數據（取代原本 7 次迴圈查詢與二次開關連線）
+            cursor.execute(
+                "SELECT view_date, views FROM profile_daily_views WHERE username = ? AND view_date >= ?;",
+                (clean_username, start_date_str),
+            )
+            daily_map = {str(r["view_date"]): int(r["views"]) for r in cursor.fetchall()}
+            today_views = daily_map.get(today_str, 1)
             for i in range(6, -1, -1):
-                past_date = (datetime.date.today() - datetime.timedelta(days=i)).isoformat()
-                cursor.execute("SELECT views FROM profile_daily_views WHERE username = ? AND view_date = ?;", (clean_username, past_date))
-                r = cursor.fetchone()
-                trend_vals.append(int(r["views"]) if r else 0)
+                past_date = (today_date - datetime.timedelta(days=i)).isoformat()
+                trend_vals.append(daily_map.get(past_date, 0))
         finally:
             conn.close()
+
+    # 若有累增瀏覽數，透過背景執行緒更新 CSV，避免磁碟 I/O 阻塞頁面載入
+    if increment:
+        threading.Thread(
+            target=_sync_profile_views_csv,
+            args=(today_str, clean_username, today_views),
+            daemon=True,
+        ).start()
 
     # 若為剛建立帳號或今日初次瀏覽，補底維持曲線美感
     if not any(trend_vals):

@@ -39,6 +39,7 @@
         <a class="topbar-brand" href="/">
           <img class="topbar-logo"
             src="{{ url_for('static', filename='logo.png') }}"
+            width="32" height="32" decoding="async"
             alt="炙彗JI器人 Logo" />
           <span class="topbar-name">炙彗JI器人</span>
         </a>
@@ -51,12 +52,12 @@
           <span class="topbar-owner-crown" title="BOT OWNER">👑</span>
           {% endif %}
           <button class="topbar-avatar-btn" id="topbar-user-btn" type="button" aria-expanded="false" aria-label="使用者選單" title="{{ session.get('user').get('global_name') or session.get('user').get('username') }}">
-            <img class="topbar-user-avatar" src="{{ session.get('user').get('avatar_url') }}" alt="頭像" />
+            <img class="topbar-user-avatar" src="{{ session.get('user').get('avatar_url') }}" width="32" height="32" decoding="async" alt="頭像" />
           </button>
 
           <div class="topbar-user-dropdown" id="topbar-user-dropdown">
             <div class="dropdown-user-header">
-              <img class="dropdown-user-avatar" src="{{ session.get('user').get('avatar_url') }}" alt="頭像" />
+              <img class="dropdown-user-avatar" src="{{ session.get('user').get('avatar_url') }}" width="36" height="36" decoding="async" alt="頭像" />
               <div class="dropdown-user-info">
                 <span class="dropdown-user-name">{{ session.get('user').get('global_name') or session.get('user').get('username') }}</span>
                 {% if session.get('user').get('is_owner') %}
@@ -493,10 +494,11 @@
       }
     }
 
-    // 運行時間本地即時計時（每秒自動跳動，不用一直打 API）
+    // 運行時間本地即時計時（每秒自動跳動，不用一直打 API；背景分頁自動休眠省電）
     let uptimeBaseSeconds = null;
     let uptimeBaseTimestamp = null;
     let uptimeTickTimer = null;
+    const uptimeValueEl = document.getElementById('uptime-value');
 
     function formatUptimeSeconds(totalSeconds) {
       totalSeconds = Math.max(0, Math.floor(totalSeconds));
@@ -510,10 +512,9 @@
     }
 
     function tickUptimeDisplay() {
-      if (uptimeBaseSeconds === null || uptimeBaseTimestamp === null) return;
+      if (document.hidden || uptimeBaseSeconds === null || uptimeBaseTimestamp === null) return;
       const elapsed = uptimeBaseSeconds + (Date.now() - uptimeBaseTimestamp) / 1000;
-      const el = document.getElementById('uptime-value');
-      if (el) el.innerHTML = formatUptimeText(formatUptimeSeconds(elapsed));
+      if (uptimeValueEl) uptimeValueEl.innerHTML = formatUptimeText(formatUptimeSeconds(elapsed));
     }
 
     function startUptimeTicker(initialSeconds) {
@@ -534,6 +535,12 @@
       uptimeBaseTimestamp = null;
     }
 
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) {
+        tickUptimeDisplay();
+      }
+    });
+
     async function loadBotStats() {
       try {
         const response = await fetch('/api/bot-stats');
@@ -543,7 +550,7 @@
           document.getElementById('server-count').textContent = '--';
           document.getElementById('user-count').textContent = '--';
           document.getElementById('latency-value').textContent = '--';
-          document.getElementById('uptime-value').textContent = '--';
+          if (uptimeValueEl) uptimeValueEl.textContent = '--';
           stopUptimeTicker();
           return;
         }
@@ -551,21 +558,17 @@
         document.getElementById('server-count').textContent = formatNumber(data.guilds);
         document.getElementById('user-count').textContent = formatNumber(data.users);
         document.getElementById('latency-value').textContent = formatLatency(data.latency_ms);
-        // 用 API 回傳的 uptime_seconds 當基準，之後每秒在前端本地累加，畫面會即時跳動；
-        // 每次重新打 API 時會用最新的秒數校正，避免長時間累積誤差。
-        // 上線時間是「這次 Discord 連線持續了多久」：離線時停止計時並顯示「離線中」，
-        // 不顯示一個不斷累加、讓人以為從沒斷線過的假數字。
         if (data.connected) {
           startUptimeTicker(data.uptime_seconds);
         } else {
-          document.getElementById('uptime-value').textContent = '離線中';
+          if (uptimeValueEl) uptimeValueEl.textContent = '離線中';
           stopUptimeTicker();
         }
       } catch (error) {
         document.getElementById('server-count').textContent = '--';
         document.getElementById('user-count').textContent = '--';
         document.getElementById('latency-value').textContent = '--';
-        document.getElementById('uptime-value').textContent = '--';
+        if (uptimeValueEl) uptimeValueEl.textContent = '--';
         stopUptimeTicker();
       }
     }
@@ -574,31 +577,56 @@
     loadBotStats();
 
     // 定期重新拉取資料：伺服器數/用戶數/延遲/運行時間基準每 60 秒校正一次，
-    // UptimeRobot 監控資料每 5 分鐘刷新一次（避免過度呼叫外部 API）
-    setInterval(loadBotStats, 60 * 1000);
-    setInterval(loadUptimeStatus, 5 * 60 * 1000);
+    // UptimeRobot 監控資料每 5 分鐘刷新一次（分頁在背景時暫停拉取）
+    setInterval(() => { if (!document.hidden) loadBotStats(); }, 60 * 1000);
+    setInterval(() => { if (!document.hidden) loadUptimeStatus(); }, 5 * 60 * 1000);
 
-    // 互動式游標液態光澤追蹤（Apple Liquid Glass 光斑追蹤）
+    // 互動式游標液態光澤追蹤（Apple Liquid Glass 光斑追蹤：快取幾何 + requestAnimationFrame 節流，消除強制重排）
     function setupSpecularHighlight(el) {
       if (!el) return;
+      let cachedRect = null;
+      let rafId = 0;
+      let lastX = 0;
+      let lastY = 0;
+
+      el.addEventListener('mouseenter', () => {
+        cachedRect = el.getBoundingClientRect();
+      }, { passive: true });
+
+      el.addEventListener('mouseleave', () => {
+        cachedRect = null;
+      }, { passive: true });
+
       el.addEventListener('mousemove', (e) => {
-        const rect = el.getBoundingClientRect();
-        const x = ((e.clientX - rect.left) / rect.width) * 100;
-        const y = ((e.clientY - rect.top) / rect.height) * 100;
-        el.style.setProperty('--mouse-x', `${x.toFixed(1)}%`);
-        el.style.setProperty('--mouse-y', `${y.toFixed(1)}%`);
-      });
+        lastX = e.clientX;
+        lastY = e.clientY;
+        if (rafId) return;
+        rafId = requestAnimationFrame(() => {
+          rafId = 0;
+          const rect = cachedRect || (cachedRect = el.getBoundingClientRect());
+          if (!rect.width || !rect.height) return;
+          const x = ((lastX - rect.left) / rect.width) * 100;
+          const y = ((lastY - rect.top) / rect.height) * 100;
+          el.style.setProperty('--mouse-x', `${x.toFixed(1)}%`);
+          el.style.setProperty('--mouse-y', `${y.toFixed(1)}%`);
+        });
+      }, { passive: true });
     }
 
     // 回到最頂端按鈕（滾動超過 120px 時顯現，點擊平滑置頂）
     const backToTopBtn = document.getElementById('back-to-top');
     if (backToTopBtn) {
+      let isFabVisible = false;
       setupSpecularHighlight(backToTopBtn);
       backToTopBtn.addEventListener('click', () => {
         window.scrollTo({ top: 0, behavior: 'smooth' });
       });
       window.addEventListener('scroll', () => {
-        backToTopBtn.classList.toggle('is-visible', window.scrollY > 120);
+        const shouldShow = window.scrollY > 120;
+        if (shouldShow !== isFabVisible) {
+          isFabVisible = shouldShow;
+          backToTopBtn.classList.toggle('is-visible', shouldShow);
+        }
       }, { passive: true });
     }
 

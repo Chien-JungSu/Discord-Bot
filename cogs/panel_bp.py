@@ -521,14 +521,20 @@ def get_guild_data(guild_id: str):
                 'raw': str(em),
                 'url': f"https://cdn.discordapp.com/emojis/{em.id}.{ext}?size=48",
             })
-        for m in sorted(guild_obj.members, key=lambda x: (x.display_name or x.name).lower()):
-            if not m.bot:
-                members.append({
-                    'id': str(m.id),
-                    'name': m.display_name,
-                    'username': m.name,
-                    'avatar': m.display_avatar.url,
-                })
+        non_bot_members = [m for m in guild_obj.members if not m.bot]
+        # 優先保留管理員與高權限成員，並限制單次最大回傳筆數（300筆），避免大型伺服器產生巨量 JSON 與 DOM 卡頓
+        non_bot_members.sort(
+            key=lambda x: (
+                0 if (x.guild_permissions.administrator or x.guild_permissions.manage_guild) else 1,
+                (x.display_name or x.name).lower(),
+            )
+        )
+        for m in non_bot_members[:300]:
+            members.append({
+                'id': str(m.id),
+                'name': m.display_name,
+                'username': m.name,
+            })
 
     # 讀取各模組資料庫設定
     welcome_all = load_welcome_settings()

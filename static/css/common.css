@@ -132,14 +132,17 @@ a:hover {
   pointer-events: none;
   z-index: -1;
   overflow: hidden;
+  contain: strict;
 }
 
 .ambient-orb {
   position: absolute;
-  border-radius: 9999px;
-  filter: blur(95px);
+  border-radius: 50%;
+  filter: blur(60px);
   opacity: 0.5;
-  will-change: transform, border-radius, opacity;
+  will-change: transform, opacity;
+  backface-visibility: hidden;
+  transform: translateZ(0);
 }
 
 .ambient-orb-1 {
@@ -147,7 +150,7 @@ a:hover {
   left: 15%;
   width: 540px;
   height: 540px;
-  background: radial-gradient(circle, rgba(167, 139, 250, 0.38) 0%, rgba(167, 139, 250, 0) 70%);
+  background: radial-gradient(ellipse at center, rgba(167, 139, 250, 0.38) 0%, rgba(167, 139, 250, 0.16) 42%, rgba(167, 139, 250, 0) 72%);
   animation: floatOrb1 20s ease-in-out infinite alternate;
 }
 
@@ -156,7 +159,7 @@ a:hover {
   right: -8%;
   width: 640px;
   height: 640px;
-  background: radial-gradient(circle, rgba(125, 211, 252, 0.32) 0%, rgba(56, 189, 248, 0) 70%);
+  background: radial-gradient(ellipse at center, rgba(125, 211, 252, 0.32) 0%, rgba(56, 189, 248, 0.14) 42%, rgba(56, 189, 248, 0) 72%);
   animation: floatOrb2 24s ease-in-out infinite alternate;
 }
 
@@ -165,61 +168,52 @@ a:hover {
   left: 20%;
   width: 580px;
   height: 580px;
-  background: radial-gradient(circle, rgba(52, 211, 153, 0.24) 0%, rgba(52, 211, 153, 0) 70%);
+  background: radial-gradient(ellipse at center, rgba(52, 211, 153, 0.24) 0%, rgba(52, 211, 153, 0.1) 42%, rgba(52, 211, 153, 0) 72%);
   animation: floatOrb3 22s ease-in-out infinite alternate;
 }
 
-/* 有機液態漫射光斑多維度流體蠕動動效 */
+/* 有機液態漫射光斑多維度流體蠕動動效（純 Compositor 合成層非對稱縮放與旋轉，零重繪） */
 @keyframes floatOrb1 {
   0% {
-    transform: translate(0, 0) scale(1) rotate(0deg);
-    border-radius: 60% 40% 70% 30% / 50% 60% 40% 50%;
+    transform: translate3d(0, 0, 0) scale(1.05, 0.95) rotate(0deg);
     opacity: 0.45;
   }
   50% {
-    transform: translate(80px, 60px) scale(1.14) rotate(45deg);
-    border-radius: 40% 60% 30% 70% / 60% 40% 70% 30%;
+    transform: translate3d(80px, 60px, 0) scale(1.06, 1.2) rotate(45deg);
     opacity: 0.58;
   }
   100% {
-    transform: translate(-40px, 100px) scale(0.94) rotate(90deg);
-    border-radius: 50% 50% 60% 40% / 40% 60% 50% 50%;
+    transform: translate3d(-40px, 100px, 0) scale(0.98, 0.9) rotate(90deg);
     opacity: 0.48;
   }
 }
 
 @keyframes floatOrb2 {
   0% {
-    transform: translate(0, 0) scale(1) rotate(0deg);
-    border-radius: 50% 50% 40% 60% / 40% 60% 50% 50%;
+    transform: translate3d(0, 0, 0) scale(0.96, 1.04) rotate(0deg);
     opacity: 0.4;
   }
   50% {
-    transform: translate(-90px, -60px) scale(1.18) rotate(-60deg);
-    border-radius: 60% 40% 70% 30% / 50% 40% 60% 50%;
+    transform: translate3d(-90px, -60px, 0) scale(1.22, 1.12) rotate(-60deg);
     opacity: 0.55;
   }
   100% {
-    transform: translate(50px, -40px) scale(0.92) rotate(-120deg);
-    border-radius: 40% 60% 50% 50% / 60% 50% 40% 60%;
+    transform: translate3d(50px, -40px, 0) scale(0.9, 0.96) rotate(-120deg);
     opacity: 0.44;
   }
 }
 
 @keyframes floatOrb3 {
   0% {
-    transform: translate(0, 0) scale(1) rotate(0deg);
-    border-radius: 70% 30% 50% 50% / 30% 70% 60% 40%;
+    transform: translate3d(0, 0, 0) scale(1.08, 0.92) rotate(0deg);
     opacity: 0.35;
   }
   50% {
-    transform: translate(-50px, 60px) scale(1.1) rotate(55deg);
-    border-radius: 50% 50% 40% 60% / 60% 40% 50% 50%;
+    transform: translate3d(-50px, 60px, 0) scale(1.04, 1.15) rotate(55deg);
     opacity: 0.48;
   }
   100% {
-    transform: translate(70px, -50px) scale(0.94) rotate(115deg);
-    border-radius: 40% 60% 60% 40% / 50% 50% 30% 70%;
+    transform: translate3d(70px, -50px, 0) scale(0.96, 0.92) rotate(115deg);
     opacity: 0.38;
   }
 }

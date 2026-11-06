@@ -40,6 +40,7 @@
         <a class="topbar-brand" href="/">
           <img class="topbar-logo"
             src="{{ url_for('static', filename='logo.png') }}"
+            width="32" height="32" decoding="async"
             alt="炙彗JI器人 Logo" />
           <span class="topbar-name">炙彗JI器人</span>
         </a>
@@ -52,12 +53,12 @@
           <span class="topbar-owner-crown" title="BOT OWNER">👑</span>
           {% endif %}
           <button class="topbar-avatar-btn" id="topbar-user-btn" type="button" aria-expanded="false" aria-label="使用者選單" title="{{ user.global_name or user.username }}">
-            <img class="topbar-user-avatar" src="{{ user.avatar_url }}" alt="使用者頭像" />
+            <img class="topbar-user-avatar" src="{{ user.avatar_url }}" width="32" height="32" decoding="async" alt="使用者頭像" />
           </button>
 
           <div class="topbar-user-dropdown" id="topbar-user-dropdown">
             <div class="dropdown-user-header">
-              <img class="dropdown-user-avatar" src="{{ user.avatar_url }}" alt="使用者頭像" />
+              <img class="dropdown-user-avatar" src="{{ user.avatar_url }}" width="36" height="36" decoding="async" alt="使用者頭像" />
               <div class="dropdown-user-info">
                 <span class="dropdown-user-name">{{ user.global_name or user.username }}</span>
                 {% if is_owner %}
@@ -1339,8 +1340,8 @@
     </svg>
   </button>
 
-  <script src="{{ url_for('static', filename='js/panel.js') }}"></script>
-  <script src="{{ url_for('static', filename='js/site-nav.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/panel.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/site-nav.js') }}" defer></script>
 </body>
 
 </html>

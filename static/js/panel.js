@@ -489,6 +489,7 @@
         highlightedIndex = filtered.length - 1;
       }
 
+      const frag = document.createDocumentFragment();
       filtered.forEach((opt, i) => {
         const item = document.createElement('div');
         item.className = 'searchable-select-option';
@@ -506,8 +507,9 @@
           selectOption(opt.value);
         });
 
-        menu.appendChild(item);
+        frag.appendChild(item);
       });
+      menu.appendChild(frag);
     }
 
     function openMenu() {
@@ -678,13 +680,15 @@
     function fillChannels(selectEl, selectedVal, defaultLabel) {
       if (!selectEl) return;
       selectEl.innerHTML = `<option value="">-- ${defaultLabel} --</option>`;
+      const frag = document.createDocumentFragment();
       currentChannels.forEach((ch) => {
         const opt = document.createElement('option');
         opt.value = ch.id;
         opt.textContent = `# ${ch.name}`;
         if (String(ch.id) === String(selectedVal)) opt.selected = true;
-        selectEl.appendChild(opt);
+        frag.appendChild(opt);
       });
+      selectEl.appendChild(frag);
     }
 
     fillChannels(welcomeSelect, welcomeCfg.welcome_channel_id, '未設定（停用發送）');
@@ -697,13 +701,15 @@
 
     if (autoRoleSelect) {
       autoRoleSelect.innerHTML = '<option value="">-- 未設定（不自動賦予） --</option>';
+      const roleFrag = document.createDocumentFragment();
       currentRoles.forEach((r) => {
         const opt = document.createElement('option');
         opt.value = r.id;
         opt.textContent = `@ ${r.name}`;
         if (String(r.id) === String(welcomeCfg.auto_role_id)) opt.selected = true;
-        autoRoleSelect.appendChild(opt);
+        roleFrag.appendChild(opt);
       });
+      autoRoleSelect.appendChild(roleFrag);
     }
 
     // 填入 AI 智慧助手表單
@@ -737,20 +743,26 @@
     const aiPayerSelect = document.getElementById('select-ai-payer');
     if (aiPayerSelect) {
       aiPayerSelect.innerHTML = '<option value="">-- 由發問者自行支付各自的 AI 幣（預設） --</option>';
+      const payerFrag = document.createDocumentFragment();
+      let foundPayer = false;
       (currentMembers || []).forEach((m) => {
         const opt = document.createElement('option');
         opt.value = m.id;
         opt.textContent = `${m.name} (@${m.username || m.name})`;
-        if (String(m.id) === String(aiCfg.payer_user_id)) opt.selected = true;
-        aiPayerSelect.appendChild(opt);
+        if (String(m.id) === String(aiCfg.payer_user_id)) {
+          opt.selected = true;
+          foundPayer = true;
+        }
+        payerFrag.appendChild(opt);
       });
-      if (aiCfg.payer_user_id && !Array.from(aiPayerSelect.options).some((o) => o.value === String(aiCfg.payer_user_id))) {
+      if (aiCfg.payer_user_id && !foundPayer) {
         const opt = document.createElement('option');
         opt.value = aiCfg.payer_user_id;
         opt.textContent = `指定使用者 (ID: ${aiCfg.payer_user_id})`;
         opt.selected = true;
-        aiPayerSelect.appendChild(opt);
+        payerFrag.appendChild(opt);
       }
+      aiPayerSelect.appendChild(payerFrag);
     }
     if (aiInstruction) aiInstruction.value = aiCfg.instruction || '';
     if (aiTemp) aiTemp.value = aiCfg.temperature !== undefined ? aiCfg.temperature : 0.7;
