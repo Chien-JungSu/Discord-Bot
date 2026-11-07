@@ -427,7 +427,9 @@ async def test_sticky_panel_auto_bump():
     cog.panel_messages[GID] = (10, 20)
 
     old_delay = music_mod.PANEL_BUMP_DELAY
+    old_cooldown = music_mod.PANEL_BUMP_COOLDOWN
     music_mod.PANEL_BUMP_DELAY = 0.05
+    music_mod.PANEL_BUMP_COOLDOWN = 0.15
     try:
         # 0. 機器人自身訊息或面板訊息絕不能觸發置底任務
         bot.user = SimpleNamespace(id=999)
@@ -489,8 +491,59 @@ async def test_sticky_panel_auto_bump():
         # 再等一輪防抖時間，確認不會無限重發
         await asyncio.sleep(0.08)
         check(channel.send.await_count == 1 and GID not in cog._panel_bump_tasks, "置底完成後不會再次觸發或無限重發面板")
+
+        # 3. 短時間重複觸發冷卻保護（PANEL_BUMP_COOLDOWN）：剛置底完立刻又有訊息時，在冷卻結束前不會馬上重發，冷卻後才置底並清除舊面板
+        cog._last_bump_at[GID] = music_mod.time.monotonic()
+        second_panel_msg = MagicMock()
+        second_panel_msg.id = 1500
+        new_panel_msg.delete = AsyncMock()
+        new_panel_msg.edit = AsyncMock()
+        channel.last_message_id = 1200
+        channel.send = AsyncMock(return_value=second_panel_msg)
+        channel.get_partial_message = MagicMock(return_value=new_panel_msg)
+        channel.fetch_message = AsyncMock(return_value=second_panel_msg)
+        second_panel_msg.edit = AsyncMock()
+
+        burst_msg = SimpleNamespace(
+            id=1200,
+            guild=guild,
+            channel=SimpleNamespace(id=10),
+            author=SimpleNamespace(id=123, bot=False),
+            flags=SimpleNamespace(ephemeral=False, loading=False),
+        )
+        await cog.on_message(burst_msg)
+        await asyncio.sleep(0.07)  # 超過 PANEL_BUMP_DELAY (0.05s)，但尚未超過 PANEL_BUMP_COOLDOWN (0.15s)
+        check(channel.send.await_count == 0, "冷卻期間內不會短時間重複觸發置底")
+        await asyncio.sleep(0.12)  # 冷卻時間到達後才執行置底並清除上一張面板 (id=999)
+        check(channel.send.await_count == 1 and new_panel_msg.delete.await_count == 1, "冷卻結束後正常置底並清除舊面板")
+
+        # 4. 播放停止或結束後：立即取消排程中的置底任務，且後續新訊息絕不再觸發置底
+        pending_msg = SimpleNamespace(
+            id=1800,
+            guild=guild,
+            channel=SimpleNamespace(id=10),
+            author=SimpleNamespace(id=123, bot=False),
+            flags=SimpleNamespace(ephemeral=False, loading=False),
+        )
+        channel.last_message_id = 1800
+        await cog.on_message(pending_msg)
+        check(GID in cog._panel_bump_tasks, "結束前收到訊息已排程置底任務")
+        await cog._update_panel_ended(GID, reason="⏹️ 已停止播放")
+        check(GID not in cog._panel_bump_tasks and GID not in cog.panel_messages, "播放停止／結束時立即取消置底任務並移除面板追蹤")
+
+        after_end_msg = SimpleNamespace(
+            id=1900,
+            guild=guild,
+            channel=SimpleNamespace(id=10),
+            author=SimpleNamespace(id=123, bot=False),
+            flags=SimpleNamespace(ephemeral=False, loading=False),
+        )
+        await cog.on_message(after_end_msg)
+        await asyncio.sleep(0.18)
+        check(channel.send.await_count == 1 and GID not in cog._panel_bump_tasks, "播放停止或結束後新訊息不再觸發置底")
     finally:
         music_mod.PANEL_BUMP_DELAY = old_delay
+        music_mod.PANEL_BUMP_COOLDOWN = old_cooldown
 
 
 async def main_async():
