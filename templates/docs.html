@@ -340,6 +340,21 @@
           <li><strong>/economy_scratch</strong>：🎫 花費金幣購買一張 3×3 九宮格互動刮刮樂，可逐格點擊刮開或按「✨ 全部刮開」，湊滿 3 個相同圖案即可贏得頭獎（<code>💎×3</code>）、貳獎（<code>🌟×3</code>）、參獎（<code>🍀×3</code>）或回本獎（<code>🍒×3</code>），刮完後可一鍵「🎫 再買一張」。</li>
         </ul>
       </article>
+
+      <article class="card" id="cog-temp-message">
+        <div class="tag">Temp Message</div>
+        <h2>限時訊息</h2>
+        <ul>
+          <li><strong>/temp_message</strong> <em>duration:&lt;時效&gt; [text:&lt;文字&gt;] [image:&lt;圖片&gt;]</em>：發送限時訊息，由機器人代為傳送並在指定時間後自動刪除。
+            <ul>
+              <li><strong>duration</strong>：選擇訊息有效時間（必填），提供 <code>1min</code>、<code>30min</code>、<code>1hr</code>、<code>6hr</code>、<code>12hr</code>、<code>24hr</code> 六種選項，有效時間從使用指令的當下開始計算。</li>
+              <li><strong>text</strong>／<strong>image</strong>：欲傳送的文字內容或上傳圖片（兩者至少需填寫一項，亦可同時提供）。</li>
+              <li><strong>底部標註與自動刪除</strong>：訊息底部會自動附上 <code>-# 由 {username} 傳送 • &lt;t:...:R&gt; 自動刪除</code>（顯示傳送者的伺服器顯示名稱與 Discord 即時動態剩餘時間），排程持久化儲存於 SQLite，重啟後仍會準時刪除。</li>
+            </ul>
+          </li>
+          <li><strong>應用程式選單（右鍵訊息「限時訊息」）</strong>：對自己傳送的訊息按右鍵 →「應用程式」→「限時訊息」，機器人會傳送私密訊息讓使用者從下拉選單選擇有效時間（<code>1min</code>、<code>30min</code>、<code>1hr</code>、<code>6hr</code>、<code>12hr</code>、<code>24hr</code>，時效自使用指令當下起算）；選取後機器人會刪除原訊息並代為重發（含文字、圖片附件與底部動態倒數標註），到期後自動刪除。</li>
+        </ul>
+      </article>
     </div>
 
     <!-- 下部居中放置文本“© 2026 炙彗JI器人”（16sp） -->

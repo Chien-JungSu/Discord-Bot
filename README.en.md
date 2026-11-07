@@ -50,6 +50,7 @@ Supported features:
 - `/economy_blackjack`: play interactive Blackjack (21) against the dealer (Hit, Stand, Double Down)
 - `/economy_scratch`: buy an interactive 3×3 scratch card and match 3 identical symbols to win prizes
 - `/economy_admin`: owner-only (`owner_guild_only`) interactive control panel to configure check-in rewards, game multipliers, and user balances
+- `/temp_message`: send a timed/self-destructing message (with text and/or an uploaded image) on behalf of the user with a `-# 由 {username} 傳送` footer and a live countdown timer, automatically deleting it after the chosen duration; also includes a right-click message context menu ("限時訊息") with an ephemeral dropdown selector
 
 ### Requester control lock
 
@@ -210,6 +211,8 @@ When launched, the bot starts the Flask background server from `cogs/web_server.
 - `/economy_blackjack`: open the interactive Blackjack (21) betting panel (no command arguments needed) with quick bet controls, custom bet input (with min/max hints and auto-cap to wallet balance), and **🔥 All In** (with in-place confirmation buttons). Once dealt, play against the dealer using "🃏 Hit", "🛑 Stand", and "💰 Double Down" buttons with automatic Ace (1/11) valuation, Natural Blackjack payouts, and a "🃏 Play Again" button (automatically synced to the latest available bet or disabled if out of funds).
 - `/economy_scratch`: buy an interactive 3×3 scratch card, click cells one by one or press "✨ Scratch All", and match 3 identical symbols to win Jackpot (💎×3), 2nd Prize (🌟×3), 3rd Prize (🍀×3), or Consolation Prize (🍒×3), with a "🎫 Buy Another" button once finished.
 - `/economy_admin`: owner-only (`owner_guild_only` and restricted to the bot owner) interactive parameter control panel. Use the dropdown menu and pre-filled modals to modify daily/hourly check-in rewards and streak bonus caps, minigame bet limits and multipliers, scratch card price, currency name/emoji/transfer tax, or directly grant/deduct/set any user's coin balance; all parameters are persisted in SQLite (`bot_database.db`).
+- `/temp_message duration:<duration> [text:<text>] [image:<image>]`: send a timed message. Choose a duration from `1min`, `30min`, `1hr`, `6hr`, `12hr`, or `24hr` (counted from the moment the command is invoked) and provide text and/or an image; the bot sends the message on behalf of the user with a `-# 由 {username} 傳送 • <t:...:R> 自動刪除` footer showing the sender's display name and live remaining time, and automatically deletes it upon expiration (persisted in SQLite `bot_database.db` across restarts).
+- **Message Context Menu ("限時訊息")**: right-click one of your own messages → "Apps" → "限時訊息" to receive an ephemeral message with a dropdown menu (`1min`, `30min`, `1hr`, `6hr`, `12hr`, `24hr`, counted from when the command was invoked); once selected, the bot deletes the original message, resends its text and image attachments with the sender & remaining time footer, and automatically deletes it when the timer expires.
 
 ## Reaction Roles Feature
 

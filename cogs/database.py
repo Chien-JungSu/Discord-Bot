@@ -240,6 +240,19 @@ def init_db():
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_blocked_users_created_at ON blocked_users (created_at);")
 
+            # 17. 限時訊息排程表 (持久化紀錄待自動刪除的訊息，確保重啟後仍會準時刪除)
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS temp_messages (
+                message_id INTEGER PRIMARY KEY,
+                channel_id INTEGER NOT NULL,
+                guild_id TEXT,
+                author_id INTEGER NOT NULL,
+                expire_at REAL NOT NULL,
+                created_at REAL NOT NULL
+            );
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_temp_messages_expire_at ON temp_messages (expire_at);")
+
             # ---------- 自動欄位安全遷移 (Migration) ----------
             cursor.execute("PRAGMA table_info(economy_users);")
             econ_cols = [r["name"] if isinstance(r, sqlite3.Row) else r[1] for r in cursor.fetchall()]
@@ -2841,6 +2854,108 @@ def record_profile_view(username: str, increment: bool = True) -> dict[str, Any]
         "sparkline_d": sparkline_d,
         "trend": trend_vals,
     }
+
+
+# ==============================================================================
+# 限時訊息 (Temp Messages) 持久化排程 API
+# ==============================================================================
+
+def _ensure_temp_messages_table(cursor: sqlite3.Cursor) -> None:
+    """確保 temp_messages 資料表已存在（支援熱重載時免重啟直接建表）。"""
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS temp_messages (
+            message_id INTEGER PRIMARY KEY,
+            channel_id INTEGER NOT NULL,
+            guild_id TEXT,
+            author_id INTEGER NOT NULL,
+            expire_at REAL NOT NULL,
+            created_at REAL NOT NULL
+        );
+        """
+    )
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_temp_messages_expire_at ON temp_messages (expire_at);")
+
+
+def add_temp_message(
+    message_id: int,
+    channel_id: int,
+    guild_id: Optional[str | int],
+    author_id: int,
+    expire_at: float,
+    created_at: Optional[float] = None,
+) -> None:
+    """新增一筆待自動刪除的限時訊息紀錄。"""
+    init_db()
+    now_ts = float(created_at if created_at is not None else time.time())
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            _ensure_temp_messages_table(cursor)
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO temp_messages
+                    (message_id, channel_id, guild_id, author_id, expire_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?);
+                """,
+                (
+                    int(message_id),
+                    int(channel_id),
+                    str(guild_id) if guild_id is not None else None,
+                    int(author_id),
+                    float(expire_at),
+                    now_ts,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def remove_temp_message(message_id: int) -> None:
+    """從資料庫中移除已刪除或失效的限時訊息紀錄。"""
+    init_db()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            _ensure_temp_messages_table(cursor)
+            cursor.execute("DELETE FROM temp_messages WHERE message_id = ?;", (int(message_id),))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def load_temp_messages() -> list[dict[str, Any]]:
+    """讀取所有尚未刪除的限時訊息紀錄（依到期時間由早到晚排序）。"""
+    init_db()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            _ensure_temp_messages_table(cursor)
+            cursor.execute(
+                """
+                SELECT message_id, channel_id, guild_id, author_id, expire_at, created_at
+                FROM temp_messages
+                ORDER BY expire_at ASC;
+                """
+            )
+            return [
+                {
+                    "message_id": int(r["message_id"]),
+                    "channel_id": int(r["channel_id"]),
+                    "guild_id": r["guild_id"],
+                    "author_id": int(r["author_id"]),
+                    "expire_at": float(r["expire_at"]),
+                    "created_at": float(r["created_at"]),
+                }
+                for r in cursor.fetchall()
+            ]
+        finally:
+            conn.close()
+
 
 
 
