@@ -337,6 +337,120 @@ async def test_track_end_guard():
     check(player.played[-1].title == "b", "track_end 正在接歌時匯入不搶播")
 
 
+# ---------- 測試 8：面板循環按鈕與關閉循環不自動跳歌 ----------
+async def test_loop_button_and_no_autoskip():
+    print("\n--- 測試 8: 控制面板循環按鈕與關閉循環防自動跳歌 ---")
+    player = FakePlayer()
+    cog = make_cog(player)
+    song_a = fake_track("SongA", identifier="id_a", encoded="enc_a")
+    song_b = fake_track("SongB", identifier="id_b", encoded="enc_b")
+    song_c = fake_track("SongC", identifier="id_c", encoded="enc_c")
+
+    await cog._play_track(player, song_a, "測試者", 7)
+    player.song_queue.append((song_b, "測試者", 7))
+    player.song_queue.append((song_c, "測試者", 7))
+
+    view = music_mod.MusicControlView(cog, player=player)
+    check(hasattr(view, "btn_loop") and view.btn_loop in view.row2.children, "控制面板第二列包含循環按鈕")
+    check(view.btn_loop.label == "循環：關閉" and not view.btn_loop.disabled, "初始狀態為『循環：關閉』且可點擊")
+
+    it = make_interaction()
+    it.guild.voice_client = player
+
+    # 點擊第 1 次：off -> single
+    await view.toggle_loop(it)
+    view.refresh_buttons(player)
+    check(player.loop_mode == "single" and view.btn_loop.label == "循環：單曲", "點擊第 1 次切換為『循環：單曲』")
+
+    # 點擊第 2 次：single -> all
+    await view.toggle_loop(it)
+    view.refresh_buttons(player)
+    check(player.loop_mode == "all" and view.btn_loop.label == "循環：佇列", "點擊第 2 次切換為『循環：佇列』")
+
+    # 點擊第 3 次：all -> off（關閉循環狀態時絕不跳過當前歌曲）
+    await view.toggle_loop(it)
+    view.refresh_buttons(player)
+    check(player.loop_mode == "off" and view.btn_loop.label == "循環：關閉", "點擊第 3 次切換回『循環：關閉』")
+    check(player.current is song_a and len(player.played) == 1, "關閉循環狀態時不會跳過當前播放中的 SongA")
+
+    # 情境 A：SongA 自然結束 -> 切換到 SongB；若緊接著收到同一次播放重複派發的 TrackEndEvent，不能把剛開始的 SongB 跳過
+    end_a = SimpleNamespace(player=player, reason="finished", track=fake_track("SongA", identifier="id_a", encoded="enc_a"))
+    await cog.on_wavelink_track_end(end_a)
+    check(player.current is song_b and len(player.song_queue) == 1, "SongA 結束後正常換播 SongB")
+
+    # 模擬重複抵達的 SongA TrackEndEvent（包含模擬 wavelink/websocket.py 將 _current 清成 None）
+    player._current = None
+    player.current = None
+    await cog.on_wavelink_track_end(end_a)
+    check(
+        getattr(player, "_current", None) is song_b and len(player.song_queue) == 1,
+        "延遲抵達的上一首 TrackEndEvent 被攔截並還原 _current，不會在關閉循環時自動跳過 SongB",
+    )
+    player.current = song_b
+
+    # 情境 B：沒有 end_intent 的殘留 stopped 事件不能把當前歌曲跳過
+    spurious_stop = SimpleNamespace(player=player, reason="stopped", track=fake_track("SongB", identifier="id_b", encoded="enc_b"))
+    await cog.on_wavelink_track_end(spurious_stop)
+    check(player.current is song_b and len(player.song_queue) == 1, "無意圖的殘留 stopped 事件不會跳過當前歌曲 SongB")
+
+
+# ---------- 測試 9：防洗版自動置底（Sticky Panel） ----------
+async def test_sticky_panel_auto_bump():
+    print("\n--- 測試 9: 控制面板防被普通訊息刷掉（自動置底與暫時訊息過濾） ---")
+    player = FakePlayer()
+    player.current = fake_track("PlayingSong")
+    bot = MagicMock()
+    guild = SimpleNamespace(id=GID, voice_client=player)
+    bot.get_guild = lambda gid: guild
+
+    old_panel_msg = MagicMock()
+    old_panel_msg.delete = AsyncMock()
+    new_panel_msg = MagicMock()
+    new_panel_msg.id = 999
+
+    channel = MagicMock()
+    channel.id = 10
+    channel.last_message_id = 500  # 最新訊息是普通聊天訊息，不是舊面板 (id=20)
+    channel.send = AsyncMock(return_value=new_panel_msg)
+    channel.get_partial_message = MagicMock(return_value=old_panel_msg)
+    bot.get_channel = lambda cid: channel
+
+    cog = Music(bot)
+    cog.panel_messages[GID] = (10, 20)
+
+    old_delay = music_mod.PANEL_BUMP_DELAY
+    music_mod.PANEL_BUMP_DELAY = 0.05
+    try:
+        # 1. 暫時訊息發出後立刻被刪除（如指令 defer 思考訊息）-> 取消置底，不重發面板
+        temp_msg = SimpleNamespace(
+            id=300,
+            guild=guild,
+            channel=SimpleNamespace(id=10),
+            flags=SimpleNamespace(ephemeral=False, loading=False),
+        )
+        await cog.on_message(temp_msg)
+        check(GID in cog._panel_bump_tasks, "收到同頻道訊息後建立防抖置底任務")
+        await cog.on_message_delete(temp_msg)
+        check(GID not in cog._panel_bump_tasks, "暫時訊息被刪除後自動取消置底任務，避免無謂重發")
+        await asyncio.sleep(0.08)
+        check(channel.send.await_count == 0, "暫時訊息刪除後不會觸發面板重發")
+
+        # 2. 一般聊天訊息保留在頻道上 -> 防抖結束後自動重發新面板至底部並刪除舊面板
+        chat_msg = SimpleNamespace(
+            id=500,
+            guild=guild,
+            channel=SimpleNamespace(id=10),
+            flags=SimpleNamespace(ephemeral=False, loading=False),
+        )
+        await cog.on_message(chat_msg)
+        await asyncio.sleep(0.08)
+        check(channel.send.await_count == 1, "普通訊息刷過面板後，於頻道底部重發新面板")
+        check(cog.panel_messages.get(GID) == (10, 999), "panel_messages 更新為新面板訊息 ID")
+        check(old_panel_msg.delete.await_count == 1, "舊面板訊息被自動刪除")
+    finally:
+        music_mod.PANEL_BUMP_DELAY = old_delay
+
+
 async def main_async():
     await test_panel_abandon()
     await test_import_flow()
@@ -344,6 +458,8 @@ async def main_async():
     await test_cancel()
     await test_errors()
     await test_track_end_guard()
+    await test_loop_button_and_no_autoskip()
+    await test_sticky_panel_auto_bump()
 
 
 def main():

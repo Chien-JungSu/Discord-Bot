@@ -56,6 +56,11 @@ LAVALINK_RECONNECT_COOLDOWN = float(os.getenv('LAVALINK_RECONNECT_COOLDOWN', '60
 # 第 6 週新增：播放面板進度條定時更新間隔（秒，集中常數設定，至少 5 秒防 API rate limit）
 PROGRESS_UPDATE_INTERVAL = float(os.getenv('PROGRESS_UPDATE_INTERVAL', '5.0'))
 
+# 控制面板防洗版自動置底（Sticky Panel）防抖延遲秒數：
+# 當點歌頻道有普通訊息把控制面板往上刷時，等待一小段靜止時間再將舊面板刪除並於頻道底部重發，
+# 避免多人連續聊天時頻繁觸發 Discord API 刪除與重發（Rate Limit 防護），且無需額外頻道管理權限。
+PANEL_BUMP_DELAY = float(os.getenv('PANEL_BUMP_DELAY', '3.0'))
+
 # ---------- 第 7 週新增：Spotify 批次匯入設定（集中常數，方便依機器效能調整） ----------
 # 同時進行的 Lavalink 搜尋數量。免費方案 0.1 CPU／512MB，並發太高會壓垮節點與記憶體，預設只開 3 個。
 IMPORT_CONCURRENCY = max(1, int(os.getenv('IMPORT_CONCURRENCY', '3')))
@@ -701,6 +706,7 @@ class MusicControlView(ui.LayoutView):
     CUSTOM_ID_STOP = "music:stop"
     CUSTOM_ID_VOL_DOWN = "music:vol_down"
     CUSTOM_ID_VOL_UP = "music:vol_up"
+    CUSTOM_ID_LOOP = "music:loop"
 
     def __init__(
         self,
@@ -768,7 +774,15 @@ class MusicControlView(ui.LayoutView):
         )
         self.btn_vol_up.callback = self.volume_up
 
-        # 組裝成兩列 ActionRow：Row 1 (5 顆)，Row 2 (2 顆)
+        self.btn_loop = ui.Button(
+            label="循環：關閉",
+            emoji="🔁",
+            style=discord.ButtonStyle.secondary,
+            custom_id=self.CUSTOM_ID_LOOP,
+        )
+        self.btn_loop.callback = self.toggle_loop
+
+        # 組裝成兩列 ActionRow：Row 1 (5 顆)，Row 2 (3 顆：音量 - / 音量 + / 循環)
         self.row1 = ui.ActionRow(
             self.btn_toggle,
             self.btn_rewind,
@@ -776,7 +790,7 @@ class MusicControlView(ui.LayoutView):
             self.btn_skip,
             self.btn_stop,
         )
-        self.row2 = ui.ActionRow(self.btn_vol_down, self.btn_vol_up)
+        self.row2 = ui.ActionRow(self.btn_vol_down, self.btn_vol_up, self.btn_loop)
 
         # 組裝 Container
         self.container = build_now_playing_container(
@@ -795,6 +809,7 @@ class MusicControlView(ui.LayoutView):
         - 直播中或無法 Seek：快進／倒退按鈕 disabled。
         - 佇列沒有下一首：切歌按鈕 disabled。
         - 音量到 0% 時，「−」disabled；音量到 100% 時，「+」disabled。
+        - 循環按鈕：依 loop_mode（off / single / all）切換文字、圖示與按鈕顏色。
         """
         has_current = player is not None and getattr(player, "current", None) is not None
         is_paused = bool(getattr(player, "paused", False)) if player else False
@@ -807,6 +822,9 @@ class MusicControlView(ui.LayoutView):
             self.btn_toggle.label = "暫停"
             self.btn_toggle.emoji = "⏸️"
             self.btn_toggle.style = discord.ButtonStyle.secondary
+            self.btn_loop.label = "循環：關閉"
+            self.btn_loop.emoji = "🔁"
+            self.btn_loop.style = discord.ButtonStyle.secondary
             return
 
         track = player.current
@@ -843,6 +861,22 @@ class MusicControlView(ui.LayoutView):
         # 音量按鈕：邊界 disabled (0% ~ 100%)
         self.btn_vol_down.disabled = (volume <= 0)
         self.btn_vol_up.disabled = (volume >= 100)
+
+        # 循環按鈕：依 loop_mode 切換狀態（off -> single -> all -> off）
+        loop_mode = getattr(player, "loop_mode", "off")
+        self.btn_loop.disabled = False
+        if loop_mode == "single":
+            self.btn_loop.label = "循環：單曲"
+            self.btn_loop.emoji = "🔂"
+            self.btn_loop.style = discord.ButtonStyle.primary
+        elif loop_mode == "all":
+            self.btn_loop.label = "循環：佇列"
+            self.btn_loop.emoji = "🔁"
+            self.btn_loop.style = discord.ButtonStyle.primary
+        else:
+            self.btn_loop.label = "循環：關閉"
+            self.btn_loop.emoji = "🔁"
+            self.btn_loop.style = discord.ButtonStyle.secondary
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         """統一權限與狀態防呆：
@@ -974,6 +1008,7 @@ class MusicControlView(ui.LayoutView):
         try:
             await player.skip(force=True)
         except Exception:
+            player.end_intent = None
             if cog:
                 cog._pending_panel_interaction.pop(interaction.guild.id, None)
             raise
@@ -1024,6 +1059,24 @@ class MusicControlView(ui.LayoutView):
         if cog:
             await cog._sync_panel(interaction.guild.id, player, interaction=interaction)
 
+    async def toggle_loop(self, interaction: discord.Interaction, button: ui.Button | None = None):
+        """在音樂控制面板直接循環切換 loop_mode（關閉 -> 單曲循環 -> 佇列循環 -> 關閉）。
+        只修改 player.loop_mode 並原地刷新面板，絕不觸動 player.skip() 或當前播放曲目。
+        """
+        player: "wavelink_module.Player" = interaction.guild.voice_client
+        cog: "Music" = self.cog or interaction.client.get_cog("Music")
+
+        current_mode = getattr(player, "loop_mode", "off")
+        new_mode = LOOP_NEXT.get(current_mode, "off")
+        player.loop_mode = new_mode
+        if cog:
+            cog._set_panel_notice(
+                interaction.guild.id,
+                f"{LOOP_LABELS[new_mode]}（操作者：{interaction.user.display_name}）",
+                duration=8.0,
+            )
+            await cog._sync_panel(interaction.guild.id, player, interaction=interaction)
+
 
 class Music(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -1065,6 +1118,11 @@ class Music(commands.Cog):
         # 第 6 週新增：面板底部即時提示字串 (guild_id -> notice string) 與自動清除計時任務 (guild_id -> Task)
         self._panel_notices: dict[int, str] = {}
         self._panel_notice_tasks: dict[int, asyncio.Task] = {}
+        # 控制面板防洗版自動置底（Sticky Panel）防抖計時任務與觸發訊息追蹤：
+        # _panel_bump_tasks: key=guild_id, value=等待防抖結束後將面板移至頻道底部的 Task
+        # _bump_trigger_msgs: key=guild_id, value=面板發出後同頻道新增的訊息 ID 集合（若暫時訊息全數被刪除則取消置底）
+        self._panel_bump_tasks: dict[int, asyncio.Task] = {}
+        self._bump_trigger_msgs: dict[int, set[int]] = {}
         # 第 7 週新增：Spotify 服務（整個 Cog 共用一個 aiohttp session）與各伺服器的背景匯入任務。
         # 任務必須存參照：asyncio 只對 Task 保留弱引用，沒人持有就可能被垃圾回收而中途消失。
         # key: guild_id，每個伺服器同時最多一個匯入任務；任務結束時會由 done callback 自行移除。
@@ -1101,6 +1159,13 @@ class Music(commands.Cog):
                 task.cancel()
         self._panel_notice_tasks.clear()
         self._panel_notices.clear()
+
+        # 取消所有面板自動置底防抖任務
+        for task in self._panel_bump_tasks.values():
+            if not task.done():
+                task.cancel()
+        self._panel_bump_tasks.clear()
+        self._bump_trigger_msgs.clear()
 
         if self.node_health_check.is_running():
             self.node_health_check.cancel()
@@ -1586,12 +1651,19 @@ class Music(commands.Cog):
         因為 autoplay 已關閉，「歌曲結束 → 下一首」完全由這裡決定，所以循環模式也
         必須在這裡實作（不能用 wavelink 內建的 queue.mode，你的佇列是自己的 song_queue）。
 
-        判斷依據有兩個：
+        判斷依據：
         1. payload.reason：replaced / cleanup 代表曲目被取代或 player 正在銷毀，
            不能再接下一首；loadFailed 的曲目不參與循環，否則壞掉的歌會無限重試。
         2. player.end_intent：/music_skip、/music_stop 在呼叫 player.skip() 之前會先
            寫入 "skip" / "stop"。Lavalink 對「被跳過」與「自然播完」都只會送 track_end，
            靠這個旗標才分得出來（單曲循環時被 skip 就不能重播同一首）。
+        3. 防自動跳歌保護（修復關閉循環狀態時自動跳過當前歌曲）：
+           - 重入防護（player.advancing）：正在接下一首時忽略並發的 track_end。
+           - 曲目身份比對（player._active_track）：wavelink 收到非 replaced 的 TrackEndEvent 時會無條件把
+             player._current 設為 None；若這是上一首歌延遲抵達的事件、但新歌已經開播，必須還原 _current 並忽略。
+           - 播放序號去重（player._play_seq / _last_ended_seq）：同一首歌的同一次播放最多只允許觸發一次換歌；
+             否則單曲循環時重播同一首看不出異狀，一旦關閉循環（loop_mode == "off"）就會連續 pop 兩次佇列而把剛開始的新歌秒跳過。
+           - 無意圖的 stopped 過濾：Lavalink 的 reason="stopped" 只應在明確呼叫 skip/stop（帶有 end_intent）時處理。
         """
         player = getattr(payload, "player", None)
         if player is None:
@@ -1601,6 +1673,51 @@ class Music(commands.Cog):
         if reason in ("replaced", "cleanup"):
             return
 
+        # 防護 1：若正在進行換歌（advancing），忽略重入事件避免連跳兩首
+        if getattr(player, "advancing", False):
+            return
+
+        ended_track = getattr(payload, "track", None)
+        active_track = getattr(player, "_active_track", None)
+
+        # 防護 2：若事件夾帶的曲目與目前實際在播的 _active_track 不同，代表這是上一首歌延遲送達的舊事件；
+        # 還原被 wavelink/websocket.py 誤清掉的 _current 並忽略此事件，防止正在播放的歌曲被跳過。
+        if active_track is not None and ended_track is not None and not self._is_same_track(ended_track, active_track):
+            if getattr(player, "current", None) is None:
+                try:
+                    player._current = active_track
+                except Exception:
+                    pass
+            return
+
+        # 讀出並立刻消耗旗標，避免影響下一首
+        intent = getattr(player, "end_intent", None)
+        player.end_intent = None
+
+        # 防護 3：Lavalink 的 stopped 只會在主動呼叫 skip/stop 時發出；若沒有對應的 end_intent，
+        # 代表是重複派發或殘留的停止事件，不能當成自然播完去切下一首。
+        if reason == "stopped" and intent is None:
+            if active_track is not None and getattr(player, "current", None) is None:
+                try:
+                    player._current = active_track
+                except Exception:
+                    pass
+            return
+
+        # 防護 4：同一個播放序號（_play_seq）只允許觸發一次 track_end 換歌流程
+        play_seq = getattr(player, "_play_seq", 0)
+        if play_seq > 0:
+            if getattr(player, "_last_ended_seq", None) == play_seq:
+                if active_track is not None and getattr(player, "current", None) is None:
+                    try:
+                        player._current = active_track
+                    except Exception:
+                        pass
+                return
+            player._last_ended_seq = play_seq
+
+        player._active_track = None
+
         song_queue: deque = getattr(player, "song_queue", None)
         if song_queue is None:
             song_queue = deque()
@@ -1608,13 +1725,9 @@ class Music(commands.Cog):
 
         channel = getattr(player, "home_channel", None)
 
-        # 讀出並立刻消耗旗標，避免影響下一首
-        intent = getattr(player, "end_intent", None)
-        player.end_intent = None
         loop_mode = getattr(player, "loop_mode", "off")
         requester_name = getattr(player, "current_requester", None) or "未知"
         requester_id = getattr(player, "current_requester_id", None)
-        ended_track = getattr(payload, "track", None)
         if reason in ("loadfailed", "load_failed"):
             ended_track = None
 
@@ -1628,10 +1741,8 @@ class Music(commands.Cog):
             return
 
         next_item = None
-        is_repeat = False
         if ended_track is not None and loop_mode == "single" and intent != "skip":
             next_item = (ended_track, requester_name, requester_id)
-            is_repeat = True
         else:
             if ended_track is not None and loop_mode == "all":
                 # 佇列循環：剛結束（或被跳過）的歌排到佇列最後面
@@ -2297,6 +2408,7 @@ class Music(commands.Cog):
             try:
                 new_msg = await target_channel.send(view=view)
                 self.panel_messages[guild_id] = (target_channel.id, new_msg.id)
+                self._cancel_panel_bump(guild_id)
                 pos = getattr(player, "position", 0)
                 length = getattr(player.current, "length", 0)
                 is_stream = bool(getattr(player.current, "is_stream", False))
@@ -2320,6 +2432,7 @@ class Music(commands.Cog):
         reason：結束原因（播完／停止／自動離開…）直接寫在這則最終面板的底部，
         不再另外發送訊息。回傳 True 代表有面板可顯示（呼叫端據此決定是否需要退回其他回覆方式）。
         """
+        self._cancel_panel_bump(guild_id)
         self._last_progress_str.pop(guild_id, None)
         self._rate_limit_until.pop(guild_id, None)
         task = self._panel_notice_tasks.pop(guild_id, None)
@@ -2339,6 +2452,152 @@ class Music(commands.Cog):
         # 拋棄：之後點歌會建立新的 Container
         self.panel_messages.pop(guild_id, None)
         return had_panel
+
+    # ---------- 控制面板防洗版自動置底（Sticky Panel） ----------
+    # 設計理由（以可行性為主要考量）：
+    # 1. 權限零門檻：刪除他人訊息需要 Manage Messages，建立討論串需要 Create Public Threads + Manage Messages；
+    #    而「刪除機器人自己的舊面板訊息 + 在頻道最底部重發新面板」只需要最基本的 Send Messages 權限，在任何頻道皆 100% 可行。
+    # 2. 防抖節流（Debounce）：多人連續聊天時不會每則訊息都重發面板，而是重置 PANEL_BUMP_DELAY（預設 3 秒）倒數，
+    #    等頻道安靜下來後才一次移到底部，保護 Discord API Rate Limit 與 512MB RAM 環境。
+    # 3. 暫時訊息智慧過濾：記錄面板之後出現的訊息 ID（_bump_trigger_msgs）；若該訊息屬於指令 defer 思考中提示並在完成後被刪除
+    #    （觸發 on_message_delete），集合清空後自動取消置底任務，避免無謂重發面板。
+    def _cancel_panel_bump(self, guild_id: int) -> None:
+        """取消指定伺服器的面板自動置底任務並清空觸發訊息紀錄。"""
+        task = self._panel_bump_tasks.pop(guild_id, None)
+        if task is not None and not task.done():
+            task.cancel()
+        self._bump_trigger_msgs.pop(guild_id, None)
+
+    def _schedule_panel_bump(self, guild_id: int) -> None:
+        """排程（或重置防抖倒數）將控制面板自動置底。"""
+        old_task = self._panel_bump_tasks.pop(guild_id, None)
+        if old_task is not None and not old_task.done():
+            old_task.cancel()
+
+        async def _delayed_bump():
+            try:
+                await asyncio.sleep(PANEL_BUMP_DELAY)
+                await self._bump_panel(guild_id)
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:
+                print(f"⚠️ [面板自動置底] 伺服器 {guild_id} 置底失敗：{exc}")
+            finally:
+                if self._panel_bump_tasks.get(guild_id) is cur_task:
+                    self._panel_bump_tasks.pop(guild_id, None)
+
+        cur_task = asyncio.create_task(_delayed_bump())
+        self._panel_bump_tasks[guild_id] = cur_task
+
+    async def _bump_panel(self, guild_id: int) -> None:
+        """執行控制面板置底：在頻道底部發送新面板並刪除舊面板，確保面板不被普通訊息刷掉。"""
+        panel_info = self.panel_messages.get(guild_id)
+        if not panel_info:
+            self._bump_trigger_msgs.pop(guild_id, None)
+            return
+
+        guild = self.bot.get_guild(guild_id)
+        if guild is None:
+            return
+        player = getattr(guild, "voice_client", None)
+        if player is None or getattr(player, "current", None) is None:
+            self._bump_trigger_msgs.pop(guild_id, None)
+            return
+
+        trigger_msgs = self._bump_trigger_msgs.get(guild_id)
+        if trigger_msgs is not None and len(trigger_msgs) == 0:
+            return
+
+        # 遵守 429 Rate Limit 退避冷卻
+        cooldown_until = self._rate_limit_until.get(guild_id, 0.0)
+        now = time.monotonic()
+        if now < cooldown_until:
+            await asyncio.sleep(cooldown_until - now)
+            panel_info = self.panel_messages.get(guild_id)
+            if not panel_info or getattr(player, "current", None) is None:
+                return
+
+        channel_id, old_message_id = panel_info
+        channel = self.bot.get_channel(channel_id)
+        if channel is None:
+            try:
+                channel = await self.bot.fetch_channel(channel_id)
+            except Exception:
+                return
+        if channel is None:
+            return
+
+        # 若頻道最後一則訊息本來就是目前的控制面板，無須重發
+        if getattr(channel, "last_message_id", None) == old_message_id:
+            self._bump_trigger_msgs.pop(guild_id, None)
+            return
+
+        view = MusicControlView(
+            self,
+            player=player,
+            notice=self._panel_notices.get(guild_id),
+        )
+        view.refresh_buttons(player)
+
+        try:
+            new_msg = await channel.send(view=view)
+            self.panel_messages[guild_id] = (channel_id, new_msg.id)
+            self._bump_trigger_msgs.pop(guild_id, None)
+            pos = getattr(player, "position", 0)
+            length = getattr(player.current, "length", 0)
+            is_stream = bool(getattr(player.current, "is_stream", False))
+            self._last_progress_str[guild_id] = build_progress_bar(pos, length, is_stream=is_stream)
+        except discord.HTTPException as exc:
+            if getattr(exc, "status", None) == 429:
+                retry_after = float(getattr(exc, "retry_after", 5.0) or 5.0)
+                self._rate_limit_until[guild_id] = time.monotonic() + retry_after
+            print(f"⚠️ [面板自動置底] 發送新面板失敗 (guild_id={guild_id})：{exc}")
+            return
+
+        # 新面板發送成功後再刪除舊面板（刪除機器人自己的訊息不需 Manage Messages 權限）
+        try:
+            old_msg = channel.get_partial_message(old_message_id)
+            await old_msg.delete()
+        except (discord.NotFound, discord.HTTPException):
+            pass
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        """監聽點歌頻道的新訊息：當普通訊息出現在控制面板下方時，啟動防抖自動置底。"""
+        if message.guild is None:
+            return
+        guild_id = message.guild.id
+        panel_info = self.panel_messages.get(guild_id)
+        if not panel_info:
+            return
+        panel_channel_id, panel_msg_id = panel_info
+        if message.channel.id != panel_channel_id or message.id == panel_msg_id:
+            return
+
+        # 忽略 ephemeral 或互動 defer「思考中」（loading）的暫時訊息
+        flags = getattr(message, "flags", None)
+        if flags is not None and (getattr(flags, "ephemeral", False) or getattr(flags, "loading", False)):
+            return
+
+        player = getattr(message.guild, "voice_client", None)
+        if player is None or getattr(player, "current", None) is None:
+            return
+
+        self._bump_trigger_msgs.setdefault(guild_id, set()).add(message.id)
+        self._schedule_panel_bump(guild_id)
+
+    @commands.Cog.listener()
+    async def on_message_delete(self, message: discord.Message):
+        """當面板下方的暫時訊息（例如指令暫時訊息）被刪除且面板重新回到最底部時，取消不必要的置底重發。"""
+        if message.guild is None:
+            return
+        guild_id = message.guild.id
+        triggers = self._bump_trigger_msgs.get(guild_id)
+        if not triggers:
+            return
+        triggers.discard(message.id)
+        if not triggers:
+            self._cancel_panel_bump(guild_id)
 
     # ---------- 第 7 週新增：Spotify 歌單批次匯入 ----------
     # 整體設計（為何這樣拆）：
@@ -2616,7 +2875,7 @@ class Music(commands.Cog):
         # 這兩種狀態都視為「有東西在佔用播放器」，新點的歌一律排到佇列尾端（FIFO）。
         # 第 6 週更新：刪除「已新增樂曲」獨立 Embed，改在 Container 底部即時顯示提示 Banner，
         # 一段時間後自動清除，並刪除 defer 訊息避免洗版。
-        if player.playing or player.paused:
+        if not self._is_player_idle(player):
             player.song_queue.append((track, interaction.user.display_name, interaction.user.id))
             position = len(player.song_queue)
             track_title = getattr(track, "title", "未知曲目")
@@ -2676,7 +2935,7 @@ class Music(commands.Cog):
         if track is None:
             return
 
-        if player.playing or player.paused:
+        if not self._is_player_idle(player):
             # 插播的重點：用 appendleft 塞到 FIFO 佇列的最前面，
             # 第 6 週更新：在 Container 底部即時顯示插播提示 Banner，一段時間後自動移除
             player.song_queue.appendleft((track, interaction.user.display_name, interaction.user.id))
@@ -2788,8 +3047,27 @@ class Music(commands.Cog):
         if track is not None:
             self._rejected_track_keys.pop(self._track_key(track), None)
         for rid, state in list(self._pending_requests.items()):
-            if getattr(state.get("view"), "track", None) is track:
+            view_track = getattr(state.get("view"), "track", None)
+            if view_track is track or (track is not None and self._is_same_track(view_track, track)):
                 self._pending_requests.pop(rid, None)
+
+    @classmethod
+    def _is_same_track(cls, track_a, track_b) -> bool:
+        """比對兩個曲目物件是否代表同一首歌。
+
+        wavelink 在收到 Lavalink 的 TrackEndEvent 時，會用 payload 重新建立一個新的 Playable 實例，
+        因此不能只靠 `is` 比較記憶體位址，需依序比對 encoded、identifier、uri 與 title。
+        """
+        if track_a is None or track_b is None:
+            return False
+        if track_a is track_b:
+            return True
+        for attr in ("encoded", "identifier", "uri", "title"):
+            val_a = getattr(track_a, attr, None)
+            val_b = getattr(track_b, attr, None)
+            if val_a is not None and val_b is not None:
+                return val_a == val_b
+        return False
 
     # ---------- 第4週新增：播放控制 ----------
     @staticmethod
@@ -2823,6 +3101,10 @@ class Music(commands.Cog):
         """
         player.current_requester = requester_name
         player.current_requester_id = requester_id
+        # 重置可能殘留的 end_intent，並記錄當前播放曲目與播放序號，防止舊事件或重複事件在關閉循環時跳過當前歌曲
+        player.end_intent = None
+        player._active_track = track
+        player._play_seq = getattr(player, "_play_seq", 0) + 1
         # 開始播放時清除這首歌之前的拒絕鎖（例如上次播放被拒、這次重新播出）
         self._rejected_track_keys.pop(self._track_key(track), None)
         await player.play(track)
