@@ -1801,7 +1801,7 @@ class Music(commands.Cog):
         「還沒 defer」跟「已經 defer」兩種情境下都能重複使用同一段邏輯。
         """
         if interaction.user.voice is None or interaction.user.voice.channel is None:
-            await interaction.followup.send("❌ 你必須先加入一個語音頻道，我才能播放音樂！", ephemeral=True)
+            await self._ephemeral_error(interaction, "❌ 你必須先加入一個語音頻道，我才能播放音樂！")
             return None
 
         user_channel = interaction.user.voice.channel
@@ -1819,7 +1819,7 @@ class Music(commands.Cog):
             # 1. 預先檢查節點可用性，避免無謂等待 30 秒逾時
             node_ready, node_err = self._is_any_node_connected()
             if not node_ready:
-                await interaction.followup.send(f"❌ {node_err}", ephemeral=True)
+                await self._ephemeral_error(interaction, f"❌ {node_err}")
                 asyncio.create_task(self._reconnect_lavalink_if_needed())
                 return None
 
@@ -1846,11 +1846,11 @@ class Music(commands.Cog):
                     err_msg = "❌ 加入語音頻道逾時（Lavalink 音訊伺服器反應逾時或連線重設），已自動退出重置狀態，請稍後再試！"
                 else:
                     err_msg = f"❌ 加入語音頻道時發生錯誤：{e}（已自動退出重置狀態）"
-                await interaction.followup.send(err_msg, ephemeral=True)
+                await self._ephemeral_error(interaction, err_msg)
                 return None
         elif player.channel.id != user_channel.id:
-            await interaction.followup.send(
-                f"❌ 你必須跟我在同一個語音頻道（{player.channel.mention}）才能點歌！", ephemeral=True
+            await self._ephemeral_error(
+                interaction, f"❌ 你必須跟我在同一個語音頻道（{player.channel.mention}）才能點歌！"
             )
             return None
 
@@ -1980,16 +1980,54 @@ class Music(commands.Cog):
         await voice_client.disconnect()
         await interaction.response.send_message(f"👋 已離開 {channel_mention}。", ephemeral=True)
 
+    async def _fetch_tracks_with_fallback(self, query: str) -> Any:
+        """核心搜尋演算法：支援 URL、自帶前綴，並對純關鍵字進行多來源智慧 Fallback。
+
+        - 修正問題：wavelink 3.x 預設使用 ytmsearch:（YouTube Music），但多數公開節點對 ytmsearch
+          回傳空結果（empty）或錯誤，導致一般關鍵字搜尋完全無法找到歌曲。
+        - 解決方案：純關鍵字優先使用「ytsearch:」（標準 YouTube 搜尋），並在無結果或失敗時
+          依序自動 fallback 到「scsearch:」（SoundCloud）與「ytmsearch:」（YouTube Music）。
+        - 針對 URL 與自帶前綴（例如 ytsearch:、scsearch: 等）直接傳送，不重疊添加前綴。
+        """
+        clean_query = query.strip().strip("<>")
+        is_url = clean_query.startswith("http://") or clean_query.startswith("https://")
+        has_prefix = any(
+            clean_query.lower().startswith(p)
+            for p in ("ytsearch:", "ytmsearch:", "scsearch:", "spsearch:", "amsearch:")
+        )
+
+        if is_url or has_prefix:
+            return await wavelink.Playable.search(clean_query)
+
+        sources = ["ytsearch", "scsearch", "ytmsearch"]
+        last_error = None
+        for src in sources:
+            try:
+                try:
+                    tracks = await wavelink.Playable.search(clean_query, source=src)
+                except TypeError:
+                    # 相容性保護：若環境或測試 mock 未支援 source 參數，回退為單參數呼叫
+                    tracks = await wavelink.Playable.search(clean_query)
+                if tracks:
+                    return tracks
+            except Exception as e:
+                last_error = e
+                print(f">>> 來源 [{src}] 搜尋「{clean_query}」失敗，嘗試下一個來源：{e}")
+
+        if last_error is not None:
+            raise last_error
+        return None
+
     async def _search_one_track(
         self, interaction: discord.Interaction, query: str
     ) -> "wavelink_module.Playable | None":
         """共用的搜尋邏輯，/play 與 /play_next（插播）都會用到。
 
-        回傳 None 代表搜尋失敗或找不到結果，錯誤訊息已經透過 followup 送出，
+        回傳 None 代表搜尋失敗或找不到結果，錯誤訊息已經透過 _ephemeral_error 送出私人訊息，
         呼叫端只要直接 return 即可，不用重複處理錯誤訊息。
         """
         try:
-            tracks = await wavelink.Playable.search(query)
+            tracks = await self._fetch_tracks_with_fallback(query)
         except Exception as e:
             # wavelink 搜尋失敗常見原因：來源網站暫時掛掉、網址格式不支援，
             # 或是 YouTube 端觸發了反爬蟲機制（poToken / OAuth2 相關）。
@@ -1997,23 +2035,23 @@ class Music(commands.Cog):
             # 避免整個指令直接噴未捕捉例外。
             print(f">>> wavelink 搜尋失敗：{e}")
             await self.bot.notify_owner_error(e, interaction, extra_info=f"音樂搜尋失敗 query={query}")
-            await interaction.followup.send(
+            await self._ephemeral_error(
+                interaction,
                 "❌ 搜尋音樂時發生錯誤，可能是來源網站暫時無法連線，或觸發了反爬蟲封鎖，已回報開發者。",
-                ephemeral=True,
             )
             return None
 
         if not tracks:
-            await interaction.followup.send(
+            await self._ephemeral_error(
+                interaction,
                 f"😕 找不到「{query}」的搜尋結果，可能是關鍵字沒有對應結果、影片為地區限定，或網址無效，換個關鍵字試試看。",
-                ephemeral=True,
             )
             return None
 
         # wavelink.Playable.search 對於歌單網址會回傳 Playlist，單曲/關鍵字則回傳 list[Playable]。
         # 本週先只取第一首，完整歌單匯入排到第7週（Spotify 批次解析）再實作。
         if isinstance(tracks, wavelink.Playlist):
-            return tracks.tracks[0]
+            return tracks.tracks[0] if tracks.tracks else None
         return tracks[0]
 
     def _build_track_embed(
@@ -2304,7 +2342,7 @@ class Music(commands.Cog):
         async with sem:
             try:
                 found = await asyncio.wait_for(
-                    wavelink.Playable.search(st.search_query()), timeout=IMPORT_SEARCH_TIMEOUT
+                    self._fetch_tracks_with_fallback(st.search_query()), timeout=IMPORT_SEARCH_TIMEOUT
                 )
             except asyncio.CancelledError:
                 raise
@@ -2537,7 +2575,7 @@ class Music(commands.Cog):
             await self.bot.notify_owner_error(
                 e, interaction, extra_info=f"/play 播放失敗 track={getattr(track, 'title', '?')}"
             )
-            await interaction.followup.send("❌ 播放音樂時發生錯誤，已回報開發者。", ephemeral=True)
+            await self._ephemeral_error(interaction, "❌ 播放音樂時發生錯誤，已回報開發者。")
             return
 
         # 刪除 defer 訊息，避免洗版與刷掉控制面板（面板由 on_wavelink_track_start 自動產生或更新）
@@ -2598,7 +2636,7 @@ class Music(commands.Cog):
             await self.bot.notify_owner_error(
                 e, interaction, extra_info=f"/play_next 播放失敗 track={getattr(track, 'title', '?')}"
             )
-            await interaction.followup.send("❌ 播放音樂時發生錯誤，已回報開發者。", ephemeral=True)
+            await self._ephemeral_error(interaction, "❌ 播放音樂時發生錯誤，已回報開發者。")
             return
 
         try:
