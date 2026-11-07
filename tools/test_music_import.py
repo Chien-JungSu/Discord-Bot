@@ -373,10 +373,18 @@ async def test_loop_button_and_no_autoskip():
     check(player.loop_mode == "off" and view.btn_loop.label == "循環：關閉", "點擊第 3 次切換回『循環：關閉』")
     check(player.current is song_a and len(player.played) == 1, "關閉循環狀態時不會跳過當前播放中的 SongA")
 
-    # 情境 A：SongA 自然結束 -> 切換到 SongB；若緊接著收到同一次播放重複派發的 TrackEndEvent，不能把剛開始的 SongB 跳過
-    end_a = SimpleNamespace(player=player, reason="finished", track=fake_track("SongA", identifier="id_a", encoded="enc_a"))
+    # 情境 A：SongA 自然結束（Lavalink v4 會在 TrackEndEvent 的 encoded 寫入結尾播放位置，導致 encoded 與開始時不同）
+    # 必須能透過 identifier / uri / title 識別為同一首歌並自動播放下一首 SongB
+    end_a = SimpleNamespace(
+        player=player,
+        reason="finished",
+        track=fake_track("SongA", identifier="id_a", encoded="enc_a_finished_pos_200000"),
+    )
     await cog.on_wavelink_track_end(end_a)
-    check(player.current is song_b and len(player.song_queue) == 1, "SongA 結束後正常換播 SongB")
+    check(
+        player.current is song_b and len(player.song_queue) == 1,
+        "SongA 結束後（即使 Lavalink 改變 encoded 內含的播放進度）仍正常自動換播下一首 SongB",
+    )
 
     # 模擬重複抵達的 SongA TrackEndEvent（包含模擬 wavelink/websocket.py 將 _current 清成 None）
     player._current = None

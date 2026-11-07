@@ -1584,6 +1584,9 @@ class Music(commands.Cog):
         player = getattr(payload, "player", None)
         if player is None or getattr(player, "guild", None) is None:
             return
+        started_track = getattr(payload, "track", None)
+        if started_track is not None:
+            player._started_track = started_track
         await self._sync_panel(player.guild.id, player)
 
     @commands.Cog.listener()
@@ -1694,16 +1697,20 @@ class Music(commands.Cog):
 
         ended_track = getattr(payload, "track", None)
         active_track = getattr(player, "_active_track", None)
+        started_track = getattr(player, "_started_track", None)
 
-        # 防護 2：若事件夾帶的曲目與目前實際在播的 _active_track 不同，代表這是上一首歌延遲送達的舊事件；
-        # 還原被 wavelink/websocket.py 誤清掉的 _current 並忽略此事件，防止正在播放的歌曲被跳過。
-        if active_track is not None and ended_track is not None and not self._is_same_track(ended_track, active_track):
-            if getattr(player, "current", None) is None:
-                try:
-                    player._current = active_track
-                except Exception:
-                    pass
-            return
+        # 防護 2：若事件夾帶的曲目與目前實際在播的 _active_track（及 _started_track）皆不同，
+        # 代表這是上一首歌延遲送達的舊事件；還原被 wavelink/websocket.py 誤清掉的 _current 並忽略此事件。
+        if active_track is not None and ended_track is not None:
+            matches_active = self._is_same_track(ended_track, active_track)
+            matches_started = started_track is not None and self._is_same_track(ended_track, started_track)
+            if not matches_active and not matches_started:
+                if getattr(player, "current", None) is None:
+                    try:
+                        player._current = active_track
+                    except Exception:
+                        pass
+                return
 
         # 讀出並立刻消耗旗標，避免影響下一首
         intent = getattr(player, "end_intent", None)
@@ -1732,6 +1739,7 @@ class Music(commands.Cog):
             player._last_ended_seq = play_seq
 
         player._active_track = None
+        player._started_track = None
 
         song_queue: deque = getattr(player, "song_queue", None)
         if song_queue is None:
@@ -1743,8 +1751,10 @@ class Music(commands.Cog):
         loop_mode = getattr(player, "loop_mode", "off")
         requester_name = getattr(player, "current_requester", None) or "未知"
         requester_id = getattr(player, "current_requester_id", None)
+        replay_track = active_track if active_track is not None else ended_track
         if reason in ("loadfailed", "load_failed"):
             ended_track = None
+            replay_track = None
 
         # 曲目結束（換歌／被跳過／停止）：解除這首歌的操作請求鎖與拒絕鎖
         self._cleanup_control_state(ended_track)
@@ -1756,12 +1766,12 @@ class Music(commands.Cog):
             return
 
         next_item = None
-        if ended_track is not None and loop_mode == "single" and intent != "skip":
-            next_item = (ended_track, requester_name, requester_id)
+        if replay_track is not None and loop_mode == "single" and intent != "skip":
+            next_item = (replay_track, requester_name, requester_id)
         else:
-            if ended_track is not None and loop_mode == "all":
-                # 佇列循環：剛結束（或被跳過）的歌排到佇列最後面
-                song_queue.append((ended_track, requester_name, requester_id))
+            if replay_track is not None and loop_mode == "all":
+                # 佇列循環：剛結束（或被跳過）的歌排到佇列最後面（使用起播時的 replay_track 確保 position=0）
+                song_queue.append((replay_track, requester_name, requester_id))
             if song_queue:
                 next_item = song_queue.popleft()
 
@@ -3180,19 +3190,24 @@ class Music(commands.Cog):
     def _is_same_track(cls, track_a, track_b) -> bool:
         """比對兩個曲目物件是否代表同一首歌。
 
-        wavelink 在收到 Lavalink 的 TrackEndEvent 時，會用 payload 重新建立一個新的 Playable 實例，
-        因此不能只靠 `is` 比較記憶體位址，需依序比對 encoded、identifier、uri 與 title。
+        關鍵細節：Lavalink 在 TrackEndEvent 回傳的 track.encoded 二進位資料尾端會寫入最終播放位置（position），
+        因此同一首歌在播完時的 encoded 字串必然與起播時（position=0）的 encoded 不同！
+        若直接拿 encoded 做第一順位 return，會把正常播完的同一首歌誤判為不同歌曲而中斷自動連播。
+        正確做法：只要 identifier、uri、title 或 encoded 任一有效欄位相同，即判定為同一首歌。
         """
         if track_a is None or track_b is None:
             return False
         if track_a is track_b:
             return True
-        for attr in ("encoded", "identifier", "uri", "title"):
+        has_comparable = False
+        for attr in ("identifier", "uri", "title", "encoded"):
             val_a = getattr(track_a, attr, None)
             val_b = getattr(track_b, attr, None)
             if val_a is not None and val_b is not None:
-                return val_a == val_b
-        return False
+                has_comparable = True
+                if val_a == val_b:
+                    return True
+        return not has_comparable
 
     # ---------- 第4週新增：播放控制 ----------
     @staticmethod
