@@ -421,32 +421,66 @@ async def test_sticky_panel_auto_bump():
     old_delay = music_mod.PANEL_BUMP_DELAY
     music_mod.PANEL_BUMP_DELAY = 0.05
     try:
+        # 0. 機器人自身訊息或面板訊息絕不能觸發置底任務
+        bot.user = SimpleNamespace(id=999)
+        bot_msg = SimpleNamespace(
+            id=250,
+            guild=guild,
+            channel=SimpleNamespace(id=10),
+            author=SimpleNamespace(id=999, bot=True),
+            flags=SimpleNamespace(ephemeral=False, loading=False),
+        )
+        await cog.on_message(bot_msg)
+        check(GID not in cog._panel_bump_tasks, "機器人自身發送的訊息不會誤觸置底任務")
+
         # 1. 暫時訊息發出後立刻被刪除（如指令 defer 思考訊息）-> 取消置底，不重發面板
         temp_msg = SimpleNamespace(
             id=300,
             guild=guild,
             channel=SimpleNamespace(id=10),
+            author=SimpleNamespace(id=123, bot=False),
             flags=SimpleNamespace(ephemeral=False, loading=False),
         )
         await cog.on_message(temp_msg)
-        check(GID in cog._panel_bump_tasks, "收到同頻道訊息後建立防抖置底任務")
+        check(GID in cog._panel_bump_tasks, "收到同頻道普通訊息後建立防抖置底任務")
         await cog.on_message_delete(temp_msg)
         check(GID not in cog._panel_bump_tasks, "暫時訊息被刪除後自動取消置底任務，避免無謂重發")
         await asyncio.sleep(0.08)
         check(channel.send.await_count == 0, "暫時訊息刪除後不會觸發面板重發")
 
-        # 2. 一般聊天訊息保留在頻道上 -> 防抖結束後自動重發新面板至底部並刪除舊面板
+        # 2. 一般聊天訊息保留在頻道上，且模擬 Discord Gateway 在 channel.send 回傳前先觸發 on_message ->
+        #    絕不能中斷 _bump_panel、必須刪除舊面板、且不能無限重發
+        async def send_simulating_gateway_race(**kwargs):
+            # 模擬新面板訊息在 send() 尚未返回時先由 Gateway 推播 on_message
+            gateway_panel_msg = SimpleNamespace(
+                id=999,
+                guild=guild,
+                channel=SimpleNamespace(id=10),
+                author=SimpleNamespace(id=999, bot=True),
+                components=[SimpleNamespace(custom_id="music:toggle_pause")],
+                flags=SimpleNamespace(ephemeral=False, loading=False),
+            )
+            await cog.on_message(gateway_panel_msg)
+            return new_panel_msg
+
+        channel.send = AsyncMock(side_effect=send_simulating_gateway_race)
+
         chat_msg = SimpleNamespace(
             id=500,
             guild=guild,
             channel=SimpleNamespace(id=10),
+            author=SimpleNamespace(id=123, bot=False),
             flags=SimpleNamespace(ephemeral=False, loading=False),
         )
         await cog.on_message(chat_msg)
         await asyncio.sleep(0.08)
-        check(channel.send.await_count == 1, "普通訊息刷過面板後，於頻道底部重發新面板")
+        check(channel.send.await_count == 1, "普通訊息刷過面板後，於頻道底部重發新面板（僅發送 1 次）")
         check(cog.panel_messages.get(GID) == (10, 999), "panel_messages 更新為新面板訊息 ID")
         check(old_panel_msg.delete.await_count == 1, "舊面板訊息被自動刪除")
+
+        # 再等一輪防抖時間，確認不會無限重發
+        await asyncio.sleep(0.08)
+        check(channel.send.await_count == 1 and GID not in cog._panel_bump_tasks, "置底完成後不會再次觸發或無限重發面板")
     finally:
         music_mod.PANEL_BUMP_DELAY = old_delay
 

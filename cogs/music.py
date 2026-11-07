@@ -1120,9 +1120,19 @@ class Music(commands.Cog):
         self._panel_notice_tasks: dict[int, asyncio.Task] = {}
         # 控制面板防洗版自動置底（Sticky Panel）防抖計時任務與觸發訊息追蹤：
         # _panel_bump_tasks: key=guild_id, value=等待防抖結束後將面板移至頻道底部的 Task
-        # _bump_trigger_msgs: key=guild_id, value=面板發出後同頻道新增的訊息 ID 集合（若暫時訊息全數被刪除則取消置底）
+        # _bump_due_at: key=guild_id, value=防抖倒數預計到期的 monotonic 時間戳（新訊息抵達時直接順延時間戳，不粗暴 cancel 執行中任務）
+        # _bump_trigger_msgs: key=guild_id, value=面板發出後同頻道新增的普通訊息 ID 集合（若暫時訊息全數被刪除則取消置底）
+        # _bumping_guilds: 正在執行 _bump_panel（發送新面板與刪除舊面板）的伺服器 ID 集合，防止中途被 cancel 導致舊面板漏刪
+        # _sending_panel_guilds: 正在執行 channel.send 發送面板的伺服器 ID 集合，防止 Gateway 先收到 on_message 而誤觸置底
+        # _known_panel_msg_ids: 記錄機器人發送過的面板訊息 ID，確保面板訊息本身絕不會觸發置底
+        # _panel_locks: key=guild_id, value=asyncio.Lock，確保同一伺服器的面板發送、編輯與置底不會並發衝突產生雙面板
         self._panel_bump_tasks: dict[int, asyncio.Task] = {}
+        self._bump_due_at: dict[int, float] = {}
         self._bump_trigger_msgs: dict[int, set[int]] = {}
+        self._bumping_guilds: set[int] = set()
+        self._sending_panel_guilds: set[int] = set()
+        self._known_panel_msg_ids: deque[int] = deque(maxlen=200)
+        self._panel_locks: dict[int, asyncio.Lock] = {}
         # 第 7 週新增：Spotify 服務（整個 Cog 共用一個 aiohttp session）與各伺服器的背景匯入任務。
         # 任務必須存參照：asyncio 只對 Task 保留弱引用，沒人持有就可能被垃圾回收而中途消失。
         # key: guild_id，每個伺服器同時最多一個匯入任務；任務結束時會由 done callback 自行移除。
@@ -1165,7 +1175,12 @@ class Music(commands.Cog):
             if not task.done():
                 task.cancel()
         self._panel_bump_tasks.clear()
+        self._bump_due_at.clear()
         self._bump_trigger_msgs.clear()
+        self._bumping_guilds.clear()
+        self._sending_panel_guilds.clear()
+        self._known_panel_msg_ids.clear()
+        self._panel_locks.clear()
 
         if self.node_health_check.is_running():
             self.node_health_check.cancel()
@@ -2339,82 +2354,88 @@ class Music(commands.Cog):
         if guild is None:
             return
 
-        if player is _PANEL_PLAYER_UNSET:
-            player = guild.voice_client
+        async with self._get_panel_lock(guild_id):
+            if player is _PANEL_PLAYER_UNSET:
+                player = guild.voice_client
 
-        # 檢查是否有切歌等操作掛起的 deferred interaction
-        if interaction is None and guild_id in self._pending_panel_interaction:
-            interaction = self._pending_panel_interaction.pop(guild_id, None)
+            # 檢查是否有切歌等操作掛起的 deferred interaction
+            if interaction is None and guild_id in self._pending_panel_interaction:
+                interaction = self._pending_panel_interaction.pop(guild_id, None)
 
-        view = MusicControlView(
-            self,
-            player=player,
-            notice=notice_override if notice_override is not None else self._panel_notices.get(guild_id),
-        )
-        view.refresh_buttons(player)
+            view = MusicControlView(
+                self,
+                player=player,
+                notice=notice_override if notice_override is not None else self._panel_notices.get(guild_id),
+            )
+            view.refresh_buttons(player)
 
-        # 優先以 interaction 回應
-        if interaction is not None:
-            try:
-                if not interaction.response.is_done():
-                    await interaction.response.edit_message(content=None, embed=None, view=view)
-                else:
-                    await interaction.edit_original_response(content=None, embed=None, view=view)
-                if player is not None and getattr(player, "current", None) is not None:
-                    pos = getattr(player, "position", 0)
-                    length = getattr(player.current, "length", 0)
-                    is_stream = bool(getattr(player.current, "is_stream", False))
-                    self._last_progress_str[guild_id] = build_progress_bar(pos, length, is_stream=is_stream)
-                # final 模式：只有「被按的那則就是記錄中的面板」才算處理完，否則繼續編輯記錄中的面板
-                tracked = self.panel_messages.get(guild_id)
-                msg_id = getattr(getattr(interaction, "message", None), "id", None)
-                if not final or tracked is None or tracked[1] == msg_id:
-                    return
-            except (discord.NotFound, discord.HTTPException) as exc:
-                print(f">>> 透過 interaction 更新面板失敗，改走 fetch_message：{exc}")
-
-        # 無 interaction 時，透過記錄的 channel_id 與 message_id 編輯既有訊息
-        panel_info = self.panel_messages.get(guild_id)
-        target_channel = getattr(player, "home_channel", None) if player else None
-
-        if panel_info:
-            channel_id, message_id = panel_info
-            channel = self.bot.get_channel(channel_id)
-            if channel is None:
+            # 優先以 interaction 回應
+            if interaction is not None:
                 try:
-                    channel = await self.bot.fetch_channel(channel_id)
-                except Exception:
-                    channel = None
-
-            if channel is not None:
-                try:
-                    msg = await channel.fetch_message(message_id)
-                    await msg.edit(content=None, embed=None, view=view)
+                    if not interaction.response.is_done():
+                        await interaction.response.edit_message(content=None, embed=None, view=view)
+                    else:
+                        await interaction.edit_original_response(content=None, embed=None, view=view)
                     if player is not None and getattr(player, "current", None) is not None:
                         pos = getattr(player, "position", 0)
                         length = getattr(player.current, "length", 0)
                         is_stream = bool(getattr(player.current, "is_stream", False))
                         self._last_progress_str[guild_id] = build_progress_bar(pos, length, is_stream=is_stream)
-                    return
-                except discord.NotFound:
-                    print(f"ℹ️ 控制面板訊息已被刪除 (message_id={message_id})，將重新發送新面板。")
-                    self.panel_messages.pop(guild_id, None)
-                    self._last_progress_str.pop(guild_id, None)
-                except discord.HTTPException as exc:
-                    print(f"⚠️ 編輯控制面板訊息失敗：{exc}")
+                    # final 模式：只有「被按的那則就是記錄中的面板」才算處理完，否則繼續編輯記錄中的面板
+                    tracked = self.panel_messages.get(guild_id)
+                    msg_id = getattr(getattr(interaction, "message", None), "id", None)
+                    if not final or tracked is None or tracked[1] == msg_id:
+                        return
+                except (discord.NotFound, discord.HTTPException) as exc:
+                    print(f">>> 透過 interaction 更新面板失敗，改走 fetch_message：{exc}")
 
-        # 既有訊息不存在或已遭刪除時，若仍在播放中，於 target_channel 發送新面板
-        if target_channel is not None and player is not None and getattr(player, "current", None) is not None:
-            try:
-                new_msg = await target_channel.send(view=view)
-                self.panel_messages[guild_id] = (target_channel.id, new_msg.id)
-                self._cancel_panel_bump(guild_id)
-                pos = getattr(player, "position", 0)
-                length = getattr(player.current, "length", 0)
-                is_stream = bool(getattr(player.current, "is_stream", False))
-                self._last_progress_str[guild_id] = build_progress_bar(pos, length, is_stream=is_stream)
-            except discord.HTTPException as exc:
-                print(f"❌ 發送新控制面板訊息失敗：{exc}")
+            # 無 interaction 時，透過記錄的 channel_id 與 message_id 編輯既有訊息
+            panel_info = self.panel_messages.get(guild_id)
+            target_channel = getattr(player, "home_channel", None) if player else None
+
+            if panel_info:
+                channel_id, message_id = panel_info
+                channel = self.bot.get_channel(channel_id)
+                if channel is None:
+                    try:
+                        channel = await self.bot.fetch_channel(channel_id)
+                    except Exception:
+                        channel = None
+
+                if channel is not None:
+                    try:
+                        msg = await channel.fetch_message(message_id)
+                        await msg.edit(content=None, embed=None, view=view)
+                        if player is not None and getattr(player, "current", None) is not None:
+                            pos = getattr(player, "position", 0)
+                            length = getattr(player.current, "length", 0)
+                            is_stream = bool(getattr(player.current, "is_stream", False))
+                            self._last_progress_str[guild_id] = build_progress_bar(pos, length, is_stream=is_stream)
+                        return
+                    except discord.NotFound:
+                        print(f"ℹ️ 控制面板訊息已被刪除 (message_id={message_id})，將重新發送新面板。")
+                        self.panel_messages.pop(guild_id, None)
+                        self._last_progress_str.pop(guild_id, None)
+                    except discord.HTTPException as exc:
+                        print(f"⚠️ 編輯控制面板訊息失敗：{exc}")
+                        return
+
+            # 既有訊息不存在或已遭刪除時，若仍在播放中，於 target_channel 發送新面板
+            if target_channel is not None and player is not None and getattr(player, "current", None) is not None:
+                self._sending_panel_guilds.add(guild_id)
+                try:
+                    new_msg = await target_channel.send(view=view)
+                    self._known_panel_msg_ids.append(new_msg.id)
+                    self.panel_messages[guild_id] = (target_channel.id, new_msg.id)
+                    self._cancel_panel_bump(guild_id)
+                    pos = getattr(player, "position", 0)
+                    length = getattr(player.current, "length", 0)
+                    is_stream = bool(getattr(player.current, "is_stream", False))
+                    self._last_progress_str[guild_id] = build_progress_bar(pos, length, is_stream=is_stream)
+                except discord.HTTPException as exc:
+                    print(f"❌ 發送新控制面板訊息失敗：{exc}")
+                finally:
+                    self._sending_panel_guilds.discard(guild_id)
 
     async def _update_panel_ended(
         self,
@@ -2457,27 +2478,98 @@ class Music(commands.Cog):
     # 設計理由（以可行性為主要考量）：
     # 1. 權限零門檻：刪除他人訊息需要 Manage Messages，建立討論串需要 Create Public Threads + Manage Messages；
     #    而「刪除機器人自己的舊面板訊息 + 在頻道最底部重發新面板」只需要最基本的 Send Messages 權限，在任何頻道皆 100% 可行。
-    # 2. 防抖節流（Debounce）：多人連續聊天時不會每則訊息都重發面板，而是重置 PANEL_BUMP_DELAY（預設 3 秒）倒數，
+    # 2. 防抖節流（Debounce）：多人連續聊天時不會每則訊息都重發面板，而是順延 _bump_due_at（預設 3 秒），
     #    等頻道安靜下來後才一次移到底部，保護 Discord API Rate Limit 與 512MB RAM 環境。
-    # 3. 暫時訊息智慧過濾：記錄面板之後出現的訊息 ID（_bump_trigger_msgs）；若該訊息屬於指令 defer 思考中提示並在完成後被刪除
-    #    （觸發 on_message_delete），集合清空後自動取消置底任務，避免無謂重發面板。
+    # 3. 避免自我觸發導致無限重發與漏刪舊面板：
+    #    - Discord Gateway 的 MESSAGE_CREATE 事件往往比 REST API `await channel.send()` 的回傳更早抵達；
+    #      若不加防護，新面板的 on_message 會在 panel_messages 更新前觸發，並把正在執行 _bump_panel 的任務 cancel 掉，
+    #      造成 panel_messages 沒更新、舊面板沒刪除、且每 3 秒無限重發新面板。
+    #    - 因此：
+    #      (a) on_message 嚴格排除機器人自身訊息、面板組件訊息與 _sending_panel_guilds 期間的訊息；
+    #      (b) _schedule_panel_bump 改用時間戳順延（_bump_due_at），絕不 cancel 已經進入 _bumping_guilds 的執行中任務；
+    #      (c) 以 per-guild Lock（_panel_locks）序列化面板發送與置底，並在刪除舊面板時提供 partial_message 與 fetch_message 雙重保底。
+    def _get_panel_lock(self, guild_id: int) -> asyncio.Lock:
+        """取得指定伺服器的面板操作鎖，防止並發 _sync_panel 與 _bump_panel 同時送出多個面板。"""
+        lock = self._panel_locks.get(guild_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._panel_locks[guild_id] = lock
+        return lock
+
+    def _is_panel_message(self, message: discord.Message) -> bool:
+        """檢查訊息是否為音樂控制面板（透過已知 ID 或內部按鈕 custom_id 辨識）。"""
+        msg_id = getattr(message, "id", None)
+        if msg_id is not None and msg_id in self._known_panel_msg_ids:
+            return True
+        components = getattr(message, "components", None) or []
+        stack = list(components)
+        while stack:
+            comp = stack.pop()
+            cid = getattr(comp, "custom_id", None)
+            if isinstance(cid, str) and cid.startswith("music:"):
+                return True
+            children = getattr(comp, "children", None)
+            if children:
+                stack.extend(children)
+        return False
+
+    async def _delete_panel_message(self, channel: Any, message_id: int) -> None:
+        """安全刪除舊的控制面板訊息：優先使用 get_partial_message 直接發送 DELETE，失敗時退回 fetch_message。"""
+        if hasattr(channel, "get_partial_message"):
+            try:
+                old_msg = channel.get_partial_message(message_id)
+                await old_msg.delete()
+                return
+            except discord.NotFound:
+                return
+            except Exception as exc:
+                print(f"⚠️ [面板自動置底] partial_message.delete 失敗，改試 fetch_message (id={message_id})：{exc}")
+
+        if hasattr(channel, "fetch_message"):
+            try:
+                old_msg = await channel.fetch_message(message_id)
+                await old_msg.delete()
+            except (discord.NotFound, discord.HTTPException) as exc:
+                if not isinstance(exc, discord.NotFound):
+                    print(f"⚠️ [面板自動置底] fetch_message.delete 失敗 (id={message_id})：{exc}")
+            except Exception as exc:
+                print(f"⚠️ [面板自動置底] 刪除舊面板異常 (id={message_id})：{exc}")
+
     def _cancel_panel_bump(self, guild_id: int) -> None:
-        """取消指定伺服器的面板自動置底任務並清空觸發訊息紀錄。"""
+        """取消指定伺服器的面板自動置底等待任務並清空觸發訊息紀錄。
+        若該伺服器已進入 _bumping_guilds（正在發送新面板與刪除舊面板），不中斷該次執行，避免舊面板漏刪。
+        """
+        self._bump_trigger_msgs.pop(guild_id, None)
+        self._bump_due_at.pop(guild_id, None)
+        if guild_id in self._bumping_guilds:
+            return
         task = self._panel_bump_tasks.pop(guild_id, None)
         if task is not None and not task.done():
             task.cancel()
-        self._bump_trigger_msgs.pop(guild_id, None)
 
     def _schedule_panel_bump(self, guild_id: int) -> None:
-        """排程（或重置防抖倒數）將控制面板自動置底。"""
-        old_task = self._panel_bump_tasks.pop(guild_id, None)
-        if old_task is not None and not old_task.done():
-            old_task.cancel()
+        """排程（或順延防抖到期時間）將控制面板自動置底。"""
+        self._bump_due_at[guild_id] = time.monotonic() + PANEL_BUMP_DELAY
+        existing = self._panel_bump_tasks.get(guild_id)
+        if existing is not None and not existing.done():
+            return
 
         async def _delayed_bump():
             try:
-                await asyncio.sleep(PANEL_BUMP_DELAY)
-                await self._bump_panel(guild_id)
+                while True:
+                    due = self._bump_due_at.get(guild_id, 0.0)
+                    remaining = due - time.monotonic()
+                    if remaining > 0:
+                        await asyncio.sleep(remaining)
+                        continue
+                    break
+                if not self._bump_trigger_msgs.get(guild_id):
+                    return
+                self._bumping_guilds.add(guild_id)
+                try:
+                    await self._bump_panel(guild_id)
+                finally:
+                    self._bumping_guilds.discard(guild_id)
             except asyncio.CancelledError:
                 pass
             except Exception as exc:
@@ -2485,81 +2577,101 @@ class Music(commands.Cog):
             finally:
                 if self._panel_bump_tasks.get(guild_id) is cur_task:
                     self._panel_bump_tasks.pop(guild_id, None)
+                # 若在 _bump_panel 執行期間又有新的普通訊息進來，補排下一輪防抖
+                if self._bump_trigger_msgs.get(guild_id):
+                    self._schedule_panel_bump(guild_id)
 
         cur_task = asyncio.create_task(_delayed_bump())
         self._panel_bump_tasks[guild_id] = cur_task
 
     async def _bump_panel(self, guild_id: int) -> None:
         """執行控制面板置底：在頻道底部發送新面板並刪除舊面板，確保面板不被普通訊息刷掉。"""
-        panel_info = self.panel_messages.get(guild_id)
-        if not panel_info:
-            self._bump_trigger_msgs.pop(guild_id, None)
-            return
-
-        guild = self.bot.get_guild(guild_id)
-        if guild is None:
-            return
-        player = getattr(guild, "voice_client", None)
-        if player is None or getattr(player, "current", None) is None:
-            self._bump_trigger_msgs.pop(guild_id, None)
-            return
-
-        trigger_msgs = self._bump_trigger_msgs.get(guild_id)
-        if trigger_msgs is not None and len(trigger_msgs) == 0:
-            return
-
-        # 遵守 429 Rate Limit 退避冷卻
-        cooldown_until = self._rate_limit_until.get(guild_id, 0.0)
-        now = time.monotonic()
-        if now < cooldown_until:
-            await asyncio.sleep(cooldown_until - now)
+        async with self._get_panel_lock(guild_id):
             panel_info = self.panel_messages.get(guild_id)
-            if not panel_info or getattr(player, "current", None) is None:
+            if not panel_info:
+                self._bump_trigger_msgs.pop(guild_id, None)
+                self._bump_due_at.pop(guild_id, None)
                 return
 
-        channel_id, old_message_id = panel_info
-        channel = self.bot.get_channel(channel_id)
-        if channel is None:
+            guild = self.bot.get_guild(guild_id)
+            if guild is None:
+                return
+            player = getattr(guild, "voice_client", None)
+            if player is None or getattr(player, "current", None) is None:
+                self._bump_trigger_msgs.pop(guild_id, None)
+                self._bump_due_at.pop(guild_id, None)
+                return
+
+            channel_id, old_message_id = panel_info
+            trigger_msgs = self._bump_trigger_msgs.get(guild_id)
+            if trigger_msgs is not None:
+                trigger_msgs = {mid for mid in trigger_msgs if mid > old_message_id}
+            if not trigger_msgs:
+                self._bump_trigger_msgs.pop(guild_id, None)
+                self._bump_due_at.pop(guild_id, None)
+                return
+
+            # 遵守 429 Rate Limit 退避冷卻
+            cooldown_until = self._rate_limit_until.get(guild_id, 0.0)
+            now = time.monotonic()
+            if now < cooldown_until:
+                await asyncio.sleep(cooldown_until - now)
+                panel_info = self.panel_messages.get(guild_id)
+                if not panel_info or getattr(player, "current", None) is None:
+                    return
+                channel_id, old_message_id = panel_info
+
+            channel = self.bot.get_channel(channel_id)
+            if channel is None:
+                try:
+                    channel = await self.bot.fetch_channel(channel_id)
+                except Exception:
+                    return
+            if channel is None:
+                return
+
+            # 若頻道最後一則訊息本來就是目前的控制面板，無須重發
+            if getattr(channel, "last_message_id", None) == old_message_id:
+                self._bump_trigger_msgs.pop(guild_id, None)
+                self._bump_due_at.pop(guild_id, None)
+                return
+
+            view = MusicControlView(
+                self,
+                player=player,
+                notice=self._panel_notices.get(guild_id),
+            )
+            view.refresh_buttons(player)
+
+            self._sending_panel_guilds.add(guild_id)
             try:
-                channel = await self.bot.fetch_channel(channel_id)
-            except Exception:
+                new_msg = await channel.send(view=view)
+                self._known_panel_msg_ids.append(new_msg.id)
+                self.panel_messages[guild_id] = (channel_id, new_msg.id)
+                remaining = {
+                    mid for mid in (self._bump_trigger_msgs.get(guild_id) or set()) if mid > new_msg.id
+                }
+                if remaining:
+                    self._bump_trigger_msgs[guild_id] = remaining
+                else:
+                    self._bump_trigger_msgs.pop(guild_id, None)
+                    self._bump_due_at.pop(guild_id, None)
+                pos = getattr(player, "position", 0)
+                length = getattr(player.current, "length", 0)
+                is_stream = bool(getattr(player.current, "is_stream", False))
+                self._last_progress_str[guild_id] = build_progress_bar(pos, length, is_stream=is_stream)
+            except discord.HTTPException as exc:
+                if getattr(exc, "status", None) == 429:
+                    retry_after = float(getattr(exc, "retry_after", 5.0) or 5.0)
+                    self._rate_limit_until[guild_id] = time.monotonic() + retry_after
+                print(f"⚠️ [面板自動置底] 發送新面板失敗 (guild_id={guild_id})：{exc}")
                 return
-        if channel is None:
-            return
+            finally:
+                self._sending_panel_guilds.discard(guild_id)
 
-        # 若頻道最後一則訊息本來就是目前的控制面板，無須重發
-        if getattr(channel, "last_message_id", None) == old_message_id:
-            self._bump_trigger_msgs.pop(guild_id, None)
-            return
-
-        view = MusicControlView(
-            self,
-            player=player,
-            notice=self._panel_notices.get(guild_id),
-        )
-        view.refresh_buttons(player)
-
-        try:
-            new_msg = await channel.send(view=view)
-            self.panel_messages[guild_id] = (channel_id, new_msg.id)
-            self._bump_trigger_msgs.pop(guild_id, None)
-            pos = getattr(player, "position", 0)
-            length = getattr(player.current, "length", 0)
-            is_stream = bool(getattr(player.current, "is_stream", False))
-            self._last_progress_str[guild_id] = build_progress_bar(pos, length, is_stream=is_stream)
-        except discord.HTTPException as exc:
-            if getattr(exc, "status", None) == 429:
-                retry_after = float(getattr(exc, "retry_after", 5.0) or 5.0)
-                self._rate_limit_until[guild_id] = time.monotonic() + retry_after
-            print(f"⚠️ [面板自動置底] 發送新面板失敗 (guild_id={guild_id})：{exc}")
-            return
-
-        # 新面板發送成功後再刪除舊面板（刪除機器人自己的訊息不需 Manage Messages 權限）
-        try:
-            old_msg = channel.get_partial_message(old_message_id)
-            await old_msg.delete()
-        except (discord.NotFound, discord.HTTPException):
-            pass
+            # 新面板發送成功後刪除舊面板（刪除機器人自己的訊息不需 Manage Messages 權限）
+            if old_message_id != new_msg.id:
+                await self._delete_panel_message(channel, old_message_id)
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -2567,14 +2679,27 @@ class Music(commands.Cog):
         if message.guild is None:
             return
         guild_id = message.guild.id
+
+        # 1. 正在發送面板期間，或訊息本身就是控制面板／機器人訊息時，絕不觸發置底（防止自我觸發無限迴圈）
+        if guild_id in self._sending_panel_guilds:
+            return
+        author = getattr(message, "author", None)
+        if author is not None:
+            if getattr(author, "bot", False):
+                return
+            if self.bot.user is not None and getattr(author, "id", None) == getattr(self.bot.user, "id", None):
+                return
+        if self._is_panel_message(message):
+            return
+
         panel_info = self.panel_messages.get(guild_id)
         if not panel_info:
             return
         panel_channel_id, panel_msg_id = panel_info
-        if message.channel.id != panel_channel_id or message.id == panel_msg_id:
+        if message.channel.id != panel_channel_id or message.id <= panel_msg_id:
             return
 
-        # 忽略 ephemeral 或互動 defer「思考中」（loading）的暫時訊息
+        # 2. 忽略 ephemeral 或互動 defer「思考中」（loading）的暫時訊息
         flags = getattr(message, "flags", None)
         if flags is not None and (getattr(flags, "ephemeral", False) or getattr(flags, "loading", False)):
             return
