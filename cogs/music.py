@@ -9,6 +9,7 @@ import tempfile
 import time
 import traceback
 from collections import deque
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 import aiohttp
@@ -61,6 +62,10 @@ PROGRESS_UPDATE_INTERVAL = float(os.getenv('PROGRESS_UPDATE_INTERVAL', '5.0'))
 # - PANEL_BUMP_COOLDOWN：兩次置底重發之間的最短冷卻間隔（預設 12 秒），避免短時間內重複觸發導致舊面板來不及清除或觸發 Discord 429。
 PANEL_BUMP_DELAY = float(os.getenv('PANEL_BUMP_DELAY', '6.0'))
 PANEL_BUMP_COOLDOWN = float(os.getenv('PANEL_BUMP_COOLDOWN', '12.0'))
+
+# Lavalink Session 失效（REST 回傳 404 /v4/sessions/...）時，強制重連 WebSocket 後等待新 Session 就緒的逾時秒數；
+# 超過這個時間仍未收到 node_ready，就允許下一次偵測再觸發一次重置。
+SESSION_RESET_TIMEOUT = float(os.getenv('SESSION_RESET_TIMEOUT', '30'))
 
 # ---------- 第 7 週新增：Spotify 批次匯入設定（集中常數，方便依機器效能調整） ----------
 # 同時進行的 Lavalink 搜尋數量。免費方案 0.1 CPU／512MB，並發太高會壓垮節點與記憶體，預設只開 3 個。
@@ -920,6 +925,22 @@ class MusicControlView(ui.LayoutView):
     async def on_error(self, interaction: discord.Interaction, error: Exception, item: ui.Item) -> None:
         """統一錯誤回報，調用 bot.notify_owner_error。"""
         print(f"❌ MusicControlView 按鈕操作錯誤 [{getattr(item, 'custom_id', 'unknown')}]: {error}", file=sys.stderr)
+
+        # Lavalink Session 失效（REST 404 /v4/sessions/...）：不是程式錯誤，自動重連並恢復播放，不 DM 開發者
+        cog: "Music | None" = self.cog or interaction.client.get_cog("Music")
+        if cog is not None and cog._is_session_lost_error(error):
+            player = interaction.guild.voice_client if interaction.guild else None
+            await cog._handle_session_lost(player, error)
+            msg = "🔄 音訊節點連線已中斷，正在自動重新連線並恢復播放，請稍候幾秒後再操作一次。"
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(msg, ephemeral=True)
+                else:
+                    await interaction.followup.send(msg, ephemeral=True)
+            except discord.HTTPException:
+                pass
+            return
+
         traceback.print_exception(type(error), error, error.__traceback__, file=sys.stderr)
 
         bot = interaction.client
@@ -1003,12 +1024,20 @@ class MusicControlView(ui.LayoutView):
         if cog:
             cog._pending_panel_interaction[interaction.guild.id] = interaction
 
+        current_track = getattr(player, "current", None) or getattr(player, "_active_track", None)
         player.end_intent = "skip"
-        if getattr(player, "paused", False):
-            await player.pause(False)
         try:
+            if getattr(player, "paused", False):
+                await player.pause(False)
             await player.skip(force=True)
-        except Exception:
+        except Exception as exc:
+            if cog and cog._is_session_lost_error(exc):
+                # Lavalink Session 已失效時，遠端播放器早已停止且不會再送出 TrackEndEvent；
+                # 直接觸發本地 on_wavelink_track_end 推進佇列（並在下一首起播或背景重連時自動修復 Session）
+                await cog.on_wavelink_track_end(
+                    SimpleNamespace(player=player, reason="stopped", track=current_track)
+                )
+                return
             player.end_intent = None
             if cog:
                 cog._pending_panel_interaction.pop(interaction.guild.id, None)
@@ -1034,9 +1063,16 @@ class MusicControlView(ui.LayoutView):
         await interaction.response.defer()
         if current_track:
             player.end_intent = "stop"
-            if getattr(player, "paused", False):
-                await player.pause(False)
-            await player.skip(force=True)
+            try:
+                if getattr(player, "paused", False):
+                    await player.pause(False)
+                await player.skip(force=True)
+            except Exception as exc:
+                # Session 已失效時 Lavalink 端本來就沒在播了，停止仍應完成（收尾面板），並在背景重建 Session
+                if not (cog and cog._is_session_lost_error(exc)):
+                    raise
+                player.end_intent = None
+                await cog._handle_session_lost(player, exc)
         if cog:
             await cog._update_panel_ended(
                 interaction.guild.id,
@@ -1145,6 +1181,11 @@ class Music(commands.Cog):
         # key: guild_id，每個伺服器同時最多一個匯入任務；任務結束時會由 done callback 自行移除。
         self.spotify = SpotifyClient(os.getenv('SPOTIFY_CLIENT_ID'), os.getenv('SPOTIFY_CLIENT_SECRET'))
         self._import_tasks: dict[int, asyncio.Task] = {}
+        # Lavalink Session 失效自動復原：key=節點 identifier，value=開始重置的 monotonic 時間戳。
+        # 用來避免多個按鈕／事件同時偵測到 404 時重複關閉 WebSocket；逾時（SESSION_RESET_TIMEOUT）後允許再次重置。
+        self._session_resetting: dict[str, float] = {}
+        # 曲目結束看門狗（Track-End Watchdog）：key=guild_id, value=(track, 首次偵測到 pos>=length 的 monotonic 時間戳)
+        self._track_overdue_since: dict[int, tuple[Any, float]] = {}
 
     async def cog_unload(self):
         """Cog 被卸載時（例如重新載入模組）順便取消所有還在跑的自動離開計時器，
@@ -1169,6 +1210,7 @@ class Music(commands.Cog):
             self.progress_update_loop.cancel()
         self._last_progress_str.clear()
         self._rate_limit_until.clear()
+        self._track_overdue_since.clear()
 
         # 取消所有面板提示自動清除任務
         for task in self._panel_notice_tasks.values():
@@ -1384,6 +1426,203 @@ class Music(commands.Cog):
         print(f"🔁 Lavalink 節點不在 Pool 中，嘗試自動重連（冷卻 {LAVALINK_RECONNECT_COOLDOWN:g} 秒）：{lavalink_uri}")
         await self._connect_lavalink(lavalink_uri, lavalink_password)
 
+    # ---------- Lavalink Session 失效自動復原 ----------
+    # 症狀：歌曲播到一半（或剛好播完）後完全沒聲音、不會自動換下一首，所有面板按鈕都噴
+    #   LavalinkException: status=404, path=/v4/sessions/<id>/players/<guild>
+    # 根因：Lavalink v4 的 PATCH /players/<guild> 在 player 不存在時會「自動建立」，所以 404 代表的是
+    #   「整個 Session 已不存在」（公開節點重啟、Session 超過 resume_timeout 被回收、WebSocket 半開未被偵測…）。
+    #   Session 一死，Lavalink 不會再送 TrackEndEvent → on_wavelink_track_end 永遠不會觸發 → 佇列卡住；
+    #   而 wavelink 仍拿著舊 session_id 呼叫 REST，於是每顆按鈕都 404。只有重開機器人（重建 Session）才會恢復。
+    # 解法：偵測到 Session 失效時，主動關閉舊 WebSocket 並清掉舊 session_id，讓 wavelink 內建重連取得全新 Session；
+    #   收到 node_ready(resumed=False) 後，把每個 Player 的語音狀態重新送給 Lavalink，並從中斷點恢復播放
+    #   （若中斷時歌曲其實已經播完，就直接走正常的換歌流程播下一首）。
+    @staticmethod
+    def _is_session_lost_error(error: BaseException | None) -> bool:
+        """判斷例外是否為「Lavalink Session 已失效」（REST 404 且路徑包含 /sessions/）。"""
+        seen: set[int] = set()
+        while error is not None and id(error) not in seen:
+            seen.add(id(error))
+            if getattr(error, "status", None) == 404:
+                path = str(getattr(error, "path", "") or "") or str(error)
+                if "/sessions/" in path:
+                    return True
+            error = getattr(error, "original", None) or error.__cause__
+        return False
+
+    async def _reset_lavalink_session(self, node: Any, reason: str = "") -> bool:
+        """強制讓指定節點放棄失效的 Session 並重新連線（受 SESSION_RESET_TIMEOUT 去重保護）。
+
+        回傳 True 代表這次確實觸發了重置；False 代表已有重置進行中或節點無效。
+        """
+        if node is None:
+            return False
+        ident = str(getattr(node, "identifier", None) or id(node))
+        now = time.monotonic()
+        started = self._session_resetting.get(ident)
+        if started is not None and now - started < SESSION_RESET_TIMEOUT:
+            return False
+        self._session_resetting[ident] = now
+        print(f"🔄 偵測到 Lavalink Session 失效，強制重新連線以取得新 Session（node={ident}）：{reason}")
+
+        # 清掉舊 session_id：重連時不帶 Session-Id 標頭，Lavalink 會直接配發全新的 Session
+        try:
+            node._session_id = None
+        except Exception:
+            pass
+
+        ws = getattr(node, "_websocket", None)
+        socket = getattr(ws, "socket", None) if ws is not None else None
+        try:
+            if socket is not None and not socket.closed:
+                # 關閉 socket 後 wavelink 的 keep_alive 會收到 CLOSING 訊息並自動呼叫 connect() 重連
+                await socket.close()
+            elif ws is not None:
+                asyncio.create_task(ws.connect())
+            else:
+                asyncio.create_task(self._reconnect_lavalink_if_needed())
+        except Exception as exc:
+            print(f"⚠️ 強制重連 Lavalink 節點失敗（node={ident}）：{exc}")
+            self._session_resetting.pop(ident, None)
+            return False
+        return True
+
+    async def _handle_session_lost(self, player: Any, error: BaseException | None = None) -> None:
+        """Session 失效的統一入口：找出 player 所屬節點並觸發重置；新 Session 就緒後由 on_wavelink_node_ready 恢復播放。
+
+        若 player 綁定的是已不在 Pool 中的舊節點（例如模組重載後節點被重建，guild.voice_client 卻還拿著舊節點），
+        重置舊節點沒有意義，改成直接把 player 掛到目前 Pool 中的節點並立即恢復。
+        """
+        if self._adopt_orphan_player(player):
+            asyncio.create_task(self._recover_player_after_session_reset(player))
+            return
+        node = getattr(player, "node", None) if player is not None else None
+        if node is None and wavelink is not None:
+            nodes = list(getattr(wavelink.Pool, "nodes", {}).values())
+            node = nodes[0] if nodes else None
+        await self._reset_lavalink_session(node, reason=str(error) if error else "")
+
+    def _adopt_orphan_player(self, player: Any, target_node: Any = None) -> bool:
+        """把綁在「已不在 Pool 中的舊節點」上的 Player 重新掛到可用節點；回傳 True 代表有進行轉移。"""
+        if player is None or wavelink is None:
+            return False
+        pool_nodes = list(getattr(wavelink.Pool, "nodes", {}).values())
+        current_node = getattr(player, "_node", None)
+        if current_node is not None and any(n is current_node for n in pool_nodes):
+            return False
+        if target_node is None:
+            target_node = next(
+                (n for n in pool_nodes if getattr(getattr(n, "status", None), "name", None) == "CONNECTED"), None
+            )
+        guild = getattr(player, "guild", None)
+        if target_node is None or guild is None:
+            return False
+        try:
+            player._node = target_node
+            target_node._players[guild.id] = player
+        except Exception as exc:
+            print(f"⚠️ 轉移孤兒播放器到新節點失敗 (guild_id={guild.id})：{exc}")
+            return False
+        print(f"🔄 播放器綁定的 Lavalink 節點已失效，已轉移至新節點 {getattr(target_node, 'identifier', '?')} (guild_id={guild.id})")
+        return True
+
+    async def _sync_player_voice_to_lavalink(self, player: Any) -> bool:
+        """將 Player 的 Discord 語音憑證（session_id / token / endpoint）重新註冊到 Lavalink 節點。
+
+        刻意優先直接呼叫 `node._update_player(guild_id, data={"voice": ...})` 而非 `player._dispatch_voice_update()`，
+        因為 wavelink 內建的 `_dispatch_voice_update()` 在遇到 LavalinkException（例如 404）時會強制呼叫
+        `await self.disconnect()` 把機器人踢出 Discord 語音頻道；直接送 `_update_player` 則可在失敗時保留語音連線。
+        """
+        if player is None:
+            return False
+        guild = getattr(player, "guild", None)
+        if guild is None:
+            return False
+        self._adopt_orphan_player(player)
+
+        voice_state = getattr(player, "_voice_state", None)
+        voice_data = voice_state.get("voice", {}) if isinstance(voice_state, dict) else {}
+        session_id = voice_data.get("session_id")
+        token = voice_data.get("token")
+        endpoint = voice_data.get("endpoint")
+        node = getattr(player, "node", None)
+
+        if session_id and token and endpoint and node is not None and hasattr(node, "_update_player"):
+            request: dict[str, Any] = {
+                "voice": {
+                    "sessionId": session_id,
+                    "token": token,
+                    "endpoint": endpoint,
+                }
+            }
+            ch = getattr(player, "channel", None)
+            if ch is not None and getattr(ch, "id", None) is not None:
+                request["voice"]["channelId"] = str(ch.id)
+            try:
+                await node._update_player(guild.id, data=request)
+                conn_ev = getattr(player, "_connection_event", None)
+                if conn_ev is not None and hasattr(conn_ev, "set"):
+                    conn_ev.set()
+                return True
+            except Exception as exc:
+                print(f"⚠️ [Session 復原] 直接同步語音狀態至 Lavalink 失敗 (guild_id={guild.id})：{exc}")
+                return False
+
+        if hasattr(player, "_dispatch_voice_update"):
+            try:
+                await player._dispatch_voice_update()
+                return bool(getattr(player, "connected", True))
+            except Exception as exc:
+                print(f"⚠️ [Session 復原] 重送語音狀態失敗 (guild_id={guild.id})：{exc}")
+                return False
+        return False
+
+    async def _recover_player_after_session_reset(self, player: Any) -> None:
+        """新 Session 就緒後恢復單一 Player：重送語音狀態 → 從中斷點續播（已播完則直接換下一首）。"""
+        guild = getattr(player, "guild", None)
+        if guild is None:
+            return
+        guild_id = guild.id
+        await self._sync_player_voice_to_lavalink(player)
+
+        if not getattr(player, "connected", False):
+            self._cancel_import(guild_id)
+            await self._update_panel_ended(
+                guild_id, reason="⚠️ 音訊節點連線重置後無法恢復語音連線，請重新使用 `/music_play` 點歌。"
+            )
+            return
+
+        current = getattr(player, "_current", None)
+        track = current or getattr(player, "_active_track", None)
+        if track is None:
+            return  # 閒置中的 player 只需恢復語音連線，不用播放
+
+        length = int(getattr(track, "length", 0) or 0)
+        is_stream = bool(getattr(track, "is_stream", False))
+        position = int(getattr(player, "position", 0) or 0) if current is not None else 0
+
+        try:
+            if not is_stream and length > 0 and position >= length - 1500:
+                # 中斷時這首其實已經播完（Lavalink 沒來得及送 TrackEndEvent）→ 模擬正常結束事件，走原本的換歌流程
+                print(f"ℹ️ [Session 復原] 「{getattr(track, 'title', '?')}」中斷時已播完，直接換下一首 (guild_id={guild_id})")
+                await self.on_wavelink_track_end(SimpleNamespace(player=player, reason="finished", track=track))
+                return
+
+            print(f"▶️ [Session 復原] 從 {format_position(position)} 恢復播放「{getattr(track, 'title', '?')}」 (guild_id={guild_id})")
+            await player.play(
+                track,
+                replace=True,
+                start=max(0, position),
+                volume=getattr(player, "volume", 100),
+                paused=bool(getattr(player, "paused", False)),
+            )
+            await self._notify_panel(guild_id, "🔄 音訊節點連線已自動恢復，繼續播放中。", duration=8.0)
+        except Exception as exc:
+            print(f"❌ [Session 復原] 恢復播放失敗 (guild_id={guild_id})：{exc}")
+            await self.bot.notify_owner_error(exc, extra_info=f"Lavalink Session 重置後恢復播放失敗 guild_id={guild_id}")
+            await self._notify_panel(
+                guild_id, "⚠️ 音訊節點連線已恢復，但無法接續播放，請按停止後重新點歌。", duration=15.0
+            )
+
     # ---------- Lavalink 節點健康檢查 ----------
     @staticmethod
     def _describe_node_status(node: "wavelink_module.Node") -> tuple[str, str]:
@@ -1474,6 +1713,24 @@ class Music(commands.Cog):
                 self._node_alert_sent[identifier] = False
                 print(f"✅ Lavalink 節點已恢復連線：{uri}（identifier={identifier}）")
 
+            # 主動探測 Session 是否仍然有效：WebSocket 看似 CONNECTED，但 Lavalink 端 Session 可能早已被回收
+            # （公開節點重啟／半開連線），此時歌曲會靜默停止且不再送 TrackEndEvent。只在有 player 時探測，避免多餘請求。
+            if status_name == "CONNECTED" and getattr(node, "players", None):
+                try:
+                    remote_players = await node.fetch_players()
+                except Exception as exc:
+                    if self._is_session_lost_error(exc):
+                        await self._reset_lavalink_session(node, reason=f"health check 探測：{exc}")
+                    else:
+                        print(f">>> node_health_check 探測 Session 失敗（identifier={identifier}）：{exc}")
+                else:
+                    # Session 仍有效，但 Lavalink 端個別 player 已被銷毀（本地卻還在播）時，同樣進行單一 player 復原
+                    remote_ids = {int(getattr(p, "guild_id", 0) or 0) for p in remote_players}
+                    for gid, local_player in list(node.players.items()):
+                        if gid not in remote_ids and getattr(local_player, "_current", None) is not None:
+                            print(f"🔄 Lavalink 端已找不到 guild_id={gid} 的播放器，嘗試恢復播放")
+                            asyncio.create_task(self._recover_player_after_session_reset(local_player))
+
     @node_health_check.before_loop
     async def before_node_health_check(self):
         # 等 bot 完全 ready（含 on_ready 觸發過一次）再開始跑，
@@ -1521,11 +1778,47 @@ class Music(commands.Cog):
                 player = getattr(guild, "voice_client", None)
                 # 若 player 不存在或未處於有效播放狀態，跳過
                 if not self._is_playback_active(player):
+                    self._track_overdue_since.pop(guild_id, None)
                     continue
 
                 # 2. 播放器暫停時進度條無變化，跳過 edit 避免消耗 API 額度
                 if getattr(player, "paused", False):
+                    self._track_overdue_since.pop(guild_id, None)
                     continue
+
+                track = player.current
+                is_stream = bool(getattr(track, "is_stream", False))
+                pos_ms = getattr(player, "position", 0)
+                len_ms = getattr(track, "length", None)
+
+                # 曲目結束看門狗（Track-End Watchdog）：
+                # wavelink.Player.position 是以本地 monotonic 時間推算並夾限在 track.length。
+                # 當 Lavalink 節點在播放期間遺失 Session 或漏發 TrackEndEvent 時，本地進度會停在 100% (pos_ms >= len_ms)，
+                # 但 on_wavelink_track_end 永遠不會被觸發，導致「當前歌曲播完卻沒自動播放下一首，且按按鈕全部 404」。
+                # 若非直播曲目已達結尾 (pos_ms >= len_ms) 且持續超過 4 秒仍未收到 TrackEndEvent，主動觸發換歌流程。
+                if (
+                    not is_stream
+                    and len_ms
+                    and len_ms > 0
+                    and pos_ms >= len_ms
+                    and not getattr(player, "advancing", False)
+                ):
+                    overdue_info = self._track_overdue_since.get(guild_id)
+                    now_mono = time.monotonic()
+                    if overdue_info is None or overdue_info[0] is not track:
+                        self._track_overdue_since[guild_id] = (track, now_mono)
+                    elif now_mono - overdue_info[1] >= 4.0:
+                        self._track_overdue_since.pop(guild_id, None)
+                        print(
+                            f"⚠️ [播放看門狗] 偵測到「{getattr(track, 'title', '?')}」已達曲目結尾但未收到 TrackEndEvent，"
+                            f"自動觸發換歌流程 (guild_id={guild_id})"
+                        )
+                        await self.on_wavelink_track_end(
+                            SimpleNamespace(player=player, reason="finished", track=track)
+                        )
+                        continue
+                else:
+                    self._track_overdue_since.pop(guild_id, None)
 
                 # 3. 語音頻道是否有真人成員（排除機器人）
                 vc = getattr(player, "channel", None)
@@ -1535,10 +1828,6 @@ class Music(commands.Cog):
                         continue
 
                 # 4. 取得當前進度字串並檢查是否與上次相同
-                track = player.current
-                is_stream = bool(getattr(track, "is_stream", False))
-                pos_ms = getattr(player, "position", 0)
-                len_ms = getattr(track, "length", None)
                 current_progress_str = build_progress_bar(pos_ms, len_ms, is_stream=is_stream)
 
                 if self._last_progress_str.get(guild_id) == current_progress_str:
@@ -1607,6 +1896,21 @@ class Music(commands.Cog):
     @commands.Cog.listener()
     async def on_wavelink_node_ready(self, payload: Any):
         print(f"✅ Lavalink 節點已就緒：{payload.node.uri}（Session ID: {payload.session_id}）")
+        node = payload.node
+        self._session_resetting.pop(str(getattr(node, "identifier", None) or id(node)), None)
+        if getattr(payload, "resumed", False):
+            return  # Lavalink 成功恢復舊 Session，player 與播放狀態都還在，不需要處理
+        # 模組重載後節點會被重建，但 guild.voice_client 仍綁在舊節點上 → 先把這些孤兒播放器轉移到新節點
+        if wavelink is not None:
+            for vc in list(getattr(self.bot, "voice_clients", []) or []):
+                if isinstance(vc, wavelink.Player):
+                    self._adopt_orphan_player(vc, target_node=node)
+        # 拿到全新 Session：舊 Session 上的 player 全部不存在了，逐一恢復仍在語音頻道中的 Player
+        players = list(getattr(node, "players", {}).values())
+        if players:
+            print(f"🔄 Lavalink 配發了新 Session，開始恢復 {len(players)} 個播放器的語音連線與播放狀態")
+        for player in players:
+            asyncio.create_task(self._recover_player_after_session_reset(player))
 
     @commands.Cog.listener()
     async def on_wavelink_track_start(self, payload: Any):
@@ -1842,12 +2146,22 @@ class Music(commands.Cog):
             await self._play_track(player, next_track, next_requester, next_requester_id)
         except Exception as e:
             print(f">>> 自動播放下一首時發生錯誤：{e}")
+            guild_obj = getattr(player, "guild", None)
+            if self._is_session_lost_error(e):
+                # Session 失效：_play_track 已把 _active_track 設為下一首，重連後 _recover_player_after_session_reset 會從頭播放它
+                await self._handle_session_lost(player, e)
+                if guild_obj is not None:
+                    await self._notify_panel(
+                        guild_obj.id,
+                        f"🔄 音訊節點連線中斷，正在自動重新連線，恢復後會接著播放「{getattr(next_track, 'title', '下一首')}」。",
+                        duration=15.0,
+                    )
+                return
             await self.bot.notify_owner_error(
                 e, extra_info=f"on_wavelink_track_end 自動播放失敗 track={getattr(next_track, 'title', '?')}"
             )
             # 第 7 週：錯誤通知改顯示在面板內；沒有面板時才退回頻道訊息
             err_text = f"⚠️ 自動播放「{getattr(next_track, 'title', '未知曲目')}」時發生錯誤，已回報開發者。"
-            guild_obj = getattr(player, "guild", None)
             shown = guild_obj is not None and await self._notify_panel(guild_obj.id, err_text, duration=15.0)
             if not shown and channel is not None:
                 try:
@@ -3167,6 +3481,13 @@ class Music(commands.Cog):
         try:
             await self._play_track(player, track, interaction.user.display_name, interaction.user.id)
         except Exception as e:
+            if self._is_session_lost_error(e):
+                await self._handle_session_lost(player, e)
+                await self._ephemeral_error(
+                    interaction,
+                    f"🔄 音訊節點連線剛重置，正在自動重新連線，完成後將立即播放「{getattr(track, 'title', '此曲目')}」。",
+                )
+                return
             print(f">>> 播放音樂時發生錯誤：{e}")
             await self.bot.notify_owner_error(
                 e, interaction, extra_info=f"/play 播放失敗 track={getattr(track, 'title', '?')}"
@@ -3421,7 +3742,18 @@ class Music(commands.Cog):
         player._play_seq = getattr(player, "_play_seq", 0) + 1
         # 開始播放時清除這首歌之前的拒絕鎖（例如上次播放被拒、這次重新播出）
         self._rejected_track_keys.pop(self._track_key(track), None)
-        await player.play(track)
+        guild_obj = getattr(player, "guild", None)
+        if guild_obj is not None:
+            self._track_overdue_since.pop(guild_obj.id, None)
+        try:
+            await player.play(track)
+        except Exception as exc:
+            if self._is_session_lost_error(exc):
+                # 若是孤兒節點或新 Session 尚未同步語音狀態，先嘗試立即轉移節點並重送語音憑證後重試一次
+                if self._adopt_orphan_player(player) and await self._sync_player_voice_to_lavalink(player):
+                    await player.play(track)
+                    return
+            raise
 
     async def _get_control_player(self, interaction: discord.Interaction) -> "wavelink_module.Player | None":
         """控制指令共用的防呆：機器人在語音頻道、且操作者跟機器人在同一個頻道。
@@ -3762,6 +4094,12 @@ class Music(commands.Cog):
             player.end_intent = "skip"
             await player.skip(force=True)
         except Exception as e:
+            if self._is_session_lost_error(e):
+                # Lavalink Session 已失效時，遠端早已無曲目在播且不會發送 TrackEndEvent，直接觸發換歌流程推進佇列
+                await self.on_wavelink_track_end(
+                    SimpleNamespace(player=player, reason="stopped", track=current)
+                )
+                return
             player.end_intent = None
             print(f">>> /music_skip 失敗：{e}")
             await self.bot.notify_owner_error(e, interaction, extra_info="/music_skip 失敗")
@@ -3802,6 +4140,10 @@ class Music(commands.Cog):
                 await player.skip(force=True)
             except Exception as e:
                 player.end_intent = None
+                if self._is_session_lost_error(e):
+                    # Session 已失效：Lavalink 端本來就沒在播，停止已完成，只需在背景重建 Session
+                    await self._handle_session_lost(player, e)
+                    return
                 print(f">>> /music_stop 失敗：{e}")
                 await self.bot.notify_owner_error(e, interaction, extra_info="/music_stop 失敗")
                 await interaction.followup.send("❌ 停止播放時發生錯誤，已回報開發者。", ephemeral=True)

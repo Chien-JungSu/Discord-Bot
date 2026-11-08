@@ -555,6 +555,121 @@ async def main_async():
     await test_track_end_guard()
     await test_loop_button_and_no_autoskip()
     await test_sticky_panel_auto_bump()
+    await test_session_lost_recovery()
+
+
+# ---------- 測試 10：Lavalink Session 失效（404）自動復原 ----------
+class SessionLostError(Exception):
+    def __init__(self):
+        self.status = 404
+        self.path = "/v4/sessions/ax2kzn2hj4g42fpk/players/1"
+        super().__init__(f"Failed to fulfill request to Lavalink: status=404, reason=Not Found, path={self.path}")
+
+
+class RecoverablePlayer(FakePlayer):
+    def __init__(self):
+        super().__init__()
+        self.play_calls = []
+        self.voice_updates = 0
+        self.fail_next_play = False
+
+    async def _dispatch_voice_update(self):
+        self.voice_updates += 1
+
+    async def play(self, track, **kwargs):
+        if self.fail_next_play:
+            self.fail_next_play = False
+            self.current = None
+            raise SessionLostError()
+        self.play_calls.append((track, kwargs))
+        await super().play(track)
+
+
+async def test_session_lost_recovery():
+    print("\n--- 測試 10: Lavalink Session 失效（404）自動復原 ---")
+    check(Music._is_session_lost_error(SessionLostError()), "辨識 404 /v4/sessions/... 為 Session 失效")
+    check(not Music._is_session_lost_error(RuntimeError("boom")), "一般例外不會被誤判為 Session 失效")
+
+    # 1. 重置去重：短時間內多次偵測只關閉一次 WebSocket，並清掉舊 session_id
+    cog = make_cog(FakePlayer())
+    socket = SimpleNamespace(closed=False, close=AsyncMock())
+    node = SimpleNamespace(identifier="n1", _session_id="old", _websocket=SimpleNamespace(socket=socket))
+    first = await cog._reset_lavalink_session(node, "test")
+    second = await cog._reset_lavalink_session(node, "test")
+    check(first and not second and socket.close.await_count == 1, "Session 重置受去重保護，只關閉一次 WebSocket")
+    check(node._session_id is None, "重置時清除失效的 session_id，重連會取得全新 Session")
+
+    # 2. 中斷點恢復：歌曲播到一半 → 重送語音狀態並從原位置續播
+    player = RecoverablePlayer()
+    cog = make_cog(player)
+    song = fake_track("Mid", identifier="id_mid")
+    player._current = song
+    player.current = song
+    player._active_track = song
+    player.position = 60000
+    await cog._recover_player_after_session_reset(player)
+    check(player.voice_updates == 1, "新 Session 就緒後重送語音狀態")
+    check(player.play_calls and player.play_calls[-1][0] is song and player.play_calls[-1][1].get("start") == 60000,
+          "從中斷位置 (60 秒) 恢復播放同一首歌")
+
+    # 3. 中斷時已播完 → 直接換下一首（修復「播完沒自動播下一首」）
+    player = RecoverablePlayer()
+    cog = make_cog(player)
+    ended = fake_track("Ended", identifier="id_end")
+    nxt = fake_track("Next", identifier="id_next")
+    await cog._play_track(player, ended, "測試者", 7)
+    player._current = ended
+    player.position = 199500  # 長度 200000，已到結尾
+    player.song_queue.append((nxt, "測試者", 7))
+    await cog._recover_player_after_session_reset(player)
+    check(player.current is nxt and not player.song_queue, "中斷時歌曲已播完 → 恢復後自動播放佇列下一首")
+
+    # 4. 自動換歌時遇到 Session 失效：不 DM 開發者，觸發重置，恢復後從頭播放下一首
+    player = RecoverablePlayer()
+    cog = make_cog(player)
+    cog._handle_session_lost = AsyncMock()
+    a = fake_track("A", identifier="id_a2")
+    b = fake_track("B", identifier="id_b2")
+    await cog._play_track(player, a, "測試者", 7)
+    player.song_queue.append((b, "測試者", 7))
+    player.fail_next_play = True
+    await cog.on_wavelink_track_end(SimpleNamespace(player=player, reason="finished", track=a))
+    check(cog._handle_session_lost.await_count == 1 and cog.bot.notify_owner_error.await_count == 0,
+          "自動換歌遇到 Session 失效時觸發重置且不 DM 開發者")
+    player._current = None
+    await Music._recover_player_after_session_reset(cog, player)
+    check(player.current is b and player.play_calls[-1][1].get("start") == 0, "重連後從頭播放原本要接的下一首")
+
+    # 5. 面板按鈕遇到 404：友善提示、觸發復原、不 DM 開發者
+    player = RecoverablePlayer()
+    cog = make_cog(player)
+    cog._handle_session_lost = AsyncMock()
+    view = music_mod.MusicControlView(cog, player=player)
+    it = make_interaction()
+    it.guild = SimpleNamespace(id=GID, voice_client=player)
+    it.client = cog.bot
+    it.response.is_done = MagicMock(return_value=False)
+    it.response.send_message = AsyncMock()
+    await view.on_error(it, SessionLostError(), SimpleNamespace(custom_id="music:skip"))
+    msg = it.response.send_message.await_args.args[0] if it.response.send_message.await_args else ""
+    check(cog._handle_session_lost.await_count == 1 and cog.bot.notify_owner_error.await_count == 0 and "重新連線" in msg,
+          "按鈕遇到 Session 失效時提示使用者並自動復原，不 DM 開發者")
+
+    # 6. 跳過按鈕遇到 404 時直接推進佇列（即使 Lavalink 未送出 TrackEndEvent 也能播下一首）
+    player = RecoverablePlayer()
+    cog = make_cog(player)
+    cur_t = fake_track("StuckTrack", identifier="id_stuck")
+    nxt_t = fake_track("NextAfter404", identifier="id_nxt404")
+    await cog._play_track(player, cur_t, "測試者", 7)
+    player.song_queue.append((nxt_t, "測試者", 7))
+    player.skip = AsyncMock(side_effect=SessionLostError())
+    view = music_mod.MusicControlView(cog, player=player)
+    it2 = make_interaction()
+    it2.guild = SimpleNamespace(id=GID, voice_client=player)
+    it2.client = cog.bot
+    it2.response.defer = AsyncMock()
+    await view.skip(it2)
+    check(player.current is nxt_t and not player.song_queue, "skip 按鈕遇到 404 時直接觸發換歌流程播放下一首")
 
 
 def main():
