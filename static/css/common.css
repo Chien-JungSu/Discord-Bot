@@ -846,6 +846,30 @@ code:hover {
   transition: all 0.18s ease;
 }
 
+/* button 形式的下拉選單項目基礎重置（消除瀏覽器預設按鈕邊框、底色與邊距） */
+button.dropdown-item {
+  width: 100%;
+  background: transparent;
+  border: none;
+  outline: none;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  font-size: 0.88rem;
+  font-weight: 600;
+  line-height: inherit;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  margin: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  box-shadow: none;
+  transition: all 0.18s ease;
+}
+
 a.dropdown-item.dropdown-panel-link,
 a.dropdown-item.dropdown-panel-link:link,
 a.dropdown-item.dropdown-panel-link:visited,
@@ -853,8 +877,26 @@ a.dropdown-item.dropdown-panel-link:visited,
 a.dropdown-item.dropdown-profile-link,
 a.dropdown-item.dropdown-profile-link:link,
 a.dropdown-item.dropdown-profile-link:visited,
-.dropdown-profile-link {
+.dropdown-profile-link,
+a.dropdown-item.dropdown-personal-link,
+a.dropdown-item.dropdown-personal-link:link,
+a.dropdown-item.dropdown-personal-link:visited,
+.dropdown-personal-link,
+button.dropdown-item.dropdown-personal-btn,
+.dropdown-personal-btn {
   color: var(--primary) !important;
+}
+
+a.dropdown-item.dropdown-personal-link svg,
+a.dropdown-item.dropdown-personal-link span,
+.dropdown-personal-link svg,
+.dropdown-personal-link span,
+button.dropdown-item.dropdown-personal-btn svg,
+button.dropdown-item.dropdown-personal-btn span,
+.dropdown-personal-btn svg,
+.dropdown-personal-btn span {
+  color: var(--primary) !important;
+  fill: currentColor;
 }
 
 a.dropdown-item.dropdown-panel-link:hover,
@@ -862,8 +904,24 @@ a.dropdown-item.dropdown-panel-link:visited:hover,
 .dropdown-panel-link:hover,
 a.dropdown-item.dropdown-profile-link:hover,
 a.dropdown-item.dropdown-profile-link:visited:hover,
-.dropdown-profile-link:hover {
+.dropdown-profile-link:hover,
+a.dropdown-item.dropdown-personal-link:hover,
+a.dropdown-item.dropdown-personal-link:visited:hover,
+.dropdown-personal-link:hover,
+button.dropdown-item.dropdown-personal-btn:hover,
+.dropdown-personal-btn:hover {
   background: rgba(125, 211, 252, 0.12);
+  color: #ffffff !important;
+}
+
+a.dropdown-item.dropdown-personal-link:hover svg,
+a.dropdown-item.dropdown-personal-link:hover span,
+.dropdown-personal-link:hover svg,
+.dropdown-personal-link:hover span,
+button.dropdown-item.dropdown-personal-btn:hover svg,
+button.dropdown-item.dropdown-personal-btn:hover span,
+.dropdown-personal-btn:hover svg,
+.dropdown-personal-btn:hover span {
   color: #ffffff !important;
 }
 

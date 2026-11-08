@@ -341,7 +341,70 @@
   color: var(--muted);
 }
 
-/* ---------- 頂部下拉頭像中「管理員設定」按鈕 (與 BOT OWNER 金黃色一致) ---------- */
+/* ---------- 頂部下拉頭像中 button 形式項目重置與客製樣式 ---------- */
+button.dropdown-item {
+  width: 100%;
+  background: transparent;
+  border: none;
+  outline: none;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  font-size: 0.88rem;
+  font-weight: 600;
+  line-height: inherit;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  margin: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  box-shadow: none;
+  transition: all 0.18s ease;
+}
+
+/* 頂部下拉頭像中「個人設定」按鈕 (與個人主頁主題藍綠色一致) */
+button.dropdown-item.dropdown-personal-btn,
+.dropdown-personal-btn,
+a.dropdown-item.dropdown-personal-link,
+.dropdown-personal-link {
+  color: var(--primary) !important;
+}
+
+button.dropdown-item.dropdown-personal-btn svg,
+button.dropdown-item.dropdown-personal-btn span,
+.dropdown-personal-btn svg,
+.dropdown-personal-btn span,
+a.dropdown-item.dropdown-personal-link svg,
+a.dropdown-item.dropdown-personal-link span,
+.dropdown-personal-link svg,
+.dropdown-personal-link span {
+  color: var(--primary) !important;
+  fill: currentColor;
+}
+
+button.dropdown-item.dropdown-personal-btn:hover,
+.dropdown-personal-btn:hover,
+a.dropdown-item.dropdown-personal-link:hover,
+.dropdown-personal-link:hover {
+  background: rgba(125, 211, 252, 0.12);
+  color: #ffffff !important;
+}
+
+button.dropdown-item.dropdown-personal-btn:hover svg,
+button.dropdown-item.dropdown-personal-btn:hover span,
+.dropdown-personal-btn:hover svg,
+.dropdown-personal-btn:hover span,
+a.dropdown-item.dropdown-personal-link:hover svg,
+a.dropdown-item.dropdown-personal-link:hover span,
+.dropdown-personal-link:hover svg,
+.dropdown-personal-link:hover span {
+  color: #ffffff !important;
+}
+
+/* 頂部下拉頭像中「管理員設定」按鈕 (與 BOT OWNER 金黃色一致) */
 button.dropdown-item.dropdown-owner-btn {
   width: 100%;
   background: transparent;
@@ -867,6 +930,8 @@ button.dropdown-item.dropdown-owner-btn:hover span {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-width: 0;
+  width: 100%;
 }
 
 .form-group label {
@@ -877,6 +942,10 @@ button.dropdown-item.dropdown-owner-btn:hover span {
 
 .form-control,
 .form-select {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
   background-color: rgba(15, 23, 42, 0.78);
   border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 12px;
@@ -901,9 +970,13 @@ button.dropdown-item.dropdown-owner-btn:hover span {
   box-shadow: 0 0 0 3px rgba(125, 211, 252, 0.25), inset 0 1px 2px rgba(0, 0, 0, 0.4);
 }
 
-/* 全域統一下拉選單外觀 */
+/* 全域統一下拉選單外觀 (單行溢位以省略符號優雅收攏，避免破版) */
 select.form-control,
 .form-select {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
   appearance: none;
   -webkit-appearance: none;
   -moz-appearance: none;
@@ -913,6 +986,9 @@ select.form-control,
   background-size: 16px 16px;
   padding-right: 40px !important;
   cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 select.form-control option,
@@ -920,6 +996,7 @@ select.form-control option,
   background-color: #0f172a;
   color: #ffffff;
   padding: 8px 12px;
+  white-space: normal;
 }
 
 /* 可輸入即時搜尋下拉選單 (Searchable Combobox) */
@@ -1028,14 +1105,16 @@ select.form-control option,
 
 .form-row-2 {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
+  width: 100%;
 }
 
 .form-row-3 {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px;
+  width: 100%;
 }
 
 .checkbox-group {
@@ -1092,9 +1171,22 @@ select.form-control option,
   box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.4) !important;
 }
 
-/* ---------- 紅色配色：清除設定按鈕 ---------- */
+/* ---------- 紅色配色：清除設定／危險操作按鈕（刪除歌單、清除設定） ---------- */
 .btn-clear-setting,
-.btn-clear-setting:visited {
+.btn-clear-setting:visited,
+.btn.danger,
+.btn.danger:visited,
+.btn-danger,
+.btn-danger:visited {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 22px;
+  border-radius: 9999px;
+  font-size: 0.95rem;
+  font-weight: 700;
+  text-decoration: none;
   background: linear-gradient(135deg, rgba(248, 113, 113, 0.22) 0%, rgba(239, 68, 68, 0.1) 100%) !important;
   border: 1px solid rgba(248, 113, 113, 0.45) !important;
   color: #ffffff !important;
@@ -1104,9 +1196,16 @@ select.form-control option,
               0 0 16px rgba(248, 113, 113, 0.18) !important;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
   cursor: pointer;
+  transition: transform 0.28s var(--motion-spring),
+              background 0.25s ease,
+              border-color 0.25s ease,
+              box-shadow 0.25s ease,
+              color 0.2s ease;
 }
 
-.btn-clear-setting:hover {
+.btn-clear-setting:hover,
+.btn.danger:hover,
+.btn-danger:hover {
   background: linear-gradient(135deg, rgba(248, 113, 113, 0.35) 0%, rgba(239, 68, 68, 0.18) 100%) !important;
   border-color: rgba(248, 113, 113, 0.8) !important;
   box-shadow: inset 0 1px 2px 0 rgba(255, 255, 255, 0.6),
@@ -1116,7 +1215,9 @@ select.form-control option,
   transform: translateY(-2px) scale(1.02);
 }
 
-.btn-clear-setting:active {
+.btn-clear-setting:active,
+.btn.danger:active,
+.btn-danger:active {
   transform: scale(0.96);
   box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.4) !important;
 }
@@ -1374,15 +1475,31 @@ select.form-control option,
   transform: translateY(-1px);
 }
 
-.btn-icon-action.delete {
-  color: #f87171;
-  border-color: rgba(248, 113, 113, 0.25);
+.btn-icon-action.delete,
+.btn-icon-action.danger,
+.btn-icon-action.btn-track-del,
+.btn-icon-action.btn-remove-saved-pl {
+  color: #f87171 !important;
+  border-color: rgba(248, 113, 113, 0.45) !important;
+  background: rgba(248, 113, 113, 0.12) !important;
 }
 
-.btn-icon-action.delete:hover {
-  background: rgba(248, 113, 113, 0.2);
-  border-color: rgba(248, 113, 113, 0.55);
-  color: #ffffff;
+.btn-icon-action.delete:hover,
+.btn-icon-action.danger:hover,
+.btn-icon-action.btn-track-del:hover,
+.btn-icon-action.btn-remove-saved-pl:hover {
+  background: rgba(248, 113, 113, 0.28) !important;
+  border-color: rgba(248, 113, 113, 0.8) !important;
+  color: #ffffff !important;
+  box-shadow: 0 0 14px rgba(248, 113, 113, 0.35);
+  transform: translateY(-1px);
+}
+
+.btn-icon-action.delete:active,
+.btn-icon-action.danger:active,
+.btn-icon-action.btn-track-del:active,
+.btn-icon-action.btn-remove-saved-pl:active {
+  transform: scale(0.96);
 }
 
 .empty-rules-hint {
@@ -2415,6 +2532,11 @@ body.has-unsaved-changes.has-back-to-top .toast-container {
   border-color: rgba(52, 211, 153, 0.5);
 }
 
+.toast.warning {
+  border-color: rgba(251, 191, 36, 0.55);
+  color: #fde68a;
+}
+
 .toast.error {
   border-color: rgba(248, 113, 113, 0.5);
   color: #fca5a5;
@@ -3254,6 +3376,10 @@ body.has-unsaved-changes.has-back-to-top .toast-container {
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 20px;
   padding: 24px;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
 }
 
 .personal-empty-header {
@@ -3282,22 +3408,25 @@ body.has-unsaved-changes.has-back-to-top .toast-container {
 }
 
 .personal-meta-grid {
-  display: grid;
-  grid-template-columns: 1.25fr 1fr;
-  gap: 24px;
-  align-items: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  width: 100%;
+  min-width: 0;
 }
 
 .personal-meta-form {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 16px;
+  width: 100%;
+  min-width: 0;
 }
 
 .personal-meta-actions {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
   flex-wrap: wrap;
   margin-top: 4px;
 }
@@ -3306,22 +3435,33 @@ body.has-unsaved-changes.has-back-to-top .toast-container {
   background: linear-gradient(135deg, rgba(56, 189, 248, 0.08) 0%, rgba(99, 102, 241, 0.08) 100%);
   border: 1px solid rgba(125, 211, 252, 0.28);
   border-radius: 18px;
-  padding: 20px;
+  padding: 18px 20px;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
   gap: 12px;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
 }
 
+.share-code-top-row,
 .share-code-label-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.share-code-title-group {
+  display: flex;
+  align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 .share-code-title {
-  font-size: 0.92rem;
+  font-size: 0.95rem;
   font-weight: 700;
   color: #e2e8f0;
 }
@@ -3530,15 +3670,20 @@ body.has-unsaved-changes.has-back-to-top .toast-container {
   margin-top: 4px;
 }
 
-@media (max-width: 900px) {
-  .personal-meta-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
 @media (max-width: 768px) {
   .personal-playlist-card {
     padding: 16px;
+  }
+
+  .share-code-top-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .share-code-display-row {
+    width: 100%;
+    justify-content: flex-start;
   }
 
   .personal-add-track-row {

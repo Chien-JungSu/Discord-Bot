@@ -126,7 +126,7 @@
     if (!toastContainer) return;
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
-    const icon = type === 'success' ? '✅' : '❌';
+    const icon = type === 'success' ? '✅' : (type === 'warning' ? '⚠️' : '❌');
     toast.innerHTML = `<span>${icon}</span><span>${stripStatusEmoji(message)}</span>`;
     toastContainer.appendChild(toast);
 
@@ -3332,7 +3332,7 @@
             <button type="button" class="btn-icon-action btn-track-up" data-idx="${idx}" ${idx === 0 ? 'disabled' : ''} title="上移一位">⬆️</button>
             <button type="button" class="btn-icon-action btn-track-down" data-idx="${idx}" ${idx === tracks.length - 1 ? 'disabled' : ''} title="下移一位">⬇️</button>
             <button type="button" class="btn-icon-action btn-track-move" data-idx="${idx}" title="輸入目標編號移動位置">🔢 排序</button>
-            <button type="button" class="btn-icon-action danger btn-track-del" data-idx="${idx}" title="從歌單刪除此曲目">🗑️ 刪除</button>
+            <button type="button" class="btn-icon-action danger delete btn-track-del" data-idx="${idx}" title="從歌單刪除此曲目">🗑️ 刪除</button>
           </div>
         </div>
       `);
@@ -3383,7 +3383,17 @@
     listEl.querySelectorAll('.btn-track-del').forEach((btn) => {
       btn.addEventListener('click', () => {
         const idx = Number(btn.getAttribute('data-idx'));
-        removePersonalTrack(idx);
+        const track = (personalPlaylistData?.tracks || [])[idx];
+        const trackTitle = track ? (track.title || '此歌曲') : '此歌曲';
+        showConfirmModal({
+          title: '🗑️ 確認刪除歌曲',
+          message: `確定要從歌單中移除第 #${idx + 1} 首「${trackTitle}」嗎？此操作將即時更新資料庫。`,
+          confirmText: '確認刪除',
+          cancelText: '取消',
+          onConfirm: () => {
+            removePersonalTrack(idx);
+          },
+        });
       });
     });
 
@@ -3487,7 +3497,7 @@
             <div class="personal-saved-title">🎵 ${plName} <span class="cmd-badge">${code}</span></div>
             <div class="personal-saved-meta">擁有者：${ownerName} • 共 ${count} 首歌曲</div>
           </div>
-          <button type="button" class="btn-icon-action danger btn-remove-saved-pl" data-owner-id="${ownerId}">
+          <button type="button" class="btn-icon-action danger delete btn-remove-saved-pl" data-owner-id="${ownerId}">
             🗑️ 移除收藏
           </button>
         </div>
@@ -3495,24 +3505,34 @@
     }).join('');
 
     container.querySelectorAll('.btn-remove-saved-pl').forEach((btn) => {
-      btn.addEventListener('click', async () => {
+      btn.addEventListener('click', () => {
         const ownerId = btn.getAttribute('data-owner-id');
         if (!ownerId) return;
-        try {
-          const res = await fetch(`/api/panel/user/playlist/saved/${encodeURIComponent(ownerId)}`, {
-            method: 'DELETE',
-          });
-          const data = await res.json();
-          if (res.ok && data.status === 'ok') {
-            personalSavedPlaylists = Array.isArray(data.saved_playlists) ? data.saved_playlists : [];
-            renderSavedPlaylistsList();
-            showToast(data.message || '已移除收藏歌單', 'success');
-          } else {
-            showToast(data.message || '移除失敗', 'error');
-          }
-        } catch (err) {
-          showToast('網路連線失敗', 'error');
-        }
+        const pl = (personalSavedPlaylists || []).find((p) => String(p.user_id) === String(ownerId));
+        const plName = pl ? (pl.name || '此歌單') : '此歌單';
+        showConfirmModal({
+          title: '🔖 確認移除收藏歌單',
+          message: `確定要將「${plName}」從你的已收藏分享歌單中移除嗎？`,
+          confirmText: '確認移除',
+          cancelText: '取消',
+          onConfirm: async () => {
+            try {
+              const res = await fetch(`/api/panel/user/playlist/saved/${encodeURIComponent(ownerId)}`, {
+                method: 'DELETE',
+              });
+              const data = await res.json();
+              if (res.ok && data.status === 'ok') {
+                personalSavedPlaylists = Array.isArray(data.saved_playlists) ? data.saved_playlists : [];
+                renderSavedPlaylistsList();
+                showToast(data.message || '已移除收藏歌單', 'success');
+              } else {
+                showToast(data.message || '移除失敗', 'error');
+              }
+            } catch (err) {
+              showToast('網路連線失敗', 'error');
+            }
+          },
+        });
       });
     });
   }
@@ -3684,6 +3704,11 @@
           if (inputQuery) inputQuery.value = '';
           renderPersonalPlaylistUI();
           showToast(data.message || '已成功加入歌單！', 'success');
+        } else if (data.status === 'warning') {
+          if (data.playlist) personalPlaylistData = data.playlist;
+          if (inputQuery) inputQuery.value = '';
+          renderPersonalPlaylistUI();
+          showToast(data.message || '已自動忽略重複歌曲', 'warning');
         } else {
           showToast(data.message || '加入歌單失敗', 'error');
         }

@@ -66,6 +66,7 @@ from cogs.database import (
     block_user,
     unblock_user,
     get_blocked_users,
+    are_tracks_duplicate,
     PLAYLIST_MAX_TRACKS,
     get_user_playlist,
     get_playlist_by_share_code,
@@ -2069,9 +2070,16 @@ def user_playlist_add_track_api():
             'query': query,
         }
 
-    updated_pl, added_count, _ = add_tracks_to_user_playlist(
+    updated_pl, added_count, dup_count, overflow_count = add_tracks_to_user_playlist(
         user_id, [track_dict], owner_name=_user_display_name(user)
     )
+    if dup_count > 0:
+        return jsonify({
+            'status': 'warning',
+            'message': f"歌單中已存在相同歌曲「{track_dict.get('title', query)}」，已自動忽略重複新增！",
+            'playlist': updated_pl or pl,
+            'duplicate': True,
+        })
     if added_count <= 0 or updated_pl is None:
         return jsonify({'status': 'error', 'message': f'歌單已滿（上限 {PLAYLIST_MAX_TRACKS} 首）'}), 400
 

@@ -1177,11 +1177,11 @@
                 <p>建立後即可直接在網頁上新增歌曲、拖曳或按鈕調整順序、切換公開狀態，或使用 Discord 指令 <code>/music_playlist_sync</code> 一鍵匯入播放佇列。</p>
               </div>
             </div>
-            <form id="form-create-personal-playlist" class="panel-form">
+            <form id="form-create-personal-playlist" class="panel-form" autocomplete="off">
               <div class="form-row-2">
                 <div class="form-group">
                   <label for="input-create-playlist-name">歌單名稱（最多 50 字）</label>
-                  <input type="text" id="input-create-playlist-name" class="form-control" maxlength="50" placeholder="例如：深夜放鬆精選、遊戲背景音樂" required />
+                  <input type="text" id="input-create-playlist-name" class="form-control" maxlength="50" placeholder="例如：深夜放鬆精選、遊戲背景音樂" autocomplete="off" required />
                 </div>
                 <div class="form-group">
                   <label for="select-create-playlist-public">歌單公開權限</label>
@@ -1203,11 +1203,11 @@
           <div id="personal-playlist-editor" style="display: none;">
             <!-- 基本設定與分享碼資訊卡 -->
             <div class="personal-playlist-card">
-              <div class="personal-meta-grid">
-                <form id="form-update-personal-playlist" class="personal-meta-form">
+              <form id="form-update-personal-playlist" class="personal-meta-form" autocomplete="off">
+                <div class="form-row-2">
                   <div class="form-group">
                     <label for="input-edit-playlist-name">✏️ 歌單名稱</label>
-                    <input type="text" id="input-edit-playlist-name" class="form-control" maxlength="50" required />
+                    <input type="text" id="input-edit-playlist-name" class="form-control" maxlength="50" autocomplete="off" required />
                   </div>
                   <div class="form-group">
                     <label for="select-edit-playlist-public">👁️ 公開權限設定</label>
@@ -1216,36 +1216,39 @@
                       <option value="1">🌐 公開歌單（同伺服器成員可於 /music_play 選單直接看到）</option>
                     </select>
                   </div>
-                  <div class="personal-meta-actions">
-                    <button type="submit" id="btn-save-playlist-meta" class="btn btn-save-setting">
-                      <span>💾 儲存歌單設定</span>
-                    </button>
-                    <button type="button" id="btn-delete-personal-playlist" class="btn danger">
-                      <span>🗑️ 刪除歌單</span>
-                    </button>
-                  </div>
-                </form>
+                </div>
 
-                <!-- 6 碼分享碼專區 -->
+                <!-- 6 碼分享碼專區：排列於公開權限設定下方 -->
                 <div class="personal-share-code-box">
-                  <div class="share-code-label-row">
-                    <span class="share-code-title">🔑 專屬 6 碼跨服分享碼</span>
-                    <span id="personal-playlist-vis-badge" class="perm-badge member">🔒 私人</span>
-                  </div>
-                  <div class="share-code-display-row">
-                    <code id="personal-share-code-value" class="share-code-pill">------</code>
-                    <button type="button" id="btn-copy-share-code" class="btn secondary btn-sm-pill" title="複製分享碼">
-                      <span>📋 複製</span>
-                    </button>
-                    <button type="button" id="btn-regen-share-code" class="btn secondary btn-sm-pill" title="重新產生分享碼（舊碼將立即失效）">
-                      <span>🔄 重新產生</span>
-                    </button>
+                  <div class="share-code-top-row">
+                    <div class="share-code-title-group">
+                      <span class="share-code-title">🔑 專屬 6 碼跨服分享碼</span>
+                      <span id="personal-playlist-vis-badge" class="perm-badge member">🔒 私人</span>
+                    </div>
+                    <div class="share-code-display-row">
+                      <code id="personal-share-code-value" class="share-code-pill">------</code>
+                      <button type="button" id="btn-copy-share-code" class="btn secondary btn-sm-pill" title="複製分享碼">
+                        <span>📋 複製</span>
+                      </button>
+                      <button type="button" id="btn-regen-share-code" class="btn secondary btn-sm-pill" title="重新產生分享碼（舊碼將立即失效）">
+                        <span>🔄 重新產生</span>
+                      </button>
+                    </div>
                   </div>
                   <p class="share-code-hint">
                     在任何伺服器的 <code>/music_play</code> 指令將此 6 碼填入 <code>playlist</code> 參數，即可跨服播放並自動為對方收藏歌單。重新產生後，舊分享碼與他人先前的收藏將立即失效。
                   </p>
                 </div>
-              </div>
+
+                <div class="personal-meta-actions">
+                  <button type="submit" id="btn-save-playlist-meta" class="btn btn-save-setting">
+                    <span>💾 儲存歌單設定</span>
+                  </button>
+                  <button type="button" id="btn-delete-personal-playlist" class="btn btn-clear-setting danger">
+                    <span>🗑️ 刪除歌單</span>
+                  </button>
+                </div>
+              </form>
             </div>
 
             <!-- 新增歌曲與曲目清單編輯區 -->
@@ -1259,12 +1262,15 @@
               </div>
 
               <!-- 新增歌曲表單 -->
-              <form id="form-add-playlist-track" class="personal-add-track-row">
+              <form id="form-add-playlist-track" class="personal-add-track-row" autocomplete="off">
                 <input
                   type="text"
                   id="input-add-playlist-track"
                   class="form-control"
                   placeholder="輸入歌曲名稱 / 關鍵字，或貼上 YouTube / SoundCloud / Spotify 網址..."
+                  autocomplete="off"
+                  autocapitalize="off"
+                  spellcheck="false"
                   required
                 />
                 <button type="submit" id="btn-add-playlist-track" class="btn btn-save-setting">
@@ -1279,6 +1285,9 @@
                   id="input-filter-playlist-tracks"
                   class="form-control"
                   placeholder="🔍 在歌單中篩選曲名或演出者..."
+                  autocomplete="off"
+                  autocapitalize="off"
+                  spellcheck="false"
                 />
               </div>
 
@@ -1300,13 +1309,16 @@
               </div>
             </div>
 
-            <form id="form-save-shared-playlist" class="personal-add-track-row" style="margin-top: 12px;">
+            <form id="form-save-shared-playlist" class="personal-add-track-row" style="margin-top: 12px;" autocomplete="off">
               <input
                 type="text"
                 id="input-save-share-code"
                 class="form-control"
                 maxlength="6"
                 placeholder="輸入他人的 6 碼英數分享碼（例如：A8K2M9）"
+                autocomplete="off"
+                autocapitalize="characters"
+                spellcheck="false"
                 required
               />
               <button type="submit" id="btn-save-share-code" class="btn secondary">
