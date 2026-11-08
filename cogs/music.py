@@ -104,6 +104,7 @@ from cogs.database import (
     save_music_settings as _save_music_settings,
     build_panel_link_button,
     build_panel_link_view,
+    get_track_artwork,
     PLAYLIST_MAX_TRACKS,
     are_tracks_duplicate,
     get_user_playlist,
@@ -251,14 +252,27 @@ def build_now_playing_container(
         is_shuffle = bool(getattr(player, "shuffle", False))
         mode_str = f"**{loop_label}**" + (" ｜ **🔀 隨機播放**" if is_shuffle else "")
 
-        header = ui.TextDisplay(
-            f"### {status_icon} {status_text}\n"
-            f"## {title_display}"
-        )
-        children.append(header)
+        # 3. 頂部區塊：狀態、標題、作者與循環狀態，並將封面縮圖置於右上角（Section accessory，小圖）
+        artwork_url = get_track_artwork(track)
+        top_lines = [
+            f"### {status_icon} {status_text}",
+            f"## {title_display}",
+            f"**👤 {author}**",
+            f"{mode_str}",
+        ]
+        top_text = "\n".join(top_lines)
+
+        if artwork_url:
+            top_section = ui.Section(
+                ui.TextDisplay(top_text),
+                accessory=ui.Thumbnail(artwork_url),
+            )
+        else:
+            top_section = ui.TextDisplay(top_text)
+        children.append(top_section)
         children.append(ui.Separator(visible=False, spacing=discord.SeparatorSpacing.small))
 
-        # 3. 中間區塊：作者、循環、進度條、音量條與封面縮圖（右側 accessory）
+        # 4. 中間區塊：播放進度條與音量條
         pos_ms = getattr(player, "position", 0)
         len_ms = getattr(track, "length", None)
         is_stream = bool(getattr(track, "is_stream", False))
@@ -270,21 +284,12 @@ def build_now_playing_container(
             vol = 100
         vol_str = build_volume_bar(vol, width=12)
 
-        # 作者與循環模式分行顯示，並適度加寬行距提升視覺呼吸感
         middle_lines = [
-            f"**👤 {author}**",
-            f"{mode_str}\n",
             f"{progress_str}\n",
             f"{vol_str}",
         ]
         middle_text = "\n".join(middle_lines)
-
-        artwork = getattr(track, "artwork", None)
-        if artwork:
-            middle_section = ui.Section(ui.TextDisplay(middle_text), accessory=ui.Thumbnail(str(artwork)))
-        else:
-            middle_section = ui.TextDisplay(middle_text)
-        children.append(middle_section)
+        children.append(ui.TextDisplay(middle_text))
         children.append(ui.Separator(visible=False, spacing=discord.SeparatorSpacing.small))
 
         # 4. 下一首預告與點播者/來源
@@ -368,7 +373,7 @@ def build_now_playing_embed(player: Any) -> discord.Embed:
     )
 
     # 封面縮圖（不快取圖片本體以節省 Render 512MB RAM）
-    artwork = getattr(track, "artwork", None)
+    artwork = get_track_artwork(track)
     if artwork:
         embed.set_thumbnail(url=str(artwork))
 
@@ -3350,7 +3355,7 @@ class Music(commands.Cog):
             color=color,
             timestamp=discord.utils.utcnow(),
         )
-        artwork = getattr(track, "artwork", None)
+        artwork = get_track_artwork(track)
         if artwork:
             embed.set_thumbnail(url=artwork)
         embed.add_field(name="👤 作者", value=getattr(track, "author", None) or "未知", inline=True)
@@ -4186,7 +4191,7 @@ class Music(commands.Cog):
         is_stream = bool(getattr(track, "is_stream", False))
         is_seekable = bool(getattr(track, "is_seekable", not is_stream))
         source = getattr(track, "source", None)
-        artwork = getattr(track, "artwork", None)
+        artwork = get_track_artwork(track)
         encoded = getattr(track, "encoded", None)
         query = fallback_query or uri or f"{title} {author}".strip()
         return {
@@ -4214,7 +4219,7 @@ class Music(commands.Cog):
         is_stream = bool(item.get("is_stream", False))
         is_seekable = bool(item.get("is_seekable", not is_stream))
         source = item.get("source") or "youtube"
-        artwork = item.get("artwork")
+        artwork = item.get("artwork") or item.get("artwork_url") or get_track_artwork(item)
         encoded = item.get("encoded")
         query = item.get("query") or uri or f"{title} {author}".strip()
 

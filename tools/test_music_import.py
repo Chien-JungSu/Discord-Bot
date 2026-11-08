@@ -948,6 +948,28 @@ async def test_session_lost_recovery():
     check(isinstance(sent_rem_embed, music_mod.discord.Embed), "/music_playlist_remove 送出之 embed 為 discord.Embed 實例")
     check(isinstance(sent_rem_view, music_mod.PlaylistRemoveConfirmView), "/music_playlist_remove 正確掛載 PlaylistRemoveConfirmView")
 
+    # 5. 測試封面縮圖解析與 Container 右上角排版 (build_now_playing_container)
+    from cogs.database import get_track_artwork
+    # (a) 驗證 YouTube URL / identifier 自動推導封面縮圖
+    t_yt = SimpleNamespace(title="Test YT", uri="https://www.youtube.com/watch?v=dQw4w9WgXcQ", identifier="dQw4w9WgXcQ", artwork=None)
+    art_yt = get_track_artwork(t_yt)
+    check(art_yt == "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg", "get_track_artwork: 成功從 YouTube 連結自動推導封面縮圖")
+
+    # (b) 驗證已有 artwork 者優先保留
+    t_sp = SimpleNamespace(title="Test SP", artwork="https://i.scdn.co/image/abc12345")
+    check(get_track_artwork(t_sp) == "https://i.scdn.co/image/abc12345", "get_track_artwork: 保留原生 artwork 網址")
+
+    # (c) 驗證 Container 將封面縮圖作為頂部 Section accessory 置於右上角 (小圖)
+    player_art = RecoverablePlayer()
+    player_art.current = t_yt
+    container = music_mod.build_now_playing_container(player_art)
+    top_item = container.children[0]
+    check(isinstance(top_item, music_mod.ui.Section), "build_now_playing_container: 頂部為 ui.Section 元件")
+    check(isinstance(getattr(top_item, "accessory", None), music_mod.ui.Thumbnail), "build_now_playing_container: 頂部 Section 具有 ui.Thumbnail accessory (右上角小圖)")
+    thumb_media = getattr(top_item.accessory, "media", None)
+    thumb_url = getattr(thumb_media, "url", None) if hasattr(thumb_media, "url") else str(thumb_media)
+    check(thumb_url == "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg", "build_now_playing_container: 縮圖網址正確對應自動推導之封面")
+
     # 清理測試歌單資料
     delete_user_playlist(uid_owner)
     delete_user_playlist(uid_listener)

@@ -67,6 +67,7 @@ from cogs.database import (
     unblock_user,
     get_blocked_users,
     are_tracks_duplicate,
+    get_track_artwork,
     PLAYLIST_MAX_TRACKS,
     get_user_playlist,
     get_playlist_by_share_code,
@@ -2065,7 +2066,7 @@ def user_playlist_add_track_api():
             'is_stream': False,
             'is_seekable': True,
             'source': 'youtube',
-            'artwork': None,
+            'artwork': get_track_artwork({'uri': query, 'source': 'youtube'}) if is_url else None,
             'encoded': None,
             'query': query,
         }

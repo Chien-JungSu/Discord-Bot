@@ -3083,10 +3083,58 @@ def _normalize_playlist_track(raw: dict[str, Any]) -> dict[str, Any]:
         "encoded": str(raw.get("encoded") or "").strip() or None,
         "identifier": str(raw.get("identifier") or "").strip() or None,
         "source": str(raw.get("source") or "youtube").strip() or "youtube",
-        "artwork_url": str(raw.get("artwork_url") or raw.get("artwork") or "").strip() or None,
+        "artwork_url": get_track_artwork(raw),
         "is_stream": bool(raw.get("is_stream", False)),
         "is_seekable": bool(raw.get("is_seekable", True)),
     }
+
+
+def get_track_artwork(track: Any) -> Optional[str]:
+    """從曲目物件或曲目 dict 中提取封面縮圖網址，若缺少則嘗試自動推導（如 YouTube 高畫質封面）。"""
+    if track is None:
+        return None
+
+    def _get_val(obj: Any, key: str) -> Any:
+        if isinstance(obj, dict):
+            return obj.get(key)
+        return getattr(obj, key, None)
+
+    # 1. 優先讀取現有 artwork 欄位
+    for attr in ("artwork", "artwork_url", "artworkUrl", "thumbnail", "image"):
+        val = _get_val(track, attr)
+        if val and isinstance(val, str) and val.strip().startswith(("http://", "https://")):
+            return val.strip()
+
+    # 檢查內部 info dict (Lavalink / wavelink 結構)
+    info = _get_val(track, "info")
+    if isinstance(info, dict):
+        for attr in ("artworkUrl", "artwork", "thumbnail"):
+            val = info.get(attr)
+            if val and isinstance(val, str) and val.strip().startswith(("http://", "https://")):
+                return val.strip()
+
+    # 2. 若為 YouTube 來源或無封面，嘗試從 identifier 或 uri 解析 YouTube 影片 ID
+    uri = str(_get_val(track, "uri") or "").strip()
+    identifier = str(_get_val(track, "identifier") or "").strip()
+    source = str(_get_val(track, "source") or "").lower()
+
+    yt_id = None
+    if uri:
+        import re
+        m = re.search(r'(?:v=|youtu\.be/|shorts/|embed/|live/)([a-zA-Z0-9_-]{11})', uri)
+        if m:
+            yt_id = m.group(1)
+
+    if not yt_id and identifier and len(identifier) == 11:
+        import re
+        if re.match(r'^[a-zA-Z0-9_-]{11}$', identifier):
+            if source in ("youtube", "ytmsearch", "ytsearch", "unknown", "") or "youtube" in uri.lower() or "youtu" in uri.lower():
+                yt_id = identifier
+
+    if yt_id:
+        return f"https://i.ytimg.com/vi/{yt_id}/hqdefault.jpg"
+
+    return None
 
 
 def _canonicalize_track_url(uri: Any, identifier: Any = None) -> Optional[str]:
