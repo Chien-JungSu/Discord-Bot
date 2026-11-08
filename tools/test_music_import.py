@@ -912,6 +912,18 @@ async def test_session_lost_recovery():
     sent_view = view_call_kwargs.get("view")
     check(isinstance(sent_embed, music_mod.discord.Embed), "/music_playlist 送出之 embed 為 discord.Embed 實例（非 tuple）")
     check(isinstance(sent_view, music_mod.PlaylistPaginationView), "/music_playlist 正確掛載 PlaylistPaginationView")
+    panel_btn = next((b for b in sent_view.children if "控制面板" in getattr(b, "label", "")), None)
+    check(panel_btn is not None and panel_btn.style == music_mod.discord.ButtonStyle.link and "#personal" in panel_btn.url, "/music_playlist 回覆包含指向個人設定的「前往控制面板」按鈕")
+
+    # 2b. 呼叫 /music_playlist（用戶無歌單情況）
+    it_noplist = make_interaction()
+    it_noplist.user = SimpleNamespace(id=999999999, display_name="無歌單用戶")
+    await cog.music_playlist_view.callback(cog, it_noplist)
+    check(it_noplist.response.send_message.called, "/music_playlist 無歌單時正常發送提示訊息")
+    noplist_kwargs = it_noplist.response.send_message.call_args.kwargs
+    noplist_view = noplist_kwargs.get("view")
+    noplist_btn = next((b for b in noplist_view.children if "控制面板" in getattr(b, "label", "")), None) if noplist_view else None
+    check(noplist_btn is not None and noplist_btn.style == music_mod.discord.ButtonStyle.link and "#personal" in noplist_btn.url, "/music_playlist 無歌單提示訊息下方包含「前往控制面板」按鈕")
 
     # 3. 呼叫 /music_playlist_edit 指令回呼驗證
     it_edit = make_interaction()

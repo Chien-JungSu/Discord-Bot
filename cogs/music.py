@@ -102,6 +102,7 @@ LOOP_NEXT = {"off": "single", "single": "all", "all": "off"}
 from cogs.database import (
     load_music_settings as _load_music_settings,
     save_music_settings as _save_music_settings,
+    build_panel_link_button,
     build_panel_link_view,
     PLAYLIST_MAX_TRACKS,
     are_tracks_duplicate,
@@ -1253,6 +1254,7 @@ class PlaylistPaginationView(ui.View):
         user_id: int | None = None,
         playlist_owner_id: str | int | None = None,
         page: int = 0,
+        guild_id: int | str | None = None,
         timeout: float = 180.0,
         **kwargs,
     ):
@@ -1282,6 +1284,12 @@ class PlaylistPaginationView(ui.View):
         if pos:
             page = pos.pop(0)
         self.page = int(page)
+
+        if guild_id is None:
+            guild_id = kwargs.get("guild_id")
+        if guild_id is None and pos:
+            guild_id = pos.pop(0)
+        self.guild_id = guild_id
 
         self._sync_buttons()
 
@@ -1316,6 +1324,21 @@ class PlaylistPaginationView(ui.View):
         self.add_item(prev_btn)
         self.add_item(page_indicator)
         self.add_item(next_btn)
+
+        try:
+            panel_btn = build_panel_link_button(
+                getattr(self, "guild_id", None),
+                personal=True,
+            )
+        except TypeError:
+            try:
+                panel_btn = build_panel_link_button(
+                    getattr(self, "guild_id", None),
+                )
+            except Exception:
+                panel_btn = None
+        if panel_btn is not None:
+            self.add_item(panel_btn)
         return embed, safe_page, total_pages
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -1328,7 +1351,15 @@ class PlaylistPaginationView(ui.View):
         self.page = max(0, self.page - 1)
         embed, _, _ = self._sync_buttons()
         if embed is None:
-            await interaction.response.edit_message(content="ℹ️ 此歌單已被刪除。", embed=None, view=None)
+            try:
+                del_view = build_panel_link_view(getattr(self, "guild_id", None), personal=True)
+            except TypeError:
+                del_view = build_panel_link_view(getattr(self, "guild_id", None))
+            await interaction.response.edit_message(
+                content="ℹ️ 此歌單已被刪除。",
+                embed=None,
+                view=del_view,
+            )
             return
         await interaction.response.edit_message(embed=embed, view=self)
 
@@ -1336,7 +1367,15 @@ class PlaylistPaginationView(ui.View):
         self.page += 1
         embed, _, _ = self._sync_buttons()
         if embed is None:
-            await interaction.response.edit_message(content="ℹ️ 此歌單已被刪除。", embed=None, view=None)
+            try:
+                del_view = build_panel_link_view(getattr(self, "guild_id", None), personal=True)
+            except TypeError:
+                del_view = build_panel_link_view(getattr(self, "guild_id", None))
+            await interaction.response.edit_message(
+                content="ℹ️ 此歌單已被刪除。",
+                embed=None,
+                view=del_view,
+            )
             return
         await interaction.response.edit_message(embed=embed, view=self)
 
@@ -5814,15 +5853,25 @@ class Music(commands.Cog):
     async def music_playlist_view(self, interaction: discord.Interaction):
         pl = get_user_playlist(interaction.user.id)
         if pl is None:
+            try:
+                no_pl_view = build_panel_link_view(interaction.guild_id, personal=True)
+            except TypeError:
+                no_pl_view = build_panel_link_view(interaction.guild_id)
             await interaction.response.send_message(
                 "ℹ️ 你目前還沒有建立個人歌單！\n"
                 "• 輸入 `/music_playlist_create` 立即建立歌單\n"
                 "• 或前往網頁控制面板右上角頭像選單 →「**個人設定**」管理歌單",
+                view=no_pl_view,
                 ephemeral=True,
             )
             return
 
-        view = PlaylistPaginationView(interaction.user.id, playlist_owner_id=interaction.user.id, page=0)
+        view = PlaylistPaginationView(
+            interaction.user.id,
+            playlist_owner_id=interaction.user.id,
+            page=0,
+            guild_id=interaction.guild_id,
+        )
         embed, _, _ = build_playlist_page_embed(pl, page=0)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
         try:
