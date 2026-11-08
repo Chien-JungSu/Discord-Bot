@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import os
 import re
 import time
@@ -163,6 +164,16 @@ def format_markdown_tables(text: str) -> str:
 
 
 HORIZONTAL_RULE_PATTERN = re.compile(r'^[ \t]*([-_*─])(?:[ \t]*\1){2,}[ \t]*$')
+# AI 回覆底部統計字串特徵：例如 `0.00/C | I 33C/0.00 | O 120C/0.00 | TC 0.00 | Pay Nicko | ...`
+AI_FOOTER_PATTERN = re.compile(
+    r'\|\s*I\s+\d+C/[^|\n]+\|\s*O\s+\d+C/[^|\n]+\|\s*TC\s+[^|\n]+\|\s*Pay\s+'
+)
+# 限時訊息底部標註特徵：`-# 由 {username} 傳送 • <t:...:R> 自動刪除`
+TEMP_MESSAGE_FOOTER_PATTERN = re.compile(
+    r'(?:^|\n)-#\s*由\s+.+\s+傳送\s*•\s*<t:\d+:R>\s*自動刪除\s*$'
+)
+# AI 渲染之表格附件檔名特徵：`table_1.png`
+RENDERED_TABLE_FILENAME_PATTERN = re.compile(r'^table_\d+\.png$', re.IGNORECASE)
 
 
 def split_text_by_markdown_separators(text: str) -> List[str]:
@@ -396,7 +407,97 @@ class AI(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self._settings_cache: Dict[str, Dict[str, Any]] = {}
+        # 追蹤本模組發送過的 AI 回覆訊息 ID，用於精準判定用戶回覆的是否為 AI 訊息
+        self._ai_message_ids: collections.deque[int] = collections.deque(maxlen=2000)
         self.reload_settings()
+
+    def _record_ai_message(self, message_id: Optional[int]) -> None:
+        """記錄由 AI 模組產生的訊息 ID。"""
+        if message_id:
+            self._ai_message_ids.append(int(message_id))
+
+    def _is_known_non_ai_message_id(self, message_id: Optional[int]) -> bool:
+        """檢查指定訊息 ID 是否屬於已知的一般非 AI 訊息（如自動回覆訊息、限時訊息）。"""
+        if not message_id:
+            return False
+        mid = int(message_id)
+        temp_cog = self.bot.get_cog("TempMessage")
+        if temp_cog is not None:
+            if hasattr(temp_cog, "is_temp_message") and temp_cog.is_temp_message(mid):
+                return True
+            if mid in getattr(temp_cog, "_tasks", {}):
+                return True
+        auto_reply_cog = self.bot.get_cog("AutoReply")
+        if auto_reply_cog is not None:
+            if hasattr(auto_reply_cog, "is_auto_reply_message") and auto_reply_cog.is_auto_reply_message(mid):
+                return True
+        return False
+
+    def _is_ai_generated_message(self, msg: discord.Message) -> bool:
+        """判定機器人發送的訊息是否為 AI 產生的訊息（排除自動回覆訊息、限時訊息與一般指令訊息）。"""
+        if not msg or not self.bot.user or msg.author.id != self.bot.user.id:
+            return False
+
+        # 1. 明確排除：限時訊息 (temp_message) 與自動回覆訊息 (auto_reply)
+        if self._is_known_non_ai_message_id(msg.id):
+            return False
+        if msg.content and TEMP_MESSAGE_FOOTER_PATTERN.search(msg.content):
+            return False
+        temp_cog = self.bot.get_cog("TempMessage")
+        if temp_cog is not None and hasattr(temp_cog, "is_temp_message") and temp_cog.is_temp_message(msg):
+            return False
+
+        # 2. 明確排除：非 /ai 斜線指令或右鍵選單所產生的互動回覆
+        interaction_obj = getattr(msg, "interaction", None)
+        interaction_name = getattr(interaction_obj, "name", None)
+        if interaction_name and interaction_name != "ai":
+            return False
+
+        # 3. 記憶體追蹤命中：確認為本模組發送之 AI 訊息
+        if msg.id in self._ai_message_ids:
+            return True
+
+        # 4. 結構與內容特徵判定（相容機器人重啟前的歷史 AI 訊息）：
+        # (a) 檢查 Components V2 容器 (ui.Container)
+        if msg.components:
+            has_container = False
+            has_interactive_controls = False
+            for comp in msg.components:
+                comp_type = getattr(comp, "type", None)
+                if comp_type == discord.ComponentType.action_row:
+                    has_interactive_controls = True
+                elif comp_type == discord.ComponentType.container or isinstance(comp, discord.components.Container):
+                    has_container = True
+                    for child in getattr(comp, "children", []):
+                        child_type = getattr(child, "type", None)
+                        if child_type == discord.ComponentType.action_row:
+                            has_interactive_controls = True
+                        elif child_type == discord.ComponentType.text_display or isinstance(child, discord.components.TextDisplay):
+                            text_val = getattr(child, "content", "") or ""
+                            if AI_FOOTER_PATTERN.search(text_val):
+                                return True
+                        elif child_type == discord.ComponentType.section or isinstance(child, discord.components.SectionComponent):
+                            for sec_child in getattr(child, "children", []):
+                                sec_text = getattr(sec_child, "content", "") or ""
+                                if AI_FOOTER_PATTERN.search(sec_text):
+                                    return True
+            # AI 產生的 Components V2 Container 不包含 ActionRow 互動按鈕（排除音樂控制面板 MusicControlView）
+            if has_container and not has_interactive_controls:
+                return True
+
+        # (b) 檢查傳統 Embed 降級格式（含 AI 計費統計 Footer）
+        if msg.embeds:
+            for emb in msg.embeds:
+                desc = emb.description or ""
+                if AI_FOOTER_PATTERN.search(desc):
+                    return True
+
+        # (c) 檢查是否為 @機器人 的 AI 引導問候訊息
+        if msg.content and "使用 `/ai` 指令開始智慧對話" in msg.content:
+            return True
+
+        # 其餘一般訊息（如自動回覆訊息、歡迎訊息、系統通知、其他指令輸出等）皆非 AI 訊息
+        return False
 
     def reload_settings(self) -> None:
         """重新載入所有伺服器的 AI 設定至記憶體快取。"""
@@ -634,6 +735,7 @@ class AI(commands.Cog):
 
             # 優先嘗試 Components V2 LayoutView
             sent_v2 = False
+            sent_msg = None
             try:
                 layout_view = self._build_ai_components_v2_view(
                     clean_response=chunk,
@@ -642,20 +744,20 @@ class AI(commands.Cog):
                 )
                 if is_interaction:
                     if cur_files:
-                        await target.followup.send(view=layout_view, files=cur_files)
+                        sent_msg = await target.followup.send(view=layout_view, files=cur_files, wait=True)
                     else:
-                        await target.followup.send(view=layout_view)
+                        sent_msg = await target.followup.send(view=layout_view, wait=True)
                 else:
                     if is_first:
                         if cur_files:
-                            await target.reply(view=layout_view, files=cur_files, mention_author=False)
+                            sent_msg = await target.reply(view=layout_view, files=cur_files, mention_author=False)
                         else:
-                            await target.reply(view=layout_view, mention_author=False)
+                            sent_msg = await target.reply(view=layout_view, mention_author=False)
                     else:
                         if cur_files:
-                            await target.channel.send(view=layout_view, files=cur_files)
+                            sent_msg = await target.channel.send(view=layout_view, files=cur_files)
                         else:
-                            await target.channel.send(view=layout_view)
+                            sent_msg = await target.channel.send(view=layout_view)
                 sent_v2 = True
             except Exception as v2_err:
                 print(f"⚠️ Components V2 渲染例外，降級為傳統 Embed 發送: {v2_err}")
@@ -675,20 +777,23 @@ class AI(commands.Cog):
                 )
                 if is_interaction:
                     if cur_files:
-                        await target.followup.send(embed=fallback_embed, files=cur_files)
+                        sent_msg = await target.followup.send(embed=fallback_embed, files=cur_files, wait=True)
                     else:
-                        await target.followup.send(embed=fallback_embed)
+                        sent_msg = await target.followup.send(embed=fallback_embed, wait=True)
                 else:
                     if is_first:
                         if cur_files:
-                            await target.reply(embed=fallback_embed, files=cur_files, mention_author=False)
+                            sent_msg = await target.reply(embed=fallback_embed, files=cur_files, mention_author=False)
                         else:
-                            await target.reply(embed=fallback_embed, mention_author=False)
+                            sent_msg = await target.reply(embed=fallback_embed, mention_author=False)
                     else:
                         if cur_files:
-                            await target.channel.send(embed=fallback_embed, files=cur_files)
+                            sent_msg = await target.channel.send(embed=fallback_embed, files=cur_files)
                         else:
-                            await target.channel.send(embed=fallback_embed)
+                            sent_msg = await target.channel.send(embed=fallback_embed)
+
+            if sent_msg is not None:
+                self._record_ai_message(getattr(sent_msg, "id", None))
 
     # ==========================================================================
     # /ai 斜線指令 (支援文字與圖片附件)
@@ -1182,34 +1287,46 @@ class AI(commands.Cog):
             return
 
         is_dm = isinstance(message.channel, discord.DMChannel)
-        is_mentioned = bot_user in message.mentions
+        # 檢查訊息內文是否明確輸入 @機器人 標註（區別於 Discord 回覆訊息時自動附加的被回覆者 mention）
+        is_explicitly_mentioned = bool(re.search(rf'<@!?{bot_user.id}>', message.content or ''))
+        is_mentioned = is_explicitly_mentioned or (bot_user in message.mentions and message.reference is None)
         is_reply_to_bot = False
         ref_msg = None
 
         if message.reference and message.reference.message_id:
+            ref_msg_id = message.reference.message_id
             resolved = message.reference.resolved
             if isinstance(resolved, discord.Message):
                 ref_msg = resolved
             elif not resolved or not isinstance(resolved, discord.DeletedReferencedMessage):
                 try:
-                    ref_msg = await message.channel.fetch_message(message.reference.message_id)
+                    ref_msg = await message.channel.fetch_message(ref_msg_id)
                 except Exception:
                     ref_msg = None
+
             if ref_msg and ref_msg.author.id == bot_user.id:
+                # 先判定用戶回覆的是 AI 產生的訊息還是一般訊息（如自動回覆訊息、限時訊息等）
+                # 若非 AI 訊息則無需呼叫 AI 的 API 進行回覆
+                if not self._is_ai_generated_message(ref_msg):
+                    return
                 is_reply_to_bot = True
+            elif ref_msg is None:
+                # 若被回覆的原訊息已被刪除（例如剛到期的限時訊息），檢查 ID 是否屬於已知的非 AI 訊息或 AI 訊息
+                if self._is_known_non_ai_message_id(ref_msg_id):
+                    return
+                if ref_msg_id in self._ai_message_ids:
+                    is_reply_to_bot = True
 
         dedicated_channel_id = cfg.get("channel_id")
         is_in_dedicated_channel = dedicated_channel_id and (message.channel.id == dedicated_channel_id)
 
-        # 僅在提及機器人、回覆機器人、DM 或在專屬 AI 頻道時觸發
+        # 僅在提及機器人、回覆 AI 訊息、DM 或在專屬 AI 頻道時觸發
         should_respond = is_mentioned or is_reply_to_bot or is_dm or is_in_dedicated_channel
         if not should_respond:
             return
 
         # 濾除 @機器人 標註後的實際文字
-        clean_content = message.content
-        if is_mentioned:
-            clean_content = re.sub(rf'<@!?{bot_user.id}>', '', clean_content).strip()
+        clean_content = re.sub(rf'<@!?{bot_user.id}>', '', message.content or '').strip()
 
         # 檢查是否有圖片附件 (優先使用當前訊息的附件)
         img_url = None
@@ -1222,10 +1339,12 @@ class AI(commands.Cog):
 
         # 若當前訊息未附帶圖片，但用戶正在回覆某一則訊息，自動抓取被回覆訊息中帶有的圖片
         if not img_url and ref_msg:
-            # 1. 優先檢查被回覆訊息的附件
+            # 1. 優先檢查被回覆訊息的附件（略過 AI 自身渲染產生的 table_*.png 表格圖片）
             for att in ref_msg.attachments:
                 ct = att.content_type or ""
                 fn = att.filename.lower()
+                if ref_msg.author.id == bot_user.id and RENDERED_TABLE_FILENAME_PATTERN.match(fn):
+                    continue
                 if ct.startswith("image/") or any(fn.endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp", ".gif"]):
                     img_url = att.url
                     break
@@ -1247,7 +1366,8 @@ class AI(commands.Cog):
                 "提示：使用 `/ai_provider` 可即時檢視 Gemini、NVIDIA、Mistral 等免費 AI 引擎的在線狀態。"
             )
             try:
-                await message.reply(greeting, mention_author=False)
+                sent_greeting = await message.reply(greeting, mention_author=False)
+                self._record_ai_message(getattr(sent_greeting, "id", None))
             except Exception:
                 pass
             return

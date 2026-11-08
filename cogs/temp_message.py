@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import datetime
 import importlib
+import re
 import sys
 import time
 import traceback
@@ -43,6 +45,7 @@ DURATION_CHOICES: list[app_commands.Choice[int]] = [
 DEFAULT_FILESIZE_LIMIT = 10 * 1024 * 1024  # 未加成伺服器 / 私訊預設 10 MiB
 SUPPORTED_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")
 SELECT_IDLE_TIMEOUT = 120.0  # 右鍵選單下拉選單閒置逾時秒數
+TEMP_MESSAGE_FOOTER_RE = re.compile(r"(?:^|\n)-#\s*由\s+.+\s+傳送\s*•\s*<t:\d+:R>\s*自動刪除\s*$")
 
 
 def _format_size(num_bytes: int) -> str:
@@ -332,6 +335,7 @@ class TempMessage(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self._tasks: dict[int, asyncio.Task] = {}
+        self._known_temp_message_ids: collections.deque[int] = collections.deque(maxlen=2000)
 
         # 註冊右鍵訊息選單：限時訊息
         self.ctx_menu = app_commands.ContextMenu(
@@ -339,6 +343,18 @@ class TempMessage(commands.Cog):
             callback=self.temp_message_context,
         )
         self.bot.tree.add_command(self.ctx_menu)
+
+    def is_temp_message(self, msg_or_id: discord.Message | int | None) -> bool:
+        """檢查指定訊息物件或訊息 ID 是否為限時訊息。"""
+        if msg_or_id is None:
+            return False
+        if isinstance(msg_or_id, int):
+            return msg_or_id in self._tasks or msg_or_id in self._known_temp_message_ids
+        msg_id = getattr(msg_or_id, "id", None)
+        if msg_id and (int(msg_id) in self._tasks or int(msg_id) in self._known_temp_message_ids):
+            return True
+        content = getattr(msg_or_id, "content", None) or ""
+        return bool(content and TEMP_MESSAGE_FOOTER_RE.search(content))
 
     async def cog_load(self):
         """模組載入時從資料庫恢復所有尚未到期的限時訊息排程。"""
@@ -390,6 +406,7 @@ class TempMessage(commands.Cog):
         self._spawn_deletion_task(message_id, channel_id, expire_at)
 
     def _spawn_deletion_task(self, message_id: int, channel_id: int, expire_at: float) -> None:
+        self._known_temp_message_ids.append(int(message_id))
         existing = self._tasks.pop(message_id, None)
         if existing and not existing.done():
             existing.cancel()

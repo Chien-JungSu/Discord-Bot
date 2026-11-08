@@ -1,3 +1,4 @@
+import collections
 import os
 import random
 import re
@@ -977,6 +978,12 @@ class AutoReply(commands.Cog):
         self.settings: dict = _load_auto_reply_settings()
         # key = f"{guild_id}:{channel_id}:{rule_id}:{user_id}" → 最近一次回覆的 monotonic 時間
         self._reply_cooldowns: dict = {}
+        # 記錄機器人發送過的自動回覆訊息 ID，供 AI 模組判定非 AI 訊息使用
+        self._sent_auto_reply_ids: collections.deque[int] = collections.deque(maxlen=2000)
+
+    def is_auto_reply_message(self, message_id: Optional[int]) -> bool:
+        """檢查指定訊息 ID 是否為自動回覆模組所發送的訊息。"""
+        return bool(message_id and int(message_id) in self._sent_auto_reply_ids)
 
     def reload_settings(self):
         """從資料庫重新載入自動回覆設定（供網頁控制面板變更後同步記憶體狀態）。"""
@@ -1404,11 +1411,13 @@ class AutoReply(commands.Cog):
             reply_text = random.choice(replies)
 
             try:
-                await message.channel.send(
+                sent_msg = await message.channel.send(
                     reply_text,
                     reference=message,  # 引用觸發訊息，看得出來是回覆哪一句
                     allowed_mentions=discord.AllowedMentions.none(),  # 自動回覆一律不 ping 人
                 )
+                if sent_msg and getattr(sent_msg, 'id', None):
+                    self._sent_auto_reply_ids.append(int(sent_msg.id))
             except discord.Forbidden:
                 print(f'❌ auto_reply：機器人沒有在 #{message.channel}（{message.guild.name}）發言的權限。')
                 return
