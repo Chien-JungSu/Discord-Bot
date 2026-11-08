@@ -29,6 +29,8 @@
   const viewServerSettings = document.getElementById('view-server-settings');
   const btnBackToServers = document.getElementById('btn-back-to-servers');
   const btnDropdownOwner = document.getElementById('btn-dropdown-owner');
+  const btnDropdownPersonal = document.getElementById('btn-dropdown-personal');
+  const btnEmptyOpenPersonal = document.getElementById('btn-empty-open-personal');
 
   const modalConfirm = document.getElementById('modal-confirm-clear');
   const modalConfirmTitle = document.getElementById('modal-confirm-title');
@@ -205,8 +207,11 @@
     const fOwnerEcon = document.getElementById('form-owner-economy');
 
     const isOwnerMode = viewServerSettings.classList.contains('owner-mode');
+    const isPersonalMode = viewServerSettings.classList.contains('personal-mode');
     let dirty = false;
-    if (isOwnerMode) {
+    if (isPersonalMode) {
+      dirty = false;
+    } else if (isOwnerMode) {
       const fBotDef = document.getElementById('form-owner-bot-defaults');
       dirty = isFormDirty(fOwnerEcon, savedFormState.ownerEconomy) ||
               isFormDirty(fBotDef, savedFormState.ownerBotDefaults);
@@ -224,6 +229,7 @@
     if (viewServerSettings) {
       viewServerSettings.style.display = 'none';
       viewServerSettings.classList.remove('owner-mode');
+      viewServerSettings.classList.remove('personal-mode');
     }
     if (viewServerSelection) viewServerSelection.style.display = 'block';
     currentGuildId = null;
@@ -240,10 +246,21 @@
     btnBackToServers.addEventListener('click', returnToServerSelection);
   }
 
+  function closeTopbarUserDropdown() {
+    const userDropdown = document.getElementById('topbar-user-dropdown');
+    const userBtn = document.getElementById('topbar-user-btn');
+    if (userDropdown) userDropdown.classList.remove('is-open');
+    if (userBtn) {
+      userBtn.classList.remove('is-active');
+      userBtn.setAttribute('aria-expanded', 'false');
+    }
+  }
+
   function openSettingsViewForOwner() {
     if (viewServerSelection) viewServerSelection.style.display = 'none';
     if (viewServerSettings) {
       viewServerSettings.style.display = 'block';
+      viewServerSettings.classList.remove('personal-mode');
       viewServerSettings.classList.add('owner-mode');
     }
     if (botInviteBanner) botInviteBanner.style.display = 'none';
@@ -255,16 +272,40 @@
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
+  function openSettingsViewForPersonal() {
+    if (viewServerSelection) viewServerSelection.style.display = 'none';
+    if (viewServerSettings) {
+      viewServerSettings.style.display = 'block';
+      viewServerSettings.classList.remove('owner-mode');
+      viewServerSettings.classList.add('personal-mode');
+    }
+    if (botInviteBanner) botInviteBanner.style.display = 'none';
+
+    if (activeServerDisplay) activeServerDisplay.textContent = '🎵 個人設定 (歌單管理)';
+    if (activeServerIdDisplay) activeServerIdDisplay.textContent = '個人專屬設定中心';
+
+    history.replaceState(null, '', `${window.location.pathname}#personal`);
+    switchTab('tab-personal');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
   if (btnDropdownOwner) {
     btnDropdownOwner.addEventListener('click', () => {
-      const userDropdown = document.getElementById('topbar-user-dropdown');
-      const userBtn = document.getElementById('topbar-user-btn');
-      if (userDropdown) userDropdown.classList.remove('is-open');
-      if (userBtn) {
-        userBtn.classList.remove('is-active');
-        userBtn.setAttribute('aria-expanded', 'false');
-      }
+      closeTopbarUserDropdown();
       openSettingsViewForOwner();
+    });
+  }
+
+  if (btnDropdownPersonal) {
+    btnDropdownPersonal.addEventListener('click', () => {
+      closeTopbarUserDropdown();
+      openSettingsViewForPersonal();
+    });
+  }
+
+  if (btnEmptyOpenPersonal) {
+    btnEmptyOpenPersonal.addEventListener('click', () => {
+      openSettingsViewForPersonal();
     });
   }
 
@@ -293,6 +334,8 @@
       loadOwnerApiQuota();
       loadOwnerAiGuilds();
       loadOwnerBotDefaults();
+    } else if (tabId === 'tab-personal') {
+      loadPersonalPlaylistData();
     }
     checkUnsavedChanges();
   }
@@ -331,6 +374,7 @@
     if (viewServerSettings) {
       viewServerSettings.style.display = 'block';
       viewServerSettings.classList.remove('owner-mode');
+      viewServerSettings.classList.remove('personal-mode');
     }
 
     // 載入該伺服器的即時設定與頻道清單
@@ -3156,12 +3200,549 @@
     });
   }
 
+  // =========================================================================
+  // 個人設定 — 個人音樂歌單管理 (Personal Playlist Settings)
+  // =========================================================================
+  let personalPlaylistData = null;
+  let personalSavedPlaylists = [];
+  let personalMaxTracks = 100;
+  let personalDragFromIdx = null;
+
+  function formatDurationMs(ms) {
+    const val = Number(ms || 0);
+    if (!val || val < 0) return '待解析';
+    if (val >= 86400000) return '🔴 直播';
+    const totalSec = Math.floor(val / 1000);
+    const hrs = Math.floor(totalSec / 3600);
+    const mins = Math.floor((totalSec % 3600) / 60);
+    const secs = totalSec % 60;
+    if (hrs > 0) {
+      return `${hrs}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    }
+    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  }
+
+  function escapeHtmlText(str) {
+    return String(str ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  async function loadPersonalPlaylistData() {
+    try {
+      const res = await fetch('/api/panel/user/playlist');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.status === 'ok') {
+        personalPlaylistData = data.playlist || null;
+        personalSavedPlaylists = Array.isArray(data.saved_playlists) ? data.saved_playlists : [];
+        personalMaxTracks = Number(data.max_tracks || 100);
+        renderPersonalPlaylistUI();
+      }
+    } catch (err) {
+      console.error('載入個人歌單資料失敗:', err);
+    }
+  }
+
+  function renderPersonalPlaylistUI() {
+    const emptyBox = document.getElementById('personal-playlist-empty');
+    const editorBox = document.getElementById('personal-playlist-editor');
+    const inputName = document.getElementById('input-edit-playlist-name');
+    const selectPublic = document.getElementById('select-edit-playlist-public');
+    const shareCodeEl = document.getElementById('personal-share-code-value');
+    const visBadge = document.getElementById('personal-playlist-vis-badge');
+    const countBadge = document.getElementById('personal-track-count-badge');
+
+    if (!personalPlaylistData) {
+      if (emptyBox) emptyBox.style.display = 'block';
+      if (editorBox) editorBox.style.display = 'none';
+    } else {
+      if (emptyBox) emptyBox.style.display = 'none';
+      if (editorBox) editorBox.style.display = 'block';
+
+      if (inputName) inputName.value = personalPlaylistData.name || '';
+      if (selectPublic) selectPublic.value = personalPlaylistData.is_public ? '1' : '0';
+      if (shareCodeEl) shareCodeEl.textContent = personalPlaylistData.share_code || '------';
+      if (visBadge) {
+        if (personalPlaylistData.is_public) {
+          visBadge.textContent = '🌐 公開歌單';
+          visBadge.className = 'perm-badge member';
+        } else {
+          visBadge.textContent = '🔒 私人歌單';
+          visBadge.className = 'perm-badge admin';
+        }
+      }
+      const tracks = Array.isArray(personalPlaylistData.tracks) ? personalPlaylistData.tracks : [];
+      if (countBadge) {
+        countBadge.textContent = `${tracks.length} / ${personalMaxTracks} 首`;
+      }
+      renderPersonalTracksList();
+    }
+
+    renderSavedPlaylistsList();
+  }
+
+  function renderPersonalTracksList() {
+    const listEl = document.getElementById('personal-tracks-list');
+    const filterInput = document.getElementById('input-filter-playlist-tracks');
+    if (!listEl) return;
+
+    const tracks = (personalPlaylistData && Array.isArray(personalPlaylistData.tracks))
+      ? personalPlaylistData.tracks
+      : [];
+
+    if (tracks.length === 0) {
+      listEl.innerHTML = '<div class="empty-state">目前歌單內還沒有歌曲，快從上方搜尋欄新增第一首歌吧！</div>';
+      return;
+    }
+
+    const kw = (filterInput ? filterInput.value : '').trim().toLowerCase();
+    const rowsHtml = [];
+
+    tracks.forEach((t, idx) => {
+      const title = String(t.title || '未知曲目');
+      const author = String(t.author || '未知演出者');
+      if (kw && !title.toLowerCase().includes(kw) && !author.toLowerCase().includes(kw)) {
+        return;
+      }
+      const uri = t.uri ? String(t.uri) : '';
+      const dur = t.is_stream ? '🔴 直播' : formatDurationMs(t.length);
+      const titleHtml = uri
+        ? `<a href="${escapeHtmlText(uri)}" target="_blank" rel="noreferrer" class="playlist-track-link">${escapeHtmlText(title)}</a>`
+        : `<span class="playlist-track-title-text">${escapeHtmlText(title)}</span>`;
+
+      rowsHtml.push(`
+        <div class="personal-track-row" draggable="true" data-track-idx="${idx}">
+          <div class="personal-track-left">
+            <span class="personal-track-drag-handle" title="拖曳調整順序">☰</span>
+            <span class="personal-track-index">#${idx + 1}</span>
+            <div class="personal-track-info">
+              <div class="personal-track-title">${titleHtml}</div>
+              <div class="personal-track-meta">
+                <span>👤 ${escapeHtmlText(author)}</span>
+                <span>•</span>
+                <span>⏱️ ${escapeHtmlText(dur)}</span>
+              </div>
+            </div>
+          </div>
+          <div class="personal-track-actions">
+            <button type="button" class="btn-icon-action btn-track-up" data-idx="${idx}" ${idx === 0 ? 'disabled' : ''} title="上移一位">⬆️</button>
+            <button type="button" class="btn-icon-action btn-track-down" data-idx="${idx}" ${idx === tracks.length - 1 ? 'disabled' : ''} title="下移一位">⬇️</button>
+            <button type="button" class="btn-icon-action btn-track-move" data-idx="${idx}" title="輸入目標編號移動位置">🔢 排序</button>
+            <button type="button" class="btn-icon-action danger btn-track-del" data-idx="${idx}" title="從歌單刪除此曲目">🗑️ 刪除</button>
+          </div>
+        </div>
+      `);
+    });
+
+    if (rowsHtml.length === 0) {
+      listEl.innerHTML = '<div class="empty-state">沒有符合篩選條件的歌曲。</div>';
+      return;
+    }
+
+    listEl.innerHTML = rowsHtml.join('');
+
+    // 綁定上移 / 下移 / 指定編號排序 / 刪除事件
+    listEl.querySelectorAll('.btn-track-up').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const idx = Number(btn.getAttribute('data-idx'));
+        if (idx > 0) reorderPersonalTrack(idx, idx - 1);
+      });
+    });
+
+    listEl.querySelectorAll('.btn-track-down').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const idx = Number(btn.getAttribute('data-idx'));
+        if (idx < tracks.length - 1) reorderPersonalTrack(idx, idx + 1);
+      });
+    });
+
+    listEl.querySelectorAll('.btn-track-move').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const idx = Number(btn.getAttribute('data-idx'));
+        const currentNum = idx + 1;
+        const targetStr = window.prompt(
+          `請輸入要將第 #${currentNum} 首「${tracks[idx]?.title || ''}」移往的目標編號（1 ~ ${tracks.length}）：`,
+          String(currentNum)
+        );
+        if (!targetStr) return;
+        const targetNum = parseInt(targetStr.trim(), 10);
+        if (Number.isNaN(targetNum) || targetNum < 1 || targetNum > tracks.length) {
+          showToast(`請輸入 1 到 ${tracks.length} 之間的有效編號`, 'error');
+          return;
+        }
+        if (targetNum - 1 !== idx) {
+          reorderPersonalTrack(idx, targetNum - 1);
+        }
+      });
+    });
+
+    listEl.querySelectorAll('.btn-track-del').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const idx = Number(btn.getAttribute('data-idx'));
+        removePersonalTrack(idx);
+      });
+    });
+
+    // 綁定 HTML5 拖曳重新排序
+    listEl.querySelectorAll('.personal-track-row').forEach((row) => {
+      row.addEventListener('dragstart', (e) => {
+        personalDragFromIdx = Number(row.getAttribute('data-track-idx'));
+        row.classList.add('is-dragging');
+        if (e.dataTransfer) {
+          e.dataTransfer.effectAllowed = 'move';
+        }
+      });
+      row.addEventListener('dragend', () => {
+        row.classList.remove('is-dragging');
+        listEl.querySelectorAll('.personal-track-row').forEach((r) => r.classList.remove('drag-over'));
+      });
+      row.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        row.classList.add('drag-over');
+      });
+      row.addEventListener('dragleave', () => {
+        row.classList.remove('drag-over');
+      });
+      row.addEventListener('drop', (e) => {
+        e.preventDefault();
+        row.classList.remove('drag-over');
+        const toIdx = Number(row.getAttribute('data-track-idx'));
+        if (personalDragFromIdx !== null && personalDragFromIdx !== toIdx) {
+          reorderPersonalTrack(personalDragFromIdx, toIdx);
+        }
+        personalDragFromIdx = null;
+      });
+    });
+  }
+
+  async function reorderPersonalTrack(fromIdx, toIdx) {
+    try {
+      const res = await fetch('/api/panel/user/playlist', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'reorder_track',
+          from_index: fromIdx,
+          to_index: toIdx,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.status === 'ok') {
+        personalPlaylistData = data.playlist;
+        renderPersonalPlaylistUI();
+        showToast(data.message || '已更新歌曲順序', 'success');
+      } else {
+        showToast(data.message || '調整順序失敗', 'error');
+      }
+    } catch (err) {
+      showToast('連線失敗，無法調整順序', 'error');
+    }
+  }
+
+  async function removePersonalTrack(idx) {
+    try {
+      const res = await fetch('/api/panel/user/playlist', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'remove_track',
+          index: idx,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.status === 'ok') {
+        personalPlaylistData = data.playlist;
+        renderPersonalPlaylistUI();
+        showToast(data.message || '已刪除歌曲', 'success');
+      } else {
+        showToast(data.message || '刪除歌曲失敗', 'error');
+      }
+    } catch (err) {
+      showToast('連線失敗，無法刪除歌曲', 'error');
+    }
+  }
+
+  function renderSavedPlaylistsList() {
+    const container = document.getElementById('personal-saved-playlists-list');
+    if (!container) return;
+
+    if (!personalSavedPlaylists || personalSavedPlaylists.length === 0) {
+      container.innerHTML = '<div class="empty-state">目前尚未收藏任何他人的分享歌單。</div>';
+      return;
+    }
+
+    container.innerHTML = personalSavedPlaylists.map((pl) => {
+      const count = Array.isArray(pl.tracks) ? pl.tracks.length : 0;
+      const ownerName = escapeHtmlText(pl.owner_name || `用戶 ${pl.user_id}`);
+      const plName = escapeHtmlText(pl.name || '未命名歌單');
+      const code = escapeHtmlText(pl.share_code || '------');
+      const ownerId = escapeHtmlText(pl.user_id || '');
+      return `
+        <div class="personal-saved-card">
+          <div class="personal-saved-info">
+            <div class="personal-saved-title">🎵 ${plName} <span class="cmd-badge">${code}</span></div>
+            <div class="personal-saved-meta">擁有者：${ownerName} • 共 ${count} 首歌曲</div>
+          </div>
+          <button type="button" class="btn-icon-action danger btn-remove-saved-pl" data-owner-id="${ownerId}">
+            🗑️ 移除收藏
+          </button>
+        </div>
+      `;
+    }).join('');
+
+    container.querySelectorAll('.btn-remove-saved-pl').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const ownerId = btn.getAttribute('data-owner-id');
+        if (!ownerId) return;
+        try {
+          const res = await fetch(`/api/panel/user/playlist/saved/${encodeURIComponent(ownerId)}`, {
+            method: 'DELETE',
+          });
+          const data = await res.json();
+          if (res.ok && data.status === 'ok') {
+            personalSavedPlaylists = Array.isArray(data.saved_playlists) ? data.saved_playlists : [];
+            renderSavedPlaylistsList();
+            showToast(data.message || '已移除收藏歌單', 'success');
+          } else {
+            showToast(data.message || '移除失敗', 'error');
+          }
+        } catch (err) {
+          showToast('網路連線失敗', 'error');
+        }
+      });
+    });
+  }
+
+  // 建立個人歌單表單
+  const formCreatePlaylist = document.getElementById('form-create-personal-playlist');
+  if (formCreatePlaylist) {
+    formCreatePlaylist.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const nameInput = document.getElementById('input-create-playlist-name');
+      const publicSelect = document.getElementById('select-create-playlist-public');
+      const name = nameInput ? nameInput.value.trim() : '';
+      const isPublic = publicSelect ? publicSelect.value === '1' : false;
+      if (!name) {
+        showToast('請輸入歌單名稱', 'error');
+        return;
+      }
+      try {
+        const res = await fetch('/api/panel/user/playlist', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, is_public: isPublic }),
+        });
+        const data = await res.json();
+        if (res.ok && data.status === 'ok') {
+          personalPlaylistData = data.playlist;
+          if (nameInput) nameInput.value = '';
+          renderPersonalPlaylistUI();
+          showToast(data.message || '個人歌單建立成功！', 'success');
+        } else {
+          showToast(data.message || '建立歌單失敗', 'error');
+        }
+      } catch (err) {
+        showToast('連線錯誤，請稍後再試', 'error');
+      }
+    });
+  }
+
+  // 更新歌單名稱與公開權限表單
+  const formUpdatePlaylist = document.getElementById('form-update-personal-playlist');
+  if (formUpdatePlaylist) {
+    formUpdatePlaylist.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const nameInput = document.getElementById('input-edit-playlist-name');
+      const publicSelect = document.getElementById('select-edit-playlist-public');
+      const name = nameInput ? nameInput.value.trim() : '';
+      const isPublic = publicSelect ? publicSelect.value === '1' : false;
+      if (!name) {
+        showToast('歌單名稱不得為空', 'error');
+        return;
+      }
+      try {
+        const res = await fetch('/api/panel/user/playlist', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, is_public: isPublic }),
+        });
+        const data = await res.json();
+        if (res.ok && data.status === 'ok') {
+          personalPlaylistData = data.playlist;
+          renderPersonalPlaylistUI();
+          showToast(data.message || '歌單設定已儲存！', 'success');
+        } else {
+          showToast(data.message || '儲存失敗', 'error');
+        }
+      } catch (err) {
+        showToast('連線錯誤，請稍後再試', 'error');
+      }
+    });
+  }
+
+  // 複製 6 碼分享碼按鈕
+  const btnCopyShareCode = document.getElementById('btn-copy-share-code');
+  if (btnCopyShareCode) {
+    btnCopyShareCode.addEventListener('click', async () => {
+      const code = personalPlaylistData?.share_code;
+      if (!code) return;
+      try {
+        await navigator.clipboard.writeText(code);
+        showToast(`已複製分享碼：${code}`, 'success');
+      } catch (_) {
+        showToast(`你的歌單分享碼為：${code}`, 'success');
+      }
+    });
+  }
+
+  // 重新產生 6 碼分享碼按鈕
+  const btnRegenShareCode = document.getElementById('btn-regen-share-code');
+  if (btnRegenShareCode) {
+    btnRegenShareCode.addEventListener('click', () => {
+      if (!personalPlaylistData) return;
+      showConfirmModal({
+        title: '🔄 確定要重新產生分享碼嗎？',
+        message: `重新產生後，舊的分享碼「${personalPlaylistData.share_code}」將立即失效，且其他用戶先前透過舊分享碼儲存的歌單連結也會一併失效。`,
+        confirmText: '確認重新產生',
+        cancelText: '取消',
+        onConfirm: async () => {
+          try {
+            const res = await fetch('/api/panel/user/playlist/regenerate-code', {
+              method: 'POST',
+            });
+            const data = await res.json();
+            if (res.ok && data.status === 'ok') {
+              personalPlaylistData = data.playlist;
+              renderPersonalPlaylistUI();
+              showToast(data.message || '已重新產生分享碼！', 'success');
+            } else {
+              showToast(data.message || '重新產生失敗', 'error');
+            }
+          } catch (err) {
+            showToast('網路連線失敗', 'error');
+          }
+        },
+      });
+    });
+  }
+
+  // 刪除整個個人歌單按鈕
+  const btnDeletePlaylist = document.getElementById('btn-delete-personal-playlist');
+  if (btnDeletePlaylist) {
+    btnDeletePlaylist.addEventListener('click', () => {
+      if (!personalPlaylistData) return;
+      showConfirmModal({
+        title: '⚠️ 確認刪除個人歌單',
+        message: `確定要永久刪除歌單「${personalPlaylistData.name}」（共 ${(personalPlaylistData.tracks || []).length} 首）嗎？此操作無法復原，且分享碼將立即失效。`,
+        confirmText: '確認刪除歌單',
+        cancelText: '取消',
+        onConfirm: async () => {
+          try {
+            const res = await fetch('/api/panel/user/playlist', {
+              method: 'DELETE',
+            });
+            const data = await res.json();
+            if (res.ok && data.status === 'ok') {
+              personalPlaylistData = null;
+              renderPersonalPlaylistUI();
+              showToast(data.message || '個人歌單已刪除', 'success');
+            } else {
+              showToast(data.message || '刪除失敗', 'error');
+            }
+          } catch (err) {
+            showToast('網路連線失敗', 'error');
+          }
+        },
+      });
+    });
+  }
+
+  // 新增歌曲至歌單表單
+  const formAddPlaylistTrack = document.getElementById('form-add-playlist-track');
+  if (formAddPlaylistTrack) {
+    formAddPlaylistTrack.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const inputQuery = document.getElementById('input-add-playlist-track');
+      const submitBtn = document.getElementById('btn-add-playlist-track');
+      const query = inputQuery ? inputQuery.value.trim() : '';
+      if (!query) return;
+
+      if (submitBtn) submitBtn.disabled = true;
+      try {
+        const res = await fetch('/api/panel/user/playlist/add-track', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query }),
+        });
+        const data = await res.json();
+        if (res.ok && data.status === 'ok') {
+          personalPlaylistData = data.playlist;
+          if (inputQuery) inputQuery.value = '';
+          renderPersonalPlaylistUI();
+          showToast(data.message || '已成功加入歌單！', 'success');
+        } else {
+          showToast(data.message || '加入歌單失敗', 'error');
+        }
+      } catch (err) {
+        showToast('連線錯誤，請稍後再試', 'error');
+      } finally {
+        if (submitBtn) submitBtn.disabled = false;
+      }
+    });
+  }
+
+  // 歌單內關鍵字篩選
+  const inputFilterPlaylistTracks = document.getElementById('input-filter-playlist-tracks');
+  if (inputFilterPlaylistTracks) {
+    inputFilterPlaylistTracks.addEventListener('input', () => {
+      renderPersonalTracksList();
+    });
+  }
+
+  // 透過 6 碼分享碼收藏他人歌單表單
+  const formSaveSharedPlaylist = document.getElementById('form-save-shared-playlist');
+  if (formSaveSharedPlaylist) {
+    formSaveSharedPlaylist.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const inputCode = document.getElementById('input-save-share-code');
+      const code = inputCode ? inputCode.value.trim().toUpperCase() : '';
+      if (code.length !== 6) {
+        showToast('請輸入完整的 6 碼英數分享碼', 'error');
+        return;
+      }
+      try {
+        const res = await fetch('/api/panel/user/playlist/saved', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ share_code: code }),
+        });
+        const data = await res.json();
+        if (res.ok && data.status === 'ok') {
+          personalSavedPlaylists = Array.isArray(data.saved_playlists) ? data.saved_playlists : [];
+          if (inputCode) inputCode.value = '';
+          renderSavedPlaylistsList();
+          showToast(data.message || '已成功收藏分享歌單！', 'success');
+        } else {
+          showToast(data.message || '收藏歌單失敗', 'error');
+        }
+      } catch (err) {
+        showToast('網路連線失敗', 'error');
+      }
+    });
+  }
+
   // ---------- 初始化動作 ----------
   document.addEventListener('DOMContentLoaded', () => {
     // 檢查網址 hash
     const hash = window.location.hash;
     if (hash === '#owner') {
       openSettingsViewForOwner();
+    } else if (hash === '#personal') {
+      openSettingsViewForPersonal();
     } else if (hash && hash.startsWith('#guild-')) {
       const targetGid = hash.replace('#guild-', '');
       const targetChip = document.querySelector(`.server-chip[data-guild-id="${targetGid}"]`);

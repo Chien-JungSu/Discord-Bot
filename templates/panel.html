@@ -75,6 +75,12 @@
               <span>個人主頁</span>
             </a>
             {% endif %}
+            <button class="dropdown-item dropdown-personal-btn" id="btn-dropdown-personal" type="button">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/>
+              </svg>
+              <span>個人設定</span>
+            </button>
             {% if is_owner %}
             <button class="dropdown-item dropdown-owner-btn" id="btn-dropdown-owner" type="button">
               <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
@@ -82,8 +88,8 @@
               </svg>
               <span>管理員設定</span>
             </button>
-            <div class="dropdown-divider"></div>
             {% endif %}
+            <div class="dropdown-divider"></div>
             <a class="dropdown-item dropdown-logout-btn" href="/logout">
               <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
                 <path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/>
@@ -169,33 +175,33 @@
       </div>
     </section>
 
-    {% elif not guilds %}
-    <!-- 已登入但無可管理伺服器：僅顯示提示，不顯示設定選項 -->
-    <section class="no-guilds-card">
-      <div class="no-guilds-icon">⚠️</div>
-      <h3 class="no-guilds-title">您目前沒有可管理的伺服器</h3>
-      <p class="no-guilds-desc">
-        控制面板僅會顯示您擁有「<strong>管理伺服器</strong>」或「<strong>管理者</strong>」權限的伺服器。<br>
-        如果您剛獲得權限，或想在全新伺服器中使用「炙彗JI器人」，請點擊下方按鈕將機器人加入伺服器。
-      </p>
-      <div class="no-guilds-actions">
-        <a class="btn primary" href="{{ invite_url }}" target="_blank" rel="noreferrer">
-          <span>🚀 邀請機器人加入新伺服器</span>
-        </a>
-        <a class="btn secondary" href="/">
-          <span>返回首頁</span>
-        </a>
-      </div>
-    </section>
-
     {% else %}
-    <!-- 已登入且擁有可管理伺服器：控制面板核心 -->
+    <!-- 已登入：控制面板核心（含伺服器選擇、伺服器設定、以及所有登入用戶皆可使用的「個人設定」） -->
 
     <!-- 1. 伺服器選擇畫面 (初始僅顯示此畫面) -->
     <section id="view-server-selection" class="server-selector-section server-selection-view">
+      {% if not guilds %}
+      <!-- 已登入但無可管理伺服器：顯示提示與前往個人設定按鈕 -->
+      <div class="no-guilds-card">
+        <div class="no-guilds-icon">⚠️</div>
+        <h3 class="no-guilds-title">您目前沒有可管理的伺服器</h3>
+        <p class="no-guilds-desc">
+          伺服器管理設定僅會顯示您擁有「<strong>管理伺服器</strong>」或「<strong>管理者</strong>」權限的伺服器。<br>
+          您仍可點擊下方按鈕或右上角頭像選單進入「<strong>個人設定</strong>」管理您的個人音樂歌單！
+        </p>
+        <div class="no-guilds-actions">
+          <button type="button" class="btn primary" id="btn-empty-open-personal">
+            <span>🎵 前往個人歌單設定</span>
+          </button>
+          <a class="btn secondary" href="{{ invite_url }}" target="_blank" rel="noreferrer">
+            <span>🚀 邀請機器人加入新伺服器</span>
+          </a>
+        </div>
+      </div>
+      {% else %}
       <div class="server-selection-header">
         <h3 class="selection-title">選擇管理伺服器</h3>
-        <p class="selection-desc">請選擇您要進行設定的 Discord 伺服器；若機器人尚未加入，可點擊進行邀請。</p>
+        <p class="selection-desc">請選擇您要進行設定的 Discord 伺服器；若需編輯個人專屬歌單，請點擊右上角頭像選單「個人設定」。</p>
       </div>
 
       <div class="server-cards-grid">
@@ -238,9 +244,10 @@
         </div>
         {% endfor %}
       </div>
+      {% endif %}
     </section>
 
-    <!-- 2. 伺服器詳細設定畫面 (點選伺服器後顯示，初始隱藏) -->
+    <!-- 2. 伺服器詳細設定畫面 (點選伺服器或個人設定後顯示，初始隱藏) -->
     <div id="view-server-settings" class="server-settings-view" style="display: none;">
       <!-- 伺服器未加入機器人提示卡 -->
       <div id="bot-invite-banner" class="invite-banner" style="display: none;">
@@ -270,6 +277,9 @@
             <div class="sidebar-server-meta">
               <span id="active-server-display" class="active-server-name">載入中...</span>
               <span id="active-server-id-display" class="active-server-id">ID: --</span>
+            </div>
+            <div class="personal-sidebar-info" id="personal-sidebar-info">
+              <p>目前處於<strong>個人設定</strong>專區。您在此處建立或編輯的歌單會儲存在資料庫中，並可透過 <code>/music_play</code> 的 <code>playlist</code> 參數或 6 碼分享碼跨伺服器播放。</p>
             </div>
             {% if is_owner %}
             <div class="owner-sidebar-info" id="owner-sidebar-info">
@@ -1147,6 +1157,168 @@
           </div>
         </div>
         {% endif %}
+
+        <!-- Tab Personal: 個人設定（所有登入用戶皆可管理個人音樂歌單與分享碼） -->
+        <div id="tab-personal" class="tab-pane">
+          <div class="pane-header">
+            <div class="tag">Personal Settings · Music Playlist</div>
+            <h2>🎵 個人設定 — 我的音樂歌單管理</h2>
+            <p class="pane-desc">
+              每位用戶可建立 <strong>1 個專屬歌單（上限 100 首歌）</strong>。無論設為公開或私人，系統皆會配發一組獨一無二的 <strong>6 碼英數混合分享碼</strong>，可在任何伺服器的 <code>/music_play</code> 指令中透過 <code>playlist</code> 參數直接選取或輸入分享碼跨服播放！
+            </p>
+          </div>
+
+          <!-- 狀態 1：尚未建立歌單時顯示的建立表單 -->
+          <div id="personal-playlist-empty" class="personal-playlist-card" style="display: none;">
+            <div class="personal-empty-header">
+              <span class="personal-empty-icon">💿</span>
+              <div>
+                <h3>建立你的專屬音樂歌單</h3>
+                <p>建立後即可直接在網頁上新增歌曲、拖曳或按鈕調整順序、切換公開狀態，或使用 Discord 指令 <code>/music_playlist_sync</code> 一鍵匯入播放佇列。</p>
+              </div>
+            </div>
+            <form id="form-create-personal-playlist" class="panel-form">
+              <div class="form-row-2">
+                <div class="form-group">
+                  <label for="input-create-playlist-name">歌單名稱（最多 50 字）</label>
+                  <input type="text" id="input-create-playlist-name" class="form-control" maxlength="50" placeholder="例如：深夜放鬆精選、遊戲背景音樂" required />
+                </div>
+                <div class="form-group">
+                  <label for="select-create-playlist-public">歌單公開權限</label>
+                  <select id="select-create-playlist-public" class="form-control">
+                    <option value="0">🔒 私人歌單（僅自己或持有 6 碼分享碼者可播放）</option>
+                    <option value="1">🌐 公開歌單（同伺服器成員可在 /music_play 選單中直接點播）</option>
+                  </select>
+                </div>
+              </div>
+              <div class="form-actions">
+                <button type="submit" id="btn-create-personal-playlist" class="btn btn-save-setting">
+                  <span>➕ 立即建立個人歌單</span>
+                </button>
+              </div>
+            </form>
+          </div>
+
+          <!-- 狀態 2：已建立歌單時顯示的完整視覺化編輯器 -->
+          <div id="personal-playlist-editor" style="display: none;">
+            <!-- 基本設定與分享碼資訊卡 -->
+            <div class="personal-playlist-card">
+              <div class="personal-meta-grid">
+                <form id="form-update-personal-playlist" class="personal-meta-form">
+                  <div class="form-group">
+                    <label for="input-edit-playlist-name">✏️ 歌單名稱</label>
+                    <input type="text" id="input-edit-playlist-name" class="form-control" maxlength="50" required />
+                  </div>
+                  <div class="form-group">
+                    <label for="select-edit-playlist-public">👁️ 公開權限設定</label>
+                    <select id="select-edit-playlist-public" class="form-control">
+                      <option value="0">🔒 私人歌單（僅自己或透過分享碼可點播）</option>
+                      <option value="1">🌐 公開歌單（同伺服器成員可於 /music_play 選單直接看到）</option>
+                    </select>
+                  </div>
+                  <div class="personal-meta-actions">
+                    <button type="submit" id="btn-save-playlist-meta" class="btn btn-save-setting">
+                      <span>💾 儲存歌單設定</span>
+                    </button>
+                    <button type="button" id="btn-delete-personal-playlist" class="btn danger">
+                      <span>🗑️ 刪除歌單</span>
+                    </button>
+                  </div>
+                </form>
+
+                <!-- 6 碼分享碼專區 -->
+                <div class="personal-share-code-box">
+                  <div class="share-code-label-row">
+                    <span class="share-code-title">🔑 專屬 6 碼跨服分享碼</span>
+                    <span id="personal-playlist-vis-badge" class="perm-badge member">🔒 私人</span>
+                  </div>
+                  <div class="share-code-display-row">
+                    <code id="personal-share-code-value" class="share-code-pill">------</code>
+                    <button type="button" id="btn-copy-share-code" class="btn secondary btn-sm-pill" title="複製分享碼">
+                      <span>📋 複製</span>
+                    </button>
+                    <button type="button" id="btn-regen-share-code" class="btn secondary btn-sm-pill" title="重新產生分享碼（舊碼將立即失效）">
+                      <span>🔄 重新產生</span>
+                    </button>
+                  </div>
+                  <p class="share-code-hint">
+                    在任何伺服器的 <code>/music_play</code> 指令將此 6 碼填入 <code>playlist</code> 參數，即可跨服播放並自動為對方收藏歌單。重新產生後，舊分享碼與他人先前的收藏將立即失效。
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <!-- 新增歌曲與曲目清單編輯區 -->
+            <div class="personal-playlist-card" style="margin-top: 20px;">
+              <div class="personal-tracks-header">
+                <div>
+                  <h3 class="personal-section-title">🎶 歌單曲目列表</h3>
+                  <p class="form-hint" style="margin: 4px 0 0;">可使用上下箭頭、拖曳或輸入編號調整播放順序，修改後即時同步至 SQLite 資料庫。</p>
+                </div>
+                <span id="personal-track-count-badge" class="cmd-badge">0 / 100 首</span>
+              </div>
+
+              <!-- 新增歌曲表單 -->
+              <form id="form-add-playlist-track" class="personal-add-track-row">
+                <input
+                  type="text"
+                  id="input-add-playlist-track"
+                  class="form-control"
+                  placeholder="輸入歌曲名稱 / 關鍵字，或貼上 YouTube / SoundCloud / Spotify 網址..."
+                  required
+                />
+                <button type="submit" id="btn-add-playlist-track" class="btn btn-save-setting">
+                  <span>➕ 新增歌曲</span>
+                </button>
+              </form>
+
+              <!-- 歌單內搜尋與分頁控制 -->
+              <div class="personal-tracks-toolbar">
+                <input
+                  type="search"
+                  id="input-filter-playlist-tracks"
+                  class="form-control"
+                  placeholder="🔍 在歌單中篩選曲名或演出者..."
+                />
+              </div>
+
+              <!-- 曲目列表容器 -->
+              <div id="personal-tracks-list" class="personal-tracks-list">
+                <div class="empty-state">目前歌單內還沒有歌曲，快從上方新增第一首歌吧！</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 已收藏的他人分享歌單區塊 -->
+          <div class="personal-playlist-card" style="margin-top: 20px;">
+            <div class="personal-tracks-header">
+              <div>
+                <h3 class="personal-section-title">🔖 已收藏的分享歌單</h3>
+                <p class="form-hint" style="margin: 4px 0 0;">
+                  當你在 <code>/music_play</code> 輸入他人的 6 碼分享碼播放時，系統會自動為你儲存於此，並直接顯示在 <code>/music_play</code> 的 <code>playlist</code> 選單中。你也可以在下方直接輸入分享碼預先收藏：
+                </p>
+              </div>
+            </div>
+
+            <form id="form-save-shared-playlist" class="personal-add-track-row" style="margin-top: 12px;">
+              <input
+                type="text"
+                id="input-save-share-code"
+                class="form-control"
+                maxlength="6"
+                placeholder="輸入他人的 6 碼英數分享碼（例如：A8K2M9）"
+                required
+              />
+              <button type="submit" id="btn-save-share-code" class="btn secondary">
+                <span>🔖 透過分享碼收藏歌單</span>
+              </button>
+            </form>
+
+            <div id="personal-saved-playlists-list" class="personal-saved-list">
+              <div class="empty-state">目前尚未收藏任何分享歌單。</div>
+            </div>
+          </div>
+        </div>
 
       </section>
     </div>

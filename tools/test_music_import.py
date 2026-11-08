@@ -671,6 +671,117 @@ async def test_session_lost_recovery():
     await view.skip(it2)
     check(player.current is nxt_t and not player.song_queue, "skip 按鈕遇到 404 時直接觸發換歌流程播放下一首")
 
+    # ----------------------------------------------------------
+    print("\n[G] 直播串流自動斷流重連與用戶歌單 SQLite 功能測試")
+
+    # G-1: 直播串流（is_stream=True）播放一段時間後被 Lavalink 觸發 finished，應自動重抓串流並無縫續播，不結束播放
+    player = RecoverablePlayer()
+    cog = make_cog(player)
+    live_t = SimpleNamespace(
+        title="24/7 Lofi Live",
+        author="Lofi Girl",
+        uri="https://www.youtube.com/watch?v=live123",
+        identifier="live123",
+        length=0,
+        is_stream=True,
+        is_seekable=False,
+        source="youtube",
+        artwork=None,
+    )
+    refreshed_live_t = SimpleNamespace(
+        title="24/7 Lofi Live",
+        author="Lofi Girl",
+        uri="https://www.youtube.com/watch?v=live123",
+        identifier="live123",
+        length=0,
+        is_stream=True,
+        is_seekable=False,
+        source="youtube",
+        artwork=None,
+    )
+    cog._refresh_live_stream_track = AsyncMock(return_value=refreshed_live_t)
+    await cog._play_track(player, live_t, "直播聽眾", 99)
+    check(cog._is_live_track(live_t) is True, "_is_live_track 正確識別直播串流")
+    await cog.on_wavelink_track_end(SimpleNamespace(player=player, reason="finished", track=live_t))
+    check(
+        player.current is refreshed_live_t and getattr(player, "_live_retry_count", 0) == 1,
+        "直播串流因 HLS 視窗刷新觸發 finished 時自動重連續播，不會自動結束播放",
+    )
+
+    # G-2: 用戶歌單 SQLite CRUD、6 碼英數分享碼、重產失效、以及 /music_play 分享碼自動收藏測試
+    from cogs.database import (
+        create_user_playlist,
+        get_user_playlist,
+        get_playlist_by_share_code,
+        add_tracks_to_user_playlist,
+        remove_track_from_user_playlist,
+        reorder_track_in_user_playlist,
+        regenerate_user_playlist_share_code,
+        delete_user_playlist,
+        get_saved_playlists_for_user,
+    )
+
+    uid_owner = "999000111222333444"
+    uid_listener = 888000111222333444
+    delete_user_playlist(uid_owner)
+    delete_user_playlist(uid_listener)
+
+    pl = create_user_playlist(uid_owner, "測試精選歌單", owner_name="歌單主人", is_public=False)
+    code1 = pl["share_code"]
+    check(
+        len(code1) == 6 and code1.isalnum() and any(c.isalpha() for c in code1) and any(c.isdigit() for c in code1),
+        f"建立歌單自動產生英數混合 6 碼分享碼 ({code1})",
+    )
+
+    # 新增 3 首歌曲並測試重新排序與刪除
+    sample_tracks = [
+        cog._playable_to_playlist_dict(fake_track(f"Song-{i}", identifier=f"id_{i}"))
+        for i in range(1, 4)
+    ]
+    pl, added_n, _ = add_tracks_to_user_playlist(uid_owner, sample_tracks, owner_name="歌單主人")
+    check(added_n == 3 and len(pl["tracks"]) == 3, "成功新增 3 首歌曲至 SQLite 歌單")
+
+    pl, moved = reorder_track_in_user_playlist(uid_owner, 0, 2)
+    check(
+        moved["title"] == "Song-1" and [t["title"] for t in pl["tracks"]] == ["Song-2", "Song-3", "Song-1"],
+        "重新排序歌單曲目成功更新 SQLite 順序",
+    )
+
+    pl, removed = remove_track_from_user_playlist(uid_owner, 1)
+    check(
+        removed["title"] == "Song-3" and [t["title"] for t in pl["tracks"]] == ["Song-2", "Song-1"],
+        "刪除指定編號歌曲成功",
+    )
+
+    # 測試跨伺服器透過 6 碼分享碼解析歌單，並自動為該用戶儲存歌單
+    it_play = make_interaction()
+    it_play.user = SimpleNamespace(id=uid_listener, display_name="跨服聽眾")
+    resolved_pl, err_msg, used_code = cog._resolve_playlist_selection(it_play, code1)
+    saved_for_listener = get_saved_playlists_for_user(uid_listener)
+    check(
+        resolved_pl is not None
+        and err_msg is None
+        and used_code is True
+        and any(str(s["user_id"]) == uid_owner for s in saved_for_listener),
+        "在 /music_play 輸入 6 碼分享碼可跨服讀取私人歌單，並自動為該用戶儲存至歌單選單",
+    )
+
+    # 測試重新產生分享碼後，舊分享碼立即失效，且他人已儲存的舊連結同步失效
+    regen_pl = regenerate_user_playlist_share_code(uid_owner)
+    code2 = regen_pl["share_code"]
+    check(
+        code2 != code1
+        and get_playlist_by_share_code(code1) is None
+        and get_playlist_by_share_code(code2) is not None
+        and len(get_saved_playlists_for_user(uid_listener)) == 0,
+        f"重新產生分享碼 ({code1} -> {code2}) 後舊分享碼與他人舊收藏立即失效",
+    )
+
+    # 清理測試歌單資料
+    delete_user_playlist(uid_owner)
+    delete_user_playlist(uid_listener)
+    check(get_user_playlist(uid_owner) is None, "刪除歌單成功清除 SQLite 紀錄")
+
 
 def main():
     print("=== 開始執行第 7 週匯入與面板單元測試 ===")

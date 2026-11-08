@@ -253,6 +253,34 @@ def init_db():
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_temp_messages_expire_at ON temp_messages (expire_at);")
 
+            # 18. 用戶音樂歌單表 (每位用戶上限 1 個歌單，最多 100 首歌，附帶獨一無二 6 碼英數混合分享碼)
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_playlists (
+                user_id TEXT PRIMARY KEY,
+                owner_name TEXT NOT NULL DEFAULT '',
+                name TEXT NOT NULL,
+                is_public INTEGER NOT NULL DEFAULT 0,
+                share_code TEXT UNIQUE NOT NULL,
+                tracks_json TEXT NOT NULL DEFAULT '[]',
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
+            """)
+            cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_user_playlists_share_code ON user_playlists (share_code);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_playlists_public ON user_playlists (is_public);")
+
+            # 19. 用戶透過分享碼收藏之他人歌單表 (當原歌單重新產生分享碼時舊分享碼自動失效)
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_saved_playlists (
+                user_id TEXT NOT NULL,
+                owner_user_id TEXT NOT NULL,
+                saved_share_code TEXT NOT NULL,
+                saved_at REAL NOT NULL,
+                PRIMARY KEY (user_id, owner_user_id)
+            );
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_saved_playlists_user ON user_saved_playlists (user_id);")
+
             # ---------- 自動欄位安全遷移 (Migration) ----------
             cursor.execute("PRAGMA table_info(economy_users);")
             econ_cols = [r["name"] if isinstance(r, sqlite3.Row) else r[1] for r in cursor.fetchall()]
@@ -2955,6 +2983,523 @@ def load_temp_messages() -> list[dict[str, Any]]:
             ]
         finally:
             conn.close()
+
+
+# ==============================================================================
+# 用戶個人音樂歌單 (User Music Playlists) SQLite 資料存取層
+# ==============================================================================
+import secrets as _secrets
+import string as _string
+
+PLAYLIST_MAX_TRACKS = 100
+_SHARE_CODE_LETTERS = _string.ascii_uppercase
+_SHARE_CODE_DIGITS = _string.digits
+_SHARE_CODE_ALPHANUM = _SHARE_CODE_LETTERS + _SHARE_CODE_DIGITS
+
+
+def _ensure_playlist_tables(cursor: sqlite3.Cursor) -> None:
+    """確保歌單相關資料表已存在（支援模組熱重載免重啟建表）。"""
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_playlists (
+            user_id TEXT PRIMARY KEY,
+            owner_name TEXT NOT NULL DEFAULT '',
+            name TEXT NOT NULL,
+            is_public INTEGER NOT NULL DEFAULT 0,
+            share_code TEXT UNIQUE NOT NULL,
+            tracks_json TEXT NOT NULL DEFAULT '[]',
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL
+        );
+        """
+    )
+    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_user_playlists_share_code ON user_playlists (share_code);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_playlists_public ON user_playlists (is_public);")
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_saved_playlists (
+            user_id TEXT NOT NULL,
+            owner_user_id TEXT NOT NULL,
+            saved_share_code TEXT NOT NULL,
+            saved_at REAL NOT NULL,
+            PRIMARY KEY (user_id, owner_user_id)
+        );
+        """
+    )
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_saved_playlists_user ON user_saved_playlists (user_id);")
+
+
+def _generate_unique_share_code(cursor: sqlite3.Cursor, exclude_code: Optional[str] = None) -> str:
+    """產生獨一無二的英數混合 6 碼分享碼（必定同時包含英文字母與數字）。"""
+    exclude_upper = (exclude_code or "").strip().upper()
+    for _ in range(200):
+        # 確保至少包含 1 個英文字母與 1 個數字，其餘 4 碼隨機取自英數混合字元集
+        chars = [
+            _secrets.choice(_SHARE_CODE_LETTERS),
+            _secrets.choice(_SHARE_CODE_DIGITS),
+            *(_secrets.choice(_SHARE_CODE_ALPHANUM) for _ in range(4)),
+        ]
+        # Fisher-Yates 洗牌打散位置
+        for i in range(len(chars) - 1, 0, -1):
+            j = _secrets.randbelow(i + 1)
+            chars[i], chars[j] = chars[j], chars[i]
+        candidate = "".join(chars)
+        if candidate == exclude_upper:
+            continue
+        cursor.execute("SELECT 1 FROM user_playlists WHERE share_code = ?;", (candidate,))
+        if cursor.fetchone() is None:
+            return candidate
+    raise RuntimeError("無法產生唯一的 6 碼分享碼，請稍後再試。")
+
+
+def _normalize_playlist_track(raw: dict[str, Any]) -> dict[str, Any]:
+    """正規化單首曲目字典結構，確保序列化至 SQLite 的欄位乾淨一致。"""
+    title = str(raw.get("title") or "未知曲目").strip()[:200] or "未知曲目"
+    author = str(raw.get("author") or "未知").strip()[:120] or "未知"
+    uri = str(raw.get("uri") or "").strip() or None
+    try:
+        length = max(0, int(raw.get("length") or 0))
+    except (ValueError, TypeError):
+        length = 0
+    return {
+        "title": title,
+        "author": author,
+        "uri": uri,
+        "length": length,
+        "encoded": str(raw.get("encoded") or "").strip() or None,
+        "identifier": str(raw.get("identifier") or "").strip() or None,
+        "source": str(raw.get("source") or "youtube").strip() or "youtube",
+        "artwork_url": str(raw.get("artwork_url") or raw.get("artwork") or "").strip() or None,
+        "is_stream": bool(raw.get("is_stream", False)),
+        "is_seekable": bool(raw.get("is_seekable", True)),
+    }
+
+
+def _row_to_playlist_dict(row: sqlite3.Row | None) -> Optional[dict[str, Any]]:
+    if row is None:
+        return None
+    try:
+        tracks_raw = json.loads(row["tracks_json"] or "[]")
+        if not isinstance(tracks_raw, list):
+            tracks_raw = []
+    except Exception:
+        tracks_raw = []
+    tracks = [_normalize_playlist_track(t) for t in tracks_raw if isinstance(t, dict)][:PLAYLIST_MAX_TRACKS]
+    return {
+        "user_id": str(row["user_id"]),
+        "owner_name": str(row["owner_name"] or ""),
+        "name": str(row["name"] or "未命名歌單"),
+        "is_public": bool(int(row["is_public"] or 0)),
+        "share_code": str(row["share_code"] or "").upper(),
+        "tracks": tracks,
+        "track_count": len(tracks),
+        "created_at": float(row["created_at"] or 0.0),
+        "updated_at": float(row["updated_at"] or 0.0),
+    }
+
+
+def get_user_playlist(user_id: str | int) -> Optional[dict[str, Any]]:
+    """取得指定用戶建立的個人歌單（無歌單時回傳 None）。"""
+    init_db()
+    uid = str(user_id).strip()
+    if not uid:
+        return None
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            _ensure_playlist_tables(cursor)
+            cursor.execute("SELECT * FROM user_playlists WHERE user_id = ?;", (uid,))
+            return _row_to_playlist_dict(cursor.fetchone())
+        finally:
+            conn.close()
+
+
+def get_playlist_by_share_code(share_code: str) -> Optional[dict[str, Any]]:
+    """透過 6 碼英數分享碼查詢歌單（不分大小寫；無論歌單為公開或私人皆可透過有效分享碼取得）。"""
+    init_db()
+    code = (share_code or "").strip().upper()
+    if len(code) != 6 or not code.isalnum():
+        return None
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            _ensure_playlist_tables(cursor)
+            cursor.execute("SELECT * FROM user_playlists WHERE UPPER(share_code) = ?;", (code,))
+            return _row_to_playlist_dict(cursor.fetchone())
+        finally:
+            conn.close()
+
+
+def create_user_playlist(
+    user_id: str | int,
+    name: str,
+    owner_name: str = "",
+    is_public: bool = False,
+) -> dict[str, Any]:
+    """為用戶建立歌單（每位用戶上限 1 個歌單，自動產生獨一無二的 6 碼英數混合分享碼）。"""
+    init_db()
+    uid = str(user_id).strip()
+    clean_name = (name or "").strip()[:50]
+    if not clean_name:
+        raise ValueError("歌單名稱不可為空。")
+    clean_owner = (owner_name or "").strip()[:80]
+    now = time.time()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            _ensure_playlist_tables(cursor)
+            cursor.execute("SELECT 1 FROM user_playlists WHERE user_id = ?;", (uid,))
+            if cursor.fetchone() is not None:
+                raise ValueError("每位用戶最多只能建立一個歌單！")
+            share_code = _generate_unique_share_code(cursor)
+            cursor.execute(
+                """
+                INSERT INTO user_playlists
+                    (user_id, owner_name, name, is_public, share_code, tracks_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, '[]', ?, ?);
+                """,
+                (uid, clean_owner, clean_name, 1 if is_public else 0, share_code, now, now),
+            )
+            conn.commit()
+            cursor.execute("SELECT * FROM user_playlists WHERE user_id = ?;", (uid,))
+            res = _row_to_playlist_dict(cursor.fetchone())
+            assert res is not None
+            return res
+        finally:
+            conn.close()
+
+
+def update_user_playlist(
+    user_id: str | int,
+    *,
+    name: Optional[str] = None,
+    owner_name: Optional[str] = None,
+    is_public: Optional[bool] = None,
+    tracks: Optional[list[dict[str, Any]]] = None,
+) -> Optional[dict[str, Any]]:
+    """更新用戶歌單的名稱、公開狀態或曲目清單（曲目上限 100 首）。"""
+    init_db()
+    uid = str(user_id).strip()
+    now = time.time()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            _ensure_playlist_tables(cursor)
+            cursor.execute("SELECT * FROM user_playlists WHERE user_id = ?;", (uid,))
+            current = _row_to_playlist_dict(cursor.fetchone())
+            if current is None:
+                return None
+            new_name = (name.strip()[:50] if name and name.strip() else current["name"])
+            new_owner = (owner_name.strip()[:80] if owner_name is not None and owner_name.strip() else current["owner_name"])
+            new_public = (1 if is_public else 0) if is_public is not None else (1 if current["is_public"] else 0)
+            if tracks is not None:
+                norm_tracks = [_normalize_playlist_track(t) for t in tracks if isinstance(t, dict)][:PLAYLIST_MAX_TRACKS]
+            else:
+                norm_tracks = current["tracks"]
+            tracks_json = json.dumps(norm_tracks, ensure_ascii=False)
+            cursor.execute(
+                """
+                UPDATE user_playlists
+                SET name = ?, owner_name = ?, is_public = ?, tracks_json = ?, updated_at = ?
+                WHERE user_id = ?;
+                """,
+                (new_name, new_owner, new_public, tracks_json, now, uid),
+            )
+            conn.commit()
+            cursor.execute("SELECT * FROM user_playlists WHERE user_id = ?;", (uid,))
+            return _row_to_playlist_dict(cursor.fetchone())
+        finally:
+            conn.close()
+
+
+def add_tracks_to_user_playlist(
+    user_id: str | int,
+    new_tracks: list[dict[str, Any]],
+    owner_name: Optional[str] = None,
+) -> tuple[Optional[dict[str, Any]], int, int]:
+    """將一或多首歌曲加入用戶歌單（遵守 100 首上限）。
+    回傳 (更新後的歌單字典, 實際新增首數, 因超過 100 首上限而略過的首數)。
+    """
+    init_db()
+    uid = str(user_id).strip()
+    now = time.time()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            _ensure_playlist_tables(cursor)
+            cursor.execute("SELECT * FROM user_playlists WHERE user_id = ?;", (uid,))
+            current = _row_to_playlist_dict(cursor.fetchone())
+            if current is None:
+                return None, 0, len(new_tracks)
+            existing = list(current["tracks"])
+            remaining = max(0, PLAYLIST_MAX_TRACKS - len(existing))
+            valid_incoming = [_normalize_playlist_track(t) for t in new_tracks if isinstance(t, dict)]
+            to_add = valid_incoming[:remaining]
+            skipped = max(0, len(valid_incoming) - len(to_add))
+            existing.extend(to_add)
+            new_owner = (owner_name.strip()[:80] if owner_name and owner_name.strip() else current["owner_name"])
+            cursor.execute(
+                """
+                UPDATE user_playlists
+                SET tracks_json = ?, owner_name = ?, updated_at = ?
+                WHERE user_id = ?;
+                """,
+                (json.dumps(existing, ensure_ascii=False), new_owner, now, uid),
+            )
+            conn.commit()
+            cursor.execute("SELECT * FROM user_playlists WHERE user_id = ?;", (uid,))
+            return _row_to_playlist_dict(cursor.fetchone()), len(to_add), skipped
+        finally:
+            conn.close()
+
+
+def remove_track_from_user_playlist(
+    user_id: str | int,
+    index_0_based: int,
+) -> tuple[Optional[dict[str, Any]], Optional[dict[str, Any]]]:
+    """刪除用戶歌單中指定索引（0-based）的歌曲，回傳 (更新後歌單, 被刪除的歌曲字典)。"""
+    init_db()
+    uid = str(user_id).strip()
+    now = time.time()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            _ensure_playlist_tables(cursor)
+            cursor.execute("SELECT * FROM user_playlists WHERE user_id = ?;", (uid,))
+            current = _row_to_playlist_dict(cursor.fetchone())
+            if current is None:
+                return None, None
+            tracks = list(current["tracks"])
+            if index_0_based < 0 or index_0_based >= len(tracks):
+                return current, None
+            removed = tracks.pop(index_0_based)
+            cursor.execute(
+                "UPDATE user_playlists SET tracks_json = ?, updated_at = ? WHERE user_id = ?;",
+                (json.dumps(tracks, ensure_ascii=False), now, uid),
+            )
+            conn.commit()
+            cursor.execute("SELECT * FROM user_playlists WHERE user_id = ?;", (uid,))
+            return _row_to_playlist_dict(cursor.fetchone()), removed
+        finally:
+            conn.close()
+
+
+def reorder_track_in_user_playlist(
+    user_id: str | int,
+    from_index_0: int,
+    to_index_0: int,
+) -> tuple[Optional[dict[str, Any]], Optional[dict[str, Any]]]:
+    """將用戶歌單中第 from_index_0 首移動至 to_index_0（皆為 0-based），回傳 (更新後歌單, 被移動的歌曲字典)。"""
+    init_db()
+    uid = str(user_id).strip()
+    now = time.time()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            _ensure_playlist_tables(cursor)
+            cursor.execute("SELECT * FROM user_playlists WHERE user_id = ?;", (uid,))
+            current = _row_to_playlist_dict(cursor.fetchone())
+            if current is None:
+                return None, None
+            tracks = list(current["tracks"])
+            if not tracks or from_index_0 < 0 or from_index_0 >= len(tracks):
+                return current, None
+            target = max(0, min(len(tracks) - 1, to_index_0))
+            item = tracks.pop(from_index_0)
+            tracks.insert(target, item)
+            cursor.execute(
+                "UPDATE user_playlists SET tracks_json = ?, updated_at = ? WHERE user_id = ?;",
+                (json.dumps(tracks, ensure_ascii=False), now, uid),
+            )
+            conn.commit()
+            cursor.execute("SELECT * FROM user_playlists WHERE user_id = ?;", (uid,))
+            return _row_to_playlist_dict(cursor.fetchone()), item
+        finally:
+            conn.close()
+
+
+def regenerate_user_playlist_share_code(user_id: str | int) -> Optional[dict[str, Any]]:
+    """為用戶歌單重新產生獨一無二的 6 碼分享碼，並使舊分享碼（含他人以舊分享碼儲存的綁定）立即失效。"""
+    init_db()
+    uid = str(user_id).strip()
+    now = time.time()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            _ensure_playlist_tables(cursor)
+            cursor.execute("SELECT * FROM user_playlists WHERE user_id = ?;", (uid,))
+            current = _row_to_playlist_dict(cursor.fetchone())
+            if current is None:
+                return None
+            new_code = _generate_unique_share_code(cursor, exclude_code=current["share_code"])
+            cursor.execute(
+                "UPDATE user_playlists SET share_code = ?, updated_at = ? WHERE user_id = ?;",
+                (new_code, now, uid),
+            )
+            # 清除其他用戶透過舊分享碼儲存的紀錄，確保舊分享碼徹底失效
+            cursor.execute("DELETE FROM user_saved_playlists WHERE owner_user_id = ?;", (uid,))
+            conn.commit()
+            cursor.execute("SELECT * FROM user_playlists WHERE user_id = ?;", (uid,))
+            return _row_to_playlist_dict(cursor.fetchone())
+        finally:
+            conn.close()
+
+
+def delete_user_playlist(user_id: str | int) -> bool:
+    """刪除指定用戶的歌單，並一併清除所有針對該歌單的分享收藏紀錄。"""
+    init_db()
+    uid = str(user_id).strip()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            _ensure_playlist_tables(cursor)
+            cursor.execute("DELETE FROM user_saved_playlists WHERE owner_user_id = ?;", (uid,))
+            cursor.execute("DELETE FROM user_playlists WHERE user_id = ?;", (uid,))
+            deleted = cursor.rowcount > 0
+            conn.commit()
+            return deleted
+        finally:
+            conn.close()
+
+
+def save_shared_playlist_for_user(
+    user_id: str | int,
+    owner_user_id: str | int,
+    share_code: str,
+) -> bool:
+    """當用戶使用分享碼播放他人歌單時，自動為該用戶儲存該歌單（下次會直接出現在 /music_play 的 playlist 選單中）。"""
+    init_db()
+    uid = str(user_id).strip()
+    owner_uid = str(owner_user_id).strip()
+    code = (share_code or "").strip().upper()
+    if not uid or not owner_uid or uid == owner_uid or not code:
+        return False
+    now = time.time()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            _ensure_playlist_tables(cursor)
+            cursor.execute(
+                """
+                INSERT INTO user_saved_playlists (user_id, owner_user_id, saved_share_code, saved_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id, owner_user_id) DO UPDATE SET
+                    saved_share_code = excluded.saved_share_code,
+                    saved_at = excluded.saved_at;
+                """,
+                (uid, owner_uid, code, now),
+            )
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+
+
+def remove_saved_playlist_for_user(user_id: str | int, owner_user_id: str | int) -> bool:
+    """移除用戶已收藏的他人分享歌單。"""
+    init_db()
+    uid = str(user_id).strip()
+    owner_uid = str(owner_user_id).strip()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            _ensure_playlist_tables(cursor)
+            cursor.execute(
+                "DELETE FROM user_saved_playlists WHERE user_id = ? AND owner_user_id = ?;",
+                (uid, owner_uid),
+            )
+            deleted = cursor.rowcount > 0
+            conn.commit()
+            return deleted
+        finally:
+            conn.close()
+
+
+def get_saved_playlists_for_user(user_id: str | int) -> list[dict[str, Any]]:
+    """取得用戶透過分享碼自動儲存的所有有效他人歌單（若原歌單已重新產生分享碼或被刪除，自動過濾並清理）。"""
+    init_db()
+    uid = str(user_id).strip()
+    if not uid:
+        return []
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            _ensure_playlist_tables(cursor)
+            cursor.execute(
+                """
+                SELECT p.*
+                FROM user_saved_playlists s
+                JOIN user_playlists p
+                  ON p.user_id = s.owner_user_id
+                 AND UPPER(p.share_code) = UPPER(s.saved_share_code)
+                WHERE s.user_id = ?
+                ORDER BY s.saved_at DESC;
+                """,
+                (uid,),
+            )
+            rows = cursor.fetchall()
+            # 順便清理因對方重新產生分享碼或刪歌單而失效的孤兒紀錄
+            cursor.execute(
+                """
+                DELETE FROM user_saved_playlists
+                WHERE user_id = ?
+                  AND NOT EXISTS (
+                      SELECT 1 FROM user_playlists p
+                      WHERE p.user_id = user_saved_playlists.owner_user_id
+                        AND UPPER(p.share_code) = UPPER(user_saved_playlists.saved_share_code)
+                  );
+                """,
+                (uid,),
+            )
+            if cursor.rowcount > 0:
+                conn.commit()
+            result = []
+            for r in rows:
+                d = _row_to_playlist_dict(r)
+                if d is not None:
+                    result.append(d)
+            return result
+        finally:
+            conn.close()
+
+
+def get_all_public_playlists(exclude_user_id: Optional[str | int] = None) -> list[dict[str, Any]]:
+    """取得所有設為公開（is_public=1）的用戶歌單。"""
+    init_db()
+    ex_uid = str(exclude_user_id).strip() if exclude_user_id is not None else ""
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            _ensure_playlist_tables(cursor)
+            if ex_uid:
+                cursor.execute(
+                    "SELECT * FROM user_playlists WHERE is_public = 1 AND user_id != ? ORDER BY updated_at DESC;",
+                    (ex_uid,),
+                )
+            else:
+                cursor.execute("SELECT * FROM user_playlists WHERE is_public = 1 ORDER BY updated_at DESC;")
+            out = []
+            for r in cursor.fetchall():
+                d = _row_to_playlist_dict(r)
+                if d is not None:
+                    out.append(d)
+            return out
+        finally:
+            conn.close()
+
 
 
 

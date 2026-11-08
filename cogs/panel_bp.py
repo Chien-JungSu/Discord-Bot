@@ -66,6 +66,19 @@ from cogs.database import (
     block_user,
     unblock_user,
     get_blocked_users,
+    PLAYLIST_MAX_TRACKS,
+    get_user_playlist,
+    get_playlist_by_share_code,
+    create_user_playlist,
+    update_user_playlist,
+    add_tracks_to_user_playlist,
+    remove_track_from_user_playlist,
+    reorder_track_in_user_playlist,
+    regenerate_user_playlist_share_code,
+    delete_user_playlist,
+    save_shared_playlist_for_user,
+    remove_saved_playlist_for_user,
+    get_saved_playlists_for_user,
 )
 from cogs.sanitize import redact_secrets
 
@@ -591,10 +604,16 @@ def get_guild_data(guild_id: str):
         {"name": "/reaction_roles_edit", "description": "編輯表符身分組配置", "category": "Reaction Roles", "permission": "管理員"},
         {"name": "/music_join", "description": "讓機器人加入語音頻道", "category": "Music", "permission": "所有成員"},
         {"name": "/music_leave", "description": "讓機器人離開語音頻道", "category": "Music", "permission": "所有成員"},
-        {"name": "/music_play", "description": "播放歌曲或加入佇列", "category": "Music", "permission": "所有成員"},
+        {"name": "/music_play", "description": "播放歌曲、用戶歌單或透過 6 碼分享碼跨服播放", "category": "Music", "permission": "所有成員"},
         {"name": "/music_skip", "description": "跳過當前歌曲", "category": "Music", "permission": "所有成員"},
         {"name": "/music_stop", "description": "停止播放並清空佇列", "category": "Music", "permission": "所有成員"},
         {"name": "/music_queue", "description": "顯示播放佇列", "category": "Music", "permission": "所有成員"},
+        {"name": "/music_playlist", "description": "查看個人歌單（分頁顯示，每頁 10 首）", "category": "Music", "permission": "所有成員"},
+        {"name": "/music_playlist_create", "description": "建立個人歌單並命名（上限 1 個，100 首）", "category": "Music", "permission": "所有成員"},
+        {"name": "/music_playlist_add", "description": "搜尋歌曲並新增至個人歌單", "category": "Music", "permission": "所有成員"},
+        {"name": "/music_playlist_edit", "description": "編輯個人歌單（刪除、重新排序、公開設定）", "category": "Music", "permission": "所有成員"},
+        {"name": "/music_playlist_remove", "description": "刪除個人歌單（附確認提示）", "category": "Music", "permission": "所有成員"},
+        {"name": "/music_playlist_sync", "description": "將當前播放佇列直接同步新增至個人歌單", "category": "Music", "permission": "所有成員"},
         {"name": "/music_set_channel", "description": "設定專屬點歌頻道", "category": "Music", "permission": "管理員"},
         {"name": "/tts", "description": "文字轉語音並在語音頻道朗讀", "category": "TTS", "permission": "所有成員"},
         {"name": "/shorten", "description": "將長網址縮短為短網址", "category": "Shortener", "permission": "所有成員"},
@@ -1821,4 +1840,292 @@ def owner_blocked_users_remove():
     if success:
         return jsonify({'status': 'success', 'message': f'已成功解除 Discord ID: {user_id} 之封鎖'})
     return jsonify({'status': 'error', 'message': '解除封鎖失敗'}), 500
+
+
+# ==============================================================================
+# 個人設定 — 用戶音樂歌單管理 API (所有已登入 Discord 用戶皆可管理自己的歌單)
+# ==============================================================================
+
+def _get_logged_in_user() -> Optional[dict]:
+    user = session.get('user')
+    if not user or not user.get('id'):
+        return None
+    return user
+
+
+def _user_display_name(user: dict) -> str:
+    return str(user.get('global_name') or user.get('username') or '未知用戶').strip()[:60]
+
+
+@panel_bp.route('/api/panel/user/playlist', methods=['GET'])
+def user_playlist_get():
+    """取得當前登入用戶的個人歌單與已收藏的分享歌單。"""
+    user = _get_logged_in_user()
+    if not user:
+        return jsonify({'status': 'error', 'message': '請先登入 Discord 帳號'}), 401
+
+    user_id = str(user['id'])
+    pl = get_user_playlist(user_id)
+    saved = get_saved_playlists_for_user(user_id)
+    return jsonify({
+        'status': 'ok',
+        'playlist': pl,
+        'saved_playlists': saved,
+        'max_tracks': PLAYLIST_MAX_TRACKS,
+    })
+
+
+@panel_bp.route('/api/panel/user/playlist', methods=['POST'])
+def user_playlist_create_api():
+    """建立當前登入用戶的個人歌單（上限 1 個）。"""
+    user = _get_logged_in_user()
+    if not user:
+        return jsonify({'status': 'error', 'message': '請先登入 Discord 帳號'}), 401
+
+    user_id = str(user['id'])
+    existing = get_user_playlist(user_id)
+    if existing is not None:
+        return jsonify({
+            'status': 'error',
+            'message': f"你已經建立過歌單「{existing['name']}」（每位用戶上限 1 個歌單）。",
+            'playlist': existing,
+        }), 400
+
+    payload = request.get_json(silent=True) or {}
+    name = str(payload.get('name') or '').strip()[:50]
+    if not name:
+        return jsonify({'status': 'error', 'message': '請輸入歌單名稱（最多 50 字）'}), 400
+    is_public = bool(payload.get('is_public', False))
+
+    pl = create_user_playlist(
+        user_id,
+        name=name,
+        owner_name=_user_display_name(user),
+        is_public=is_public,
+    )
+    return jsonify({
+        'status': 'ok',
+        'message': f"已成功建立個人歌單「{pl['name']}」！專屬分享碼：{pl['share_code']}",
+        'playlist': pl,
+    })
+
+
+@panel_bp.route('/api/panel/user/playlist', methods=['PUT'])
+def user_playlist_update_api():
+    """更新個人歌單（名稱、公開/私人狀態、或刪除/重新排序後的曲目清單）。"""
+    user = _get_logged_in_user()
+    if not user:
+        return jsonify({'status': 'error', 'message': '請先登入 Discord 帳號'}), 401
+
+    user_id = str(user['id'])
+    existing = get_user_playlist(user_id)
+    if existing is None:
+        return jsonify({'status': 'error', 'message': '你尚未建立個人歌單'}), 404
+
+    payload = request.get_json(silent=True) or {}
+    name = None
+    if 'name' in payload:
+        name = str(payload.get('name') or '').strip()[:50]
+        if not name:
+            return jsonify({'status': 'error', 'message': '歌單名稱不能為空白'}), 400
+
+    is_public = payload.get('is_public') if 'is_public' in payload else None
+    tracks = payload.get('tracks') if 'tracks' in payload else None
+
+    if tracks is not None and not isinstance(tracks, list):
+        return jsonify({'status': 'error', 'message': '曲目清單格式不正確'}), 400
+
+    # 若是單筆刪除或單筆排序指令，也支援透過 action 處理
+    action = str(payload.get('action') or '').strip()
+    if action == 'remove_track':
+        idx = int(payload.get('index', -1))
+        updated_pl, removed = remove_track_from_user_playlist(user_id, idx)
+        if removed is None or updated_pl is None:
+            return jsonify({'status': 'error', 'message': '找不到指定的歌曲編號'}), 400
+        return jsonify({
+            'status': 'ok',
+            'message': f"已從歌單移除「{removed.get('title', '未知曲目')}」",
+            'playlist': updated_pl,
+        })
+    elif action == 'reorder_track':
+        from_idx = int(payload.get('from_index', -1))
+        to_idx = int(payload.get('to_index', -1))
+        updated_pl, moved = reorder_track_in_user_playlist(user_id, from_idx, to_idx)
+        if moved is None or updated_pl is None:
+            return jsonify({'status': 'error', 'message': '重新排序編號超出範圍'}), 400
+        return jsonify({
+            'status': 'ok',
+            'message': f"已將「{moved.get('title', '未知曲目')}」移至第 {to_idx + 1} 首",
+            'playlist': updated_pl,
+        })
+
+    updated_pl = update_user_playlist(
+        user_id,
+        name=name,
+        owner_name=_user_display_name(user),
+        is_public=bool(is_public) if is_public is not None else None,
+        tracks=tracks[:PLAYLIST_MAX_TRACKS] if tracks is not None else None,
+    )
+    return jsonify({
+        'status': 'ok',
+        'message': '個人歌單設定已成功儲存！',
+        'playlist': updated_pl,
+    })
+
+
+@panel_bp.route('/api/panel/user/playlist', methods=['DELETE'])
+def user_playlist_delete_api():
+    """刪除當前登入用戶的個人歌單。"""
+    user = _get_logged_in_user()
+    if not user:
+        return jsonify({'status': 'error', 'message': '請先登入 Discord 帳號'}), 401
+
+    user_id = str(user['id'])
+    deleted = delete_user_playlist(user_id)
+    if not deleted:
+        return jsonify({'status': 'error', 'message': '找不到可刪除的歌單'}), 404
+    return jsonify({
+        'status': 'ok',
+        'message': '個人歌單已永久刪除，舊分享碼已失效。',
+        'playlist': None,
+    })
+
+
+@panel_bp.route('/api/panel/user/playlist/regenerate-code', methods=['POST'])
+def user_playlist_regenerate_code_api():
+    """重新產生 6 碼英數混合分享碼，並使舊的分享碼與他人收藏立即失效。"""
+    user = _get_logged_in_user()
+    if not user:
+        return jsonify({'status': 'error', 'message': '請先登入 Discord 帳號'}), 401
+
+    user_id = str(user['id'])
+    updated_pl = regenerate_user_playlist_share_code(user_id)
+    if updated_pl is None:
+        return jsonify({'status': 'error', 'message': '你尚未建立個人歌單'}), 404
+    return jsonify({
+        'status': 'ok',
+        'message': f"已重新產生分享碼：{updated_pl['share_code']}（舊分享碼已立即失效）",
+        'playlist': updated_pl,
+    })
+
+
+@panel_bp.route('/api/panel/user/playlist/add-track', methods=['POST'])
+def user_playlist_add_track_api():
+    """在網頁控制面板透過關鍵字或網址搜尋並新增歌曲至個人歌單。"""
+    user = _get_logged_in_user()
+    if not user:
+        return jsonify({'status': 'error', 'message': '請先登入 Discord 帳號'}), 401
+
+    user_id = str(user['id'])
+    pl = get_user_playlist(user_id)
+    if pl is None:
+        return jsonify({'status': 'error', 'message': '請先建立個人歌單後再新增歌曲'}), 404
+
+    current_tracks = pl.get('tracks') or []
+    if len(current_tracks) >= PLAYLIST_MAX_TRACKS:
+        return jsonify({
+            'status': 'error',
+            'message': f'歌單已達上限（{PLAYLIST_MAX_TRACKS} 首），請先刪除部分歌曲。',
+        }), 400
+
+    payload = request.get_json(silent=True) or {}
+    query = str(payload.get('query') or '').strip()
+    if not query:
+        return jsonify({'status': 'error', 'message': '請輸入歌曲名稱、關鍵字或網址'}), 400
+
+    track_dict = None
+    bot = get_bot()
+    if bot and getattr(bot, 'loop', None) and bot.loop.is_running():
+        music_cog = bot.get_cog('Music')
+        if music_cog is not None:
+            async def _resolve_via_lavalink():
+                tracks = await music_cog._fetch_tracks_with_fallback(query)
+                if not tracks:
+                    return None
+                first = tracks[0] if not hasattr(tracks, 'tracks') else (tracks.tracks[0] if tracks.tracks else None)
+                if first is None:
+                    return None
+                return music_cog._playable_to_playlist_dict(first, fallback_query=query)
+
+            try:
+                track_dict = run_coroutine_threadsafe(_resolve_via_lavalink(), timeout=12)
+            except Exception as exc:
+                print(f"⚠️ 網頁面板透過 Lavalink 解析歌曲失敗 ({query}): {exc}")
+
+    # 若 Lavalink 暫時未連線或找不到，仍允許以關鍵字/網址預存，待實際於語音頻道播放時由 _play_track 即時解析
+    if track_dict is None:
+        is_url = query.startswith('http://') or query.startswith('https://')
+        track_dict = {
+            'title': str(payload.get('title') or query)[:120],
+            'author': str(payload.get('author') or ('外部連結' if is_url else '待播放時自動解析'))[:80],
+            'uri': query if is_url else None,
+            'identifier': None,
+            'length': 0,
+            'is_stream': False,
+            'is_seekable': True,
+            'source': 'youtube',
+            'artwork': None,
+            'encoded': None,
+            'query': query,
+        }
+
+    updated_pl, added_count, _ = add_tracks_to_user_playlist(
+        user_id, [track_dict], owner_name=_user_display_name(user)
+    )
+    if added_count <= 0 or updated_pl is None:
+        return jsonify({'status': 'error', 'message': f'歌單已滿（上限 {PLAYLIST_MAX_TRACKS} 首）'}), 400
+
+    return jsonify({
+        'status': 'ok',
+        'message': f"已將「{track_dict.get('title', query)}」加入歌單（第 {len(updated_pl.get('tracks') or [])} / {PLAYLIST_MAX_TRACKS} 首）！",
+        'playlist': updated_pl,
+        'added_track': track_dict,
+    })
+
+
+@panel_bp.route('/api/panel/user/playlist/saved', methods=['POST'])
+def user_playlist_save_by_code_api():
+    """透過 6 碼分享碼在網頁端收藏其他用戶的歌單。"""
+    user = _get_logged_in_user()
+    if not user:
+        return jsonify({'status': 'error', 'message': '請先登入 Discord 帳號'}), 401
+
+    user_id = str(user['id'])
+    payload = request.get_json(silent=True) or {}
+    code = str(payload.get('share_code') or '').strip().upper()
+    if len(code) != 6 or not code.isalnum():
+        return jsonify({'status': 'error', 'message': '請輸入有效的 6 碼英數混合分享碼'}), 400
+
+    target_pl = get_playlist_by_share_code(code)
+    if target_pl is None:
+        return jsonify({'status': 'error', 'message': f'找不到分享碼為 {code} 的歌單（可能輸入錯誤或舊分享碼已失效）'}), 404
+
+    if str(target_pl['user_id']) == user_id:
+        return jsonify({'status': 'error', 'message': '這是你自己的歌單，無需重複收藏'}), 400
+
+    save_shared_playlist_for_user(user_id, target_pl['user_id'], target_pl['share_code'])
+    saved = get_saved_playlists_for_user(user_id)
+    return jsonify({
+        'status': 'ok',
+        'message': f"已成功收藏 {target_pl.get('owner_name') or '其他用戶'} 的歌單「{target_pl['name']}」！",
+        'saved_playlists': saved,
+    })
+
+
+@panel_bp.route('/api/panel/user/playlist/saved/<owner_id>', methods=['DELETE'])
+def user_playlist_remove_saved_api(owner_id: str):
+    """移除已收藏的他人的分享歌單。"""
+    user = _get_logged_in_user()
+    if not user:
+        return jsonify({'status': 'error', 'message': '請先登入 Discord 帳號'}), 401
+
+    user_id = str(user['id'])
+    remove_saved_playlist_for_user(user_id, owner_id)
+    saved = get_saved_playlists_for_user(user_id)
+    return jsonify({
+        'status': 'ok',
+        'message': '已從收藏清單中移除該歌單。',
+        'saved_playlists': saved,
+    })
+
 

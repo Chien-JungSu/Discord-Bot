@@ -760,8 +760,29 @@ button.dropdown-item.dropdown-owner-btn:hover span {
   display: block !important;
 }
 
-.owner-mode .sidebar-nav {
+.owner-mode .sidebar-nav,
+.personal-mode .sidebar-nav {
   display: none !important;
+}
+
+.personal-sidebar-info {
+  display: none;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(56, 189, 248, 0.08);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  color: #bae6fd;
+  font-size: 0.84rem;
+  line-height: 1.6;
+}
+
+.personal-sidebar-info p {
+  margin: 0;
+}
+
+.personal-mode .personal-sidebar-info {
+  display: block !important;
 }
 
 /* 主面板內容區塊 */
@@ -3226,5 +3247,322 @@ body.has-unsaved-changes.has-back-to-top .toast-container {
     justify-content: center;
   }
 }
+
+/* ---------- 個人設定：音樂歌單管理樣式 ---------- */
+.personal-playlist-card {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 20px;
+  padding: 24px;
+}
+
+.personal-empty-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.personal-empty-icon {
+  font-size: 2.4rem;
+  flex-shrink: 0;
+}
+
+.personal-empty-header h3 {
+  margin: 0 0 6px;
+  font-size: 1.2rem;
+  color: #ffffff;
+}
+
+.personal-empty-header p {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #cbd5e1;
+  line-height: 1.5;
+}
+
+.personal-meta-grid {
+  display: grid;
+  grid-template-columns: 1.25fr 1fr;
+  gap: 24px;
+  align-items: stretch;
+}
+
+.personal-meta-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.personal-meta-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.personal-share-code-box {
+  background: linear-gradient(135deg, rgba(56, 189, 248, 0.08) 0%, rgba(99, 102, 241, 0.08) 100%);
+  border: 1px solid rgba(125, 211, 252, 0.28);
+  border-radius: 18px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.share-code-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.share-code-title {
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: #e2e8f0;
+}
+
+.share-code-display-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.share-code-pill {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 1.45rem;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  color: #38bdf8;
+  background: rgba(15, 23, 42, 0.75);
+  border: 1px solid rgba(56, 189, 248, 0.45);
+  border-radius: 12px;
+  padding: 8px 16px;
+}
+
+.btn-sm-pill {
+  min-height: 38px !important;
+  padding: 6px 14px !important;
+  font-size: 0.84rem !important;
+}
+
+.share-code-hint {
+  margin: 0;
+  font-size: 0.82rem;
+  color: #94a3b8;
+  line-height: 1.5;
+}
+
+.personal-tracks-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.personal-section-title {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.personal-add-track-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.personal-add-track-row .form-control {
+  flex: 1;
+  min-width: 0;
+}
+
+.personal-add-track-row .btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.personal-tracks-toolbar {
+  margin-bottom: 14px;
+}
+
+.personal-tracks-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 520px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+}
+
+.personal-track-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  transition: all 0.18s ease;
+}
+
+.personal-track-row:hover {
+  background: rgba(30, 41, 59, 0.72);
+  border-color: rgba(125, 211, 252, 0.25);
+}
+
+.personal-track-row.is-dragging {
+  opacity: 0.45;
+  border-style: dashed;
+}
+
+.personal-track-row.drag-over {
+  border-color: #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
+}
+
+.personal-track-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex: 1;
+}
+
+.personal-track-drag-handle {
+  cursor: grab;
+  color: #64748b;
+  font-size: 1.05rem;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.personal-track-index {
+  font-family: monospace;
+  font-weight: 800;
+  font-size: 0.9rem;
+  color: #38bdf8;
+  min-width: 34px;
+  flex-shrink: 0;
+}
+
+.personal-track-info {
+  min-width: 0;
+  flex: 1;
+}
+
+.personal-track-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #f8fafc;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.playlist-track-link {
+  color: #7dd3fc;
+  text-decoration: none;
+}
+
+.playlist-track-link:hover {
+  text-decoration: underline;
+}
+
+.personal-track-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8rem;
+  color: #94a3b8;
+  margin-top: 3px;
+}
+
+.personal-track-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.personal-saved-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.personal-saved-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+}
+
+.personal-saved-title {
+  font-weight: 700;
+  color: #f8fafc;
+  font-size: 0.95rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.personal-saved-meta {
+  font-size: 0.82rem;
+  color: #94a3b8;
+  margin-top: 4px;
+}
+
+@media (max-width: 900px) {
+  .personal-meta-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .personal-playlist-card {
+    padding: 16px;
+  }
+
+  .personal-add-track-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .personal-add-track-row .btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .personal-track-row,
+  .personal-saved-card {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .personal-track-actions {
+    width: 100%;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+}
+
 
 

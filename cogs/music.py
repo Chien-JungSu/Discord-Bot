@@ -102,7 +102,22 @@ from cogs.database import (
     load_music_settings as _load_music_settings,
     save_music_settings as _save_music_settings,
     build_panel_link_view,
+    PLAYLIST_MAX_TRACKS,
+    get_user_playlist,
+    get_playlist_by_share_code,
+    create_user_playlist,
+    update_user_playlist,
+    add_tracks_to_user_playlist,
+    remove_track_from_user_playlist,
+    reorder_track_in_user_playlist,
+    regenerate_user_playlist_share_code,
+    delete_user_playlist,
+    save_shared_playlist_for_user,
+    get_saved_playlists_for_user,
+    get_all_public_playlists,
 )
+
+PLAYLIST_PAGE_SIZE = 10
 
 
 _TIME_RE = re.compile(r"^(?:(\d+):)?(?:(\d+):)?(\d+)$")
@@ -1119,6 +1134,438 @@ class MusicControlView(ui.LayoutView):
             await cog._sync_panel(interaction.guild.id, player, interaction=interaction)
 
 
+# ==============================================================================
+# 用戶個人歌單 UI 元件（分頁檢視、互動編輯、重新排序 Modal、刪除確認）
+# ==============================================================================
+def build_playlist_page_embed(
+    playlist: dict[str, Any],
+    page: int = 0,
+    *,
+    title_prefix: str = "🎵 個人歌單",
+    extra_notice: str | None = None,
+) -> tuple[discord.Embed, int, int]:
+    """建構單頁 10 首歌曲的歌單 Embed，回傳 (embed, 校正後頁碼 0-based, 總頁數)。"""
+    tracks: list[dict[str, Any]] = list(playlist.get("tracks") or [])
+    total_tracks = len(tracks)
+    total_pages = max(1, (total_tracks + PLAYLIST_PAGE_SIZE - 1) // PLAYLIST_PAGE_SIZE)
+    safe_page = max(0, min(int(page), total_pages - 1))
+
+    vis_label = "🌐 公開（同伺服器成員可直接選取）" if playlist.get("is_public") else "🔒 私人（僅自己或輸入分享碼可播放）"
+    share_code = playlist.get("share_code") or "------"
+    owner_name = playlist.get("owner_name") or "未知用戶"
+
+    total_ms = sum(max(0, int(t.get("length") or 0)) for t in tracks if not t.get("is_stream"))
+    total_dur_str = format_time(total_ms) if total_ms > 0 else "00:00"
+
+    desc_lines = [
+        f"**擁有者：** {owner_name}",
+        f"**權限狀態：** {vis_label}",
+        f"**🔑 分享碼：** `{share_code}`（可於 `/music_play` 的 `playlist` 參數輸入此碼跨服播放並自動收藏）",
+        f"**曲目數量：** `{total_tracks} / {PLAYLIST_MAX_TRACKS}` 首（總時長約 `{total_dur_str}`）",
+    ]
+    if extra_notice:
+        desc_lines.append(f"\n{extra_notice}")
+    desc_lines.append("")
+
+    if not tracks:
+        desc_lines.append("📭 *目前歌單內還沒有任何歌曲，可使用 `/music_playlist_add` 或 `/music_playlist_sync` 新增！*")
+    else:
+        start_idx = safe_page * PLAYLIST_PAGE_SIZE
+        page_slice = tracks[start_idx : start_idx + PLAYLIST_PAGE_SIZE]
+        desc_lines.append(f"**📜 曲目列表（第 {safe_page + 1} / {total_pages} 頁）：**")
+        for offset, item in enumerate(page_slice, start=start_idx + 1):
+            t_title = str(item.get("title") or "未知曲目")
+            t_uri = item.get("uri")
+            t_author = str(item.get("author") or "未知")
+            t_len = format_duration(item.get("length"))
+            link_title = f"[{t_title}]({t_uri})" if t_uri else t_title
+            desc_lines.append(f"`{offset:02d}.` {link_title} — *{t_author}*（{t_len}）")
+
+    embed = discord.Embed(
+        title=f"{title_prefix}：{playlist.get('name', '未命名歌單')}",
+        description="\n".join(desc_lines),
+        color=discord.Color.blurple(),
+        timestamp=discord.utils.utcnow(),
+    )
+    embed.set_footer(text=f"第 {safe_page + 1} / {total_pages} 頁・每頁顯示 {PLAYLIST_PAGE_SIZE} 首")
+    return embed, safe_page, total_pages
+
+
+class PlaylistPaginationView(ui.View):
+    """/music_playlist 分頁檢視器（每頁顯示 10 首）。"""
+
+    def __init__(self, user_id: int, playlist_owner_id: str | int, page: int = 0, timeout: float = 180.0):
+        super().__init__(timeout=timeout)
+        self.user_id = int(user_id)
+        self.playlist_owner_id = str(playlist_owner_id)
+        self.page = int(page)
+        self._sync_buttons()
+
+    def _load_playlist(self) -> dict[str, Any] | None:
+        return get_user_playlist(self.playlist_owner_id)
+
+    def _sync_buttons(self, playlist: dict[str, Any] | None = None) -> tuple[discord.Embed | None, int, int]:
+        pl = playlist if playlist is not None else self._load_playlist()
+        self.clear_items()
+        if pl is None:
+            return None, 0, 1
+        embed, safe_page, total_pages = build_playlist_page_embed(pl, self.page)
+        self.page = safe_page
+
+        prev_btn = ui.Button(
+            label="◀️ 上一頁",
+            style=discord.ButtonStyle.secondary,
+            disabled=(safe_page <= 0),
+        )
+        page_indicator = ui.Button(
+            label=f"第 {safe_page + 1} / {total_pages} 頁",
+            style=discord.ButtonStyle.secondary,
+            disabled=True,
+        )
+        next_btn = ui.Button(
+            label="▶️ 下一頁",
+            style=discord.ButtonStyle.secondary,
+            disabled=(safe_page >= total_pages - 1),
+        )
+        prev_btn.callback = self._on_prev
+        next_btn.callback = self._on_next
+        self.add_item(prev_btn)
+        self.add_item(page_indicator)
+        self.add_item(next_btn)
+        return embed, safe_page, total_pages
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("❌ 只有執行此指令的使用者可以翻頁。", ephemeral=True)
+            return False
+        return True
+
+    async def _on_prev(self, interaction: discord.Interaction):
+        self.page = max(0, self.page - 1)
+        embed, _, _ = self._sync_buttons()
+        if embed is None:
+            await interaction.response.edit_message(content="ℹ️ 此歌單已被刪除。", embed=None, view=None)
+            return
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def _on_next(self, interaction: discord.Interaction):
+        self.page += 1
+        embed, _, _ = self._sync_buttons()
+        if embed is None:
+            await interaction.response.edit_message(content="ℹ️ 此歌單已被刪除。", embed=None, view=None)
+            return
+        await interaction.response.edit_message(embed=embed, view=self)
+
+
+class PlaylistRenameModal(ui.Modal, title="修改歌單名稱"):
+    new_name = ui.TextInput(
+        label="新歌單名稱（最多 50 字）",
+        placeholder="請輸入新的歌單名稱...",
+        min_length=1,
+        max_length=50,
+        required=True,
+    )
+
+    def __init__(self, edit_view: "PlaylistEditView", current_name: str = ""):
+        super().__init__()
+        self.edit_view = edit_view
+        if current_name:
+            self.new_name.default = current_name[:50]
+
+    async def on_submit(self, interaction: discord.Interaction):
+        name_val = self.new_name.value.strip()
+        if not name_val:
+            await interaction.response.send_message("❌ 歌單名稱不可為空。", ephemeral=True)
+            return
+        updated = update_user_playlist(
+            self.edit_view.user_id,
+            name=name_val,
+            owner_name=interaction.user.display_name,
+        )
+        if updated is None:
+            await interaction.response.edit_message(content="❌ 找不到歌單，可能已被刪除。", embed=None, view=None)
+            return
+        embed = self.edit_view.refresh_items(updated, notice=f"✅ 已將歌單重新命名為「**{updated['name']}**」。")
+        await interaction.response.edit_message(embed=embed, view=self.edit_view)
+
+
+class PlaylistReorderModal(ui.Modal, title="重新排序歌單曲目"):
+    from_pos = ui.TextInput(
+        label="原歌曲序號（1 ~ 總首數）",
+        placeholder="例如：5（代表第 5 首歌）",
+        min_length=1,
+        max_length=3,
+        required=True,
+    )
+    to_pos = ui.TextInput(
+        label="移至新位置序號（1 ~ 總首數）",
+        placeholder="例如：1（代表移到第 1 首）",
+        min_length=1,
+        max_length=3,
+        required=True,
+    )
+
+    def __init__(self, edit_view: "PlaylistEditView"):
+        super().__init__()
+        self.edit_view = edit_view
+
+    async def on_submit(self, interaction: discord.Interaction):
+        pl = get_user_playlist(self.edit_view.user_id)
+        if pl is None:
+            await interaction.response.edit_message(content="❌ 找不到歌單，可能已被刪除。", embed=None, view=None)
+            return
+        total = len(pl.get("tracks") or [])
+        if total < 2:
+            await interaction.response.send_message("ℹ️ 歌單至少要有 2 首歌才能重新排序。", ephemeral=True)
+            return
+        try:
+            src_1 = int(self.from_pos.value.strip())
+            dst_1 = int(self.to_pos.value.strip())
+        except ValueError:
+            await interaction.response.send_message("❌ 序號必須是整數數字（例如 `1`、`5`）。", ephemeral=True)
+            return
+        if not (1 <= src_1 <= total) or not (1 <= dst_1 <= total):
+            await interaction.response.send_message(
+                f"❌ 序號超出範圍！請輸入 `1` 到 `{total}` 之間的數字。", ephemeral=True
+            )
+            return
+        moved_title = pl["tracks"][src_1 - 1].get("title", "未知曲目")
+        updated = reorder_track_in_user_playlist(self.edit_view.user_id, src_1 - 1, dst_1 - 1)
+        if updated is None:
+            await interaction.response.send_message("❌ 重新排序失敗。", ephemeral=True)
+            return
+        self.edit_view.page = (dst_1 - 1) // PLAYLIST_PAGE_SIZE
+        embed = self.edit_view.refresh_items(
+            updated,
+            notice=f"🔀 已將「**{moved_title}**」從第 `{src_1}` 首移至第 `{dst_1}` 首。",
+        )
+        await interaction.response.edit_message(embed=embed, view=self.edit_view)
+
+
+class PlaylistEditView(ui.View):
+    """/music_playlist_edit 互動式歌單編輯面板（支援刪除歌曲、重新排序、切換公開／私人、重新命名、重產分享碼）。"""
+
+    def __init__(self, user_id: int, page: int = 0, notice: str | None = None, timeout: float = 300.0):
+        super().__init__(timeout=timeout)
+        self.user_id = int(user_id)
+        self.page = int(page)
+        self.last_embed: discord.Embed | None = None
+        pl = get_user_playlist(self.user_id)
+        if pl is not None:
+            self.refresh_items(pl, notice=notice)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("❌ 你只能編輯自己的歌單。", ephemeral=True)
+            return False
+        return True
+
+    def refresh_items(self, playlist: dict[str, Any], notice: str | None = None) -> discord.Embed:
+        self.clear_items()
+        embed, safe_page, total_pages = build_playlist_page_embed(
+            playlist,
+            self.page,
+            title_prefix="🛠️ 編輯歌單",
+            extra_notice=notice,
+        )
+        self.page = safe_page
+        self.last_embed = embed
+        tracks: list[dict[str, Any]] = list(playlist.get("tracks") or [])
+
+        # Row 0: 本頁歌曲快速刪除下拉選單
+        if tracks:
+            start_idx = safe_page * PLAYLIST_PAGE_SIZE
+            page_slice = tracks[start_idx : start_idx + PLAYLIST_PAGE_SIZE]
+            options = [
+                discord.SelectOption(
+                    label=f"{idx}. {str(t.get('title') or '未知曲目')[:80]}",
+                    description=f"作者：{str(t.get('author') or '未知')[:45]}｜點擊從歌單移除",
+                    value=str(idx - 1),
+                    emoji="🗑️",
+                )
+                for idx, t in enumerate(page_slice, start=start_idx + 1)
+            ]
+            del_select = ui.Select(
+                placeholder="🗑️ 選擇本頁歌曲以從歌單刪除...",
+                min_values=1,
+                max_values=1,
+                options=options,
+                row=0,
+            )
+            del_select.callback = self._on_delete_select
+            self.add_item(del_select)
+
+        # Row 1: 重新排序、切換公開/私人、修改名稱、重新產生分享碼
+        reorder_btn = ui.Button(
+            label="🔀 重新排序",
+            style=discord.ButtonStyle.primary,
+            disabled=(len(tracks) < 2),
+            row=1,
+        )
+        is_pub = bool(playlist.get("is_public"))
+        vis_btn = ui.Button(
+            label="🔒 改為私人" if is_pub else "🌐 設為公開",
+            style=discord.ButtonStyle.secondary if is_pub else discord.ButtonStyle.success,
+            row=1,
+        )
+        rename_btn = ui.Button(
+            label="✏️ 修改名稱",
+            style=discord.ButtonStyle.secondary,
+            row=1,
+        )
+        regen_btn = ui.Button(
+            label="🔄 重產分享碼",
+            style=discord.ButtonStyle.secondary,
+            row=1,
+        )
+        reorder_btn.callback = self._on_open_reorder
+        vis_btn.callback = self._on_toggle_public
+        rename_btn.callback = self._on_open_rename
+        regen_btn.callback = self._on_regenerate_code
+        self.add_item(reorder_btn)
+        self.add_item(vis_btn)
+        self.add_item(rename_btn)
+        self.add_item(regen_btn)
+
+        # Row 2: 分頁按鈕（當超過 1 頁時）
+        if total_pages > 1:
+            prev_btn = ui.Button(
+                label="◀️ 上一頁",
+                style=discord.ButtonStyle.secondary,
+                disabled=(safe_page <= 0),
+                row=2,
+            )
+            page_btn = ui.Button(
+                label=f"第 {safe_page + 1} / {total_pages} 頁",
+                style=discord.ButtonStyle.secondary,
+                disabled=True,
+                row=2,
+            )
+            next_btn = ui.Button(
+                label="▶️ 下一頁",
+                style=discord.ButtonStyle.secondary,
+                disabled=(safe_page >= total_pages - 1),
+                row=2,
+            )
+            prev_btn.callback = self._on_prev
+            next_btn.callback = self._on_next
+            self.add_item(prev_btn)
+            self.add_item(page_btn)
+            self.add_item(next_btn)
+
+        return embed
+
+    async def _on_delete_select(self, interaction: discord.Interaction):
+        values = interaction.data.get("values") if isinstance(interaction.data, dict) else None
+        if not values:
+            await interaction.response.defer()
+            return
+        idx_0 = int(values[0])
+        updated, removed = remove_track_from_user_playlist(self.user_id, idx_0)
+        if updated is None:
+            await interaction.response.edit_message(content="❌ 找不到歌單，可能已被刪除。", embed=None, view=None)
+            return
+        rm_title = removed.get("title", "未知曲目") if removed else "指定曲目"
+        embed = self.refresh_items(updated, notice=f"🗑️ 已從歌單移除第 `{idx_0 + 1}` 首：「**{rm_title}**」。")
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def _on_open_reorder(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(PlaylistReorderModal(self))
+
+    async def _on_toggle_public(self, interaction: discord.Interaction):
+        pl = get_user_playlist(self.user_id)
+        if pl is None:
+            await interaction.response.edit_message(content="❌ 找不到歌單，可能已被刪除。", embed=None, view=None)
+            return
+        new_pub = not bool(pl.get("is_public"))
+        updated = update_user_playlist(
+            self.user_id,
+            is_public=new_pub,
+            owner_name=interaction.user.display_name,
+        )
+        if updated is None:
+            await interaction.response.edit_message(content="❌ 更新失敗。", embed=None, view=None)
+            return
+        state_str = "🌐 **公開**（同伺服器成員可直接在 `/music_play` 選單看見）" if new_pub else "🔒 **私人**（僅自己或透過分享碼可播放）"
+        embed = self.refresh_items(updated, notice=f"✅ 歌單權限已切換為：{state_str}")
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def _on_open_rename(self, interaction: discord.Interaction):
+        pl = get_user_playlist(self.user_id)
+        cur_name = pl.get("name", "") if pl else ""
+        await interaction.response.send_modal(PlaylistRenameModal(self, current_name=cur_name))
+
+    async def _on_regenerate_code(self, interaction: discord.Interaction):
+        updated = regenerate_user_playlist_share_code(self.user_id)
+        if updated is None:
+            await interaction.response.edit_message(content="❌ 找不到歌單，可能已被刪除。", embed=None, view=None)
+            return
+        embed = self.refresh_items(
+            updated,
+            notice=f"🔄 已重新產生分享碼為 `{updated['share_code']}`（舊分享碼已立即失效）。",
+        )
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def _on_prev(self, interaction: discord.Interaction):
+        self.page = max(0, self.page - 1)
+        pl = get_user_playlist(self.user_id)
+        if pl is None:
+            await interaction.response.edit_message(content="❌ 找不到歌單。", embed=None, view=None)
+            return
+        embed = self.refresh_items(pl)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def _on_next(self, interaction: discord.Interaction):
+        self.page += 1
+        pl = get_user_playlist(self.user_id)
+        if pl is None:
+            await interaction.response.edit_message(content="❌ 找不到歌單。", embed=None, view=None)
+            return
+        embed = self.refresh_items(pl)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+
+class PlaylistRemoveConfirmView(ui.View):
+    """/music_playlist_remove 刪除歌單確認訊息 View。"""
+
+    def __init__(self, user_id: int, playlist_name: str, timeout: float = 60.0):
+        super().__init__(timeout=timeout)
+        self.user_id = int(user_id)
+        self.playlist_name = playlist_name
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("❌ 只有歌單擁有者本人可以確認刪除。", ephemeral=True)
+            return False
+        return True
+
+    @ui.button(label="🗑️ 確認刪除歌單", style=discord.ButtonStyle.danger)
+    async def confirm_delete(self, interaction: discord.Interaction, button: ui.Button):
+        deleted = delete_user_playlist(self.user_id)
+        self.stop()
+        if deleted:
+            await interaction.response.edit_message(
+                content=f"🗑️ 已成功刪除歌單「**{self.playlist_name}**」（包含所有曲目與分享碼）。",
+                embed=None,
+                view=None,
+            )
+        else:
+            await interaction.response.edit_message(
+                content="ℹ️ 找不到該歌單，可能已經被刪除了。",
+                embed=None,
+                view=None,
+            )
+
+    @ui.button(label="✖️ 取消", style=discord.ButtonStyle.secondary)
+    async def cancel_delete(self, interaction: discord.Interaction, button: ui.Button):
+        self.stop()
+        await interaction.response.edit_message(
+            content=f"ℹ️ 已取消刪除，歌單「**{self.playlist_name}**」保留不變。",
+            embed=None,
+            view=None,
+        )
+
+
 class Music(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -1576,6 +2023,40 @@ class Music(commands.Cog):
                 return False
         return False
 
+    @staticmethod
+    def _is_live_track(track: Any) -> bool:
+        """判斷曲目是否為直播串流（is_stream=True、不可跳轉、或時長 >= 24 小時 86,400,000 ms）。"""
+        if track is None:
+            return False
+        if bool(getattr(track, "is_stream", False)):
+            return True
+        if not getattr(track, "is_seekable", True):
+            return True
+        length = getattr(track, "length", None)
+        if length is not None:
+            try:
+                val = int(length)
+                if val <= 0 or val >= 86_400_000:
+                    return True
+            except (ValueError, TypeError):
+                pass
+        return False
+
+    async def _refresh_live_stream_track(self, track: Any) -> Any:
+        """針對直播曲目重新向 Lavalink 解析最新串流憑證（解決直播 HLS 分段憑證過期導致自動結束的問題）。"""
+        uri = getattr(track, "uri", None)
+        if not uri:
+            return track
+        try:
+            found = await asyncio.wait_for(self._fetch_tracks_with_fallback(str(uri)), timeout=10.0)
+            if found:
+                if wavelink is not None and isinstance(found, wavelink.Playlist):
+                    return found.tracks[0] if found.tracks else track
+                return found[0]
+        except Exception as exc:
+            print(f"⚠️ 重新解析直播串流網址失敗 ({uri})，沿用原曲目重試：{exc}")
+        return track
+
     async def _recover_player_after_session_reset(self, player: Any) -> None:
         """新 Session 就緒後恢復單一 Player：重送語音狀態 → 從中斷點續播（已播完則直接換下一首）。"""
         guild = getattr(player, "guild", None)
@@ -1597,8 +2078,8 @@ class Music(commands.Cog):
             return  # 閒置中的 player 只需恢復語音連線，不用播放
 
         length = int(getattr(track, "length", 0) or 0)
-        is_stream = bool(getattr(track, "is_stream", False))
-        position = int(getattr(player, "position", 0) or 0) if current is not None else 0
+        is_stream = self._is_live_track(track)
+        position = 0 if is_stream else (int(getattr(player, "position", 0) or 0) if current is not None else 0)
 
         try:
             if not is_stream and length > 0 and position >= length - 1500:
@@ -1607,11 +2088,18 @@ class Music(commands.Cog):
                 await self.on_wavelink_track_end(SimpleNamespace(player=player, reason="finished", track=track))
                 return
 
-            print(f"▶️ [Session 復原] 從 {format_position(position)} 恢復播放「{getattr(track, 'title', '?')}」 (guild_id={guild_id})")
+            if is_stream:
+                track = await self._refresh_live_stream_track(track)
+                player._active_track = track
+
+            print(
+                f"▶️ [Session 復原] {'重新銜接直播' if is_stream else f'從 {format_position(position)} 恢復播放'}"
+                f"「{getattr(track, 'title', '?')}」 (guild_id={guild_id})"
+            )
             await player.play(
                 track,
                 replace=True,
-                start=max(0, position),
+                start=0 if is_stream else max(0, position),
                 volume=getattr(player, "volume", 100),
                 paused=bool(getattr(player, "paused", False)),
             )
@@ -1787,7 +2275,7 @@ class Music(commands.Cog):
                     continue
 
                 track = player.current
-                is_stream = bool(getattr(track, "is_stream", False))
+                is_stream = self._is_live_track(track)
                 pos_ms = getattr(player, "position", 0)
                 len_ms = getattr(track, "length", None)
 
@@ -1997,6 +2485,34 @@ class Music(commands.Cog):
             print(f">>> 傳送 TrackException 通知訊息失敗: {e}")
 
     @commands.Cog.listener()
+    async def on_wavelink_track_stuck(self, payload: Any):
+        """當音軌（特別是長時間直播 HLS 分段）發生緩衝卡住時，自動重新銜接直播或推進播放。"""
+        player = getattr(payload, "player", None)
+        track = getattr(payload, "track", None) or getattr(player, "current", None) or getattr(player, "_active_track", None)
+        if player is None or track is None:
+            return
+        guild_obj = getattr(player, "guild", None)
+        guild_id = guild_obj.id if guild_obj else None
+        if self._is_live_track(track):
+            print(f"🔄 [直播防斷流] 偵測到直播「{getattr(track, 'title', '?')}」緩衝卡住 (TrackStuck)，自動重新銜接直播 (guild_id={guild_id})")
+            fresh_track = await self._refresh_live_stream_track(track)
+            requester_name = getattr(player, "current_requester", None) or "未知"
+            requester_id = getattr(player, "current_requester_id", None)
+            try:
+                player._retrying_live_stream = True
+                await self._play_track(player, fresh_track, requester_name, requester_id)
+            except Exception as exc:
+                print(f"⚠️ [直播防斷流] TrackStuck 重新銜接直播失敗：{exc}")
+            finally:
+                player._retrying_live_stream = False
+            return
+        # 一般非直播曲目若卡住且已接近結尾，直接觸發結束換下一首
+        pos = int(getattr(player, "position", 0) or 0)
+        length = int(getattr(track, "length", 0) or 0)
+        if length > 0 and pos >= length - 3000:
+            await self.on_wavelink_track_end(SimpleNamespace(player=player, reason="finished", track=track))
+
+    @commands.Cog.listener()
     async def on_wavelink_track_end(self, payload: Any):
         """第3週：串接播放佇列（播完自動連播）。第4週：加入循環模式與 skip / stop 意圖判斷。
 
@@ -2092,6 +2608,40 @@ class Music(commands.Cog):
         requester_name = getattr(player, "current_requester", None) or "未知"
         requester_id = getattr(player, "current_requester_id", None)
         replay_track = active_track if active_track is not None else ended_track
+
+        # ---------- 直播防自動結束機制 ----------
+        # 根因：YouTube / Twitch 等直播串流在播放一定時間後，常因 HLS 分段清單刷新、CDN 憑證輪替或瞬間緩衝中斷，
+        # 導致 Lavalink 發出 TrackEndEvent(reason="finished" 或 "loadFailed")，進而讓機器人誤以為「歌播完了」而自動結束播放。
+        # 解法：只要該曲目為直播（_is_live_track）且非使用者主動跳過或停止（intent is None），
+        # 自動重新解析直播串流網址並無縫續播（若已穩定播放超過 25 秒則歸零重試計數；連續瞬斷最多重試 3 次）。
+        if intent is None and replay_track is not None and self._is_live_track(replay_track) and reason in ("finished", "loadfailed", "load_failed"):
+            started_mono = float(getattr(player, "_track_started_mono", 0.0) or 0.0)
+            if started_mono > 0.0 and (time.monotonic() - started_mono) >= 25.0:
+                player._live_retry_count = 0
+            retry_count = int(getattr(player, "_live_retry_count", 0) or 0)
+            if retry_count < 3:
+                player._live_retry_count = retry_count + 1
+                guild_obj = getattr(player, "guild", None)
+                gid = guild_obj.id if guild_obj else None
+                print(
+                    f"🔄 [直播防斷流] 直播「{getattr(replay_track, 'title', '?')}」收到 {reason} 事件，"
+                    f"自動重新銜接直播串流（第 {player._live_retry_count}/3 次，guild_id={gid}）"
+                )
+                player.advancing = True
+                try:
+                    fresh_track = await self._refresh_live_stream_track(replay_track)
+                    player._retrying_live_stream = True
+                    await self._play_track(player, fresh_track, requester_name, requester_id)
+                    return
+                except Exception as exc:
+                    print(f"⚠️ [直播防斷流] 自動續播直播失敗：{exc}")
+                    if self._is_session_lost_error(exc):
+                        await self._handle_session_lost(player, exc)
+                        return
+                finally:
+                    player._retrying_live_stream = False
+                    player.advancing = False
+
         if reason in ("loadfailed", "load_failed"):
             ended_track = None
             replay_track = None
@@ -3427,14 +3977,305 @@ class Music(commands.Cog):
             if notice and notice.startswith("📥"):
                 self._panel_notices.pop(guild_id, None)
 
-    @app_commands.command(name="music_play", description="搜尋並播放音樂，若目前正在播放則排入佇列（可輸入關鍵字或直接貼網址）")
-    @app_commands.describe(query="歌曲名稱 / 關鍵字，或是 YouTube、SoundCloud 網址")
+    # ==========================================================
+    # 用戶歌單（User Playlists）曲目序列化與解析輔助方法
+    # ==========================================================
+    @staticmethod
+    def _playable_to_playlist_dict(track, fallback_query: str | None = None) -> dict:
+        """將 wavelink.Playable（或相容曲目物件）轉為可寫入 SQLite user_playlists 的 dict。"""
+        title = str(getattr(track, "title", None) or "未知曲目").strip()
+        author = str(getattr(track, "author", None) or "未知作者").strip()
+        uri = getattr(track, "uri", None)
+        identifier = getattr(track, "identifier", None)
+        length = int(getattr(track, "length", 0) or 0)
+        is_stream = bool(getattr(track, "is_stream", False))
+        is_seekable = bool(getattr(track, "is_seekable", not is_stream))
+        source = getattr(track, "source", None)
+        artwork = getattr(track, "artwork", None)
+        encoded = getattr(track, "encoded", None)
+        query = fallback_query or uri or f"{title} {author}".strip()
+        return {
+            "title": title,
+            "author": author,
+            "uri": uri,
+            "identifier": identifier,
+            "length": length,
+            "is_stream": is_stream,
+            "is_seekable": is_seekable,
+            "source": source,
+            "artwork": artwork,
+            "encoded": encoded,
+            "query": query,
+        }
+
+    @staticmethod
+    def _playlist_dict_to_playable(item: dict):
+        """從 SQLite 歌單曲目 dict 還原為 wavelink.Playable 或相容物件。"""
+        title = str(item.get("title") or "未知曲目")
+        author = str(item.get("author") or "未知作者")
+        uri = item.get("uri")
+        identifier = item.get("identifier") or ""
+        length = int(item.get("length") or 0)
+        is_stream = bool(item.get("is_stream", False))
+        is_seekable = bool(item.get("is_seekable", not is_stream))
+        source = item.get("source") or "youtube"
+        artwork = item.get("artwork")
+        encoded = item.get("encoded")
+        query = item.get("query") or uri or f"{title} {author}".strip()
+
+        if wavelink is not None and encoded:
+            try:
+                raw_payload = {
+                    "encoded": encoded,
+                    "info": {
+                        "identifier": identifier,
+                        "isSeekable": is_seekable,
+                        "author": author,
+                        "length": length,
+                        "isStream": is_stream,
+                        "position": 0,
+                        "title": title,
+                        "uri": uri,
+                        "artworkUrl": artwork,
+                        "isrc": None,
+                        "sourceName": source,
+                    },
+                    "pluginInfo": {},
+                    "userData": {},
+                }
+                playable = wavelink.Playable(raw_payload)
+                playable._from_playlist_dict = True
+                playable._playlist_query = query
+                return playable
+            except Exception:
+                pass
+
+        return SimpleNamespace(
+            title=title,
+            author=author,
+            uri=uri,
+            identifier=identifier or None,
+            length=length,
+            is_stream=is_stream,
+            is_seekable=is_seekable,
+            source=source,
+            artwork=artwork,
+            encoded=encoded,
+            _from_playlist_dict=True,
+            _playlist_query=query,
+        )
+
+    async def _resolve_playlist_track_obj(self, track):
+        """當歌單曲目缺少 encoded（例如由網頁控制面板新增）時，向 Lavalink 即時查詢並補齊 Playable。"""
+        if wavelink is None:
+            return None
+        query = (
+            getattr(track, "_playlist_query", None)
+            or getattr(track, "uri", None)
+            or f"{getattr(track, 'title', '')} {getattr(track, 'author', '')}".strip()
+        )
+        if not query:
+            return None
+        try:
+            tracks = await self._fetch_tracks_with_fallback(query)
+            if tracks:
+                return tracks[0] if not isinstance(tracks, wavelink.Playlist) else tracks.tracks[0]
+        except Exception as e:
+            print(f">>> 解析歌單曲目失敗 ({query}): {e}")
+        return None
+
+    def _get_guild_public_playlists(self, guild: discord.Guild | None, exclude_user_id: int) -> list[dict]:
+        """取得該伺服器內其他成員的公開歌單清單。"""
+        all_public = get_all_public_playlists(exclude_user_id=exclude_user_id)
+        if guild is None:
+            return all_public
+        result = []
+        for pl in all_public:
+            try:
+                owner_id = int(pl["user_id"])
+            except (TypeError, ValueError):
+                continue
+            member = guild.get_member(owner_id)
+            if member is not None:
+                pl_copy = dict(pl)
+                pl_copy["owner_name"] = member.display_name
+                result.append(pl_copy)
+            elif not getattr(guild, "chunked", False) and len(guild.members) <= 5:
+                # 若伺服器成員快取尚未完整載入，保留公開歌單以免漏列
+                result.append(pl)
+        return result
+
+    def _resolve_playlist_selection(
+        self, interaction: discord.Interaction, raw_value: str
+    ) -> tuple[dict | None, str | None, bool]:
+        """解析 /music_play 的 playlist 參數。
+
+        回傳 (playlist_dict, error_message, used_share_code)
+        - 當使用者輸入 6 碼英數分享碼時，會自動為該使用者儲存該歌單（寫入 user_saved_playlists），
+          之後在 /music_play 的 playlist 選單中就會直接顯示。
+        """
+        val = (raw_value or "").strip()
+        if not val:
+            return None, "❌ 請輸入或選擇有效的歌單名稱或 6 碼分享碼。", False
+
+        user_id = interaction.user.id
+
+        # 1. 選單值前綴：own:<uid> / saved:<uid> / pub:<uid>
+        if val.startswith("own:"):
+            pl = get_user_playlist(user_id)
+            if not pl:
+                return None, "❌ 你目前還沒有建立個人歌單，請先使用 `/music_playlist_create` 建立。", False
+            return pl, None, False
+
+        if val.startswith("saved:"):
+            target_uid = val.split(":", 1)[1].strip()
+            saved_list = get_saved_playlists_for_user(user_id)
+            for s in saved_list:
+                if str(s["user_id"]) == target_uid:
+                    return s, None, False
+            return (
+                None,
+                "❌ 該收藏歌單已無法存取（擁有者可能已重新產生分享碼或刪除了歌單）。",
+                False,
+            )
+
+        if val.startswith("pub:"):
+            target_uid = val.split(":", 1)[1].strip()
+            pl = get_user_playlist(target_uid)
+            if not pl or not pl.get("is_public"):
+                return None, "❌ 找不到該公開歌單，或擁有者已將其設為私人。", False
+            return pl, None, False
+
+        # 2. 檢查是否為 6 碼英數分享碼（不分大小寫）
+        cleaned_code = val.upper()
+        if len(cleaned_code) == 6 and cleaned_code.isalnum():
+            pl = get_playlist_by_share_code(cleaned_code)
+            if pl is not None:
+                if str(pl["user_id"]) != str(user_id):
+                    save_shared_playlist_for_user(user_id, pl["user_id"], pl["share_code"])
+                return pl, None, True
+
+        # 3. 依歌單名稱比對（先找自己的歌單 -> 已儲存的分享歌單 -> 伺服器公開歌單）
+        val_lower = val.lower()
+        own_pl = get_user_playlist(user_id)
+        if own_pl and (own_pl["name"].lower() == val_lower or own_pl["share_code"].lower() == val_lower):
+            return own_pl, None, False
+
+        for s in get_saved_playlists_for_user(user_id):
+            if s["name"].lower() == val_lower or s["share_code"].lower() == val_lower:
+                return s, None, False
+
+        for p in self._get_guild_public_playlists(interaction.guild, exclude_user_id=user_id):
+            if p["name"].lower() == val_lower:
+                return p, None, False
+
+        if len(cleaned_code) == 6 and cleaned_code.isalnum():
+            return None, f"❌ 找不到分享碼為 `{cleaned_code}` 的歌單（可能輸入錯誤，或擁有者已重新產生分享碼導致舊碼失效）。", False
+
+        return None, f"❌ 找不到名稱或分享碼為「`{val}`」的歌單。", False
+
+    async def _play_user_playlist(
+        self, interaction: discord.Interaction, player, playlist_data: dict, used_share_code: bool = False
+    ) -> None:
+        """將整個用戶歌單載入播放佇列，若目前閒置則立即開始播放第一首。"""
+        tracks_raw = playlist_data.get("tracks") or []
+        pl_name = playlist_data.get("name", "未命名歌單")
+        owner_name = playlist_data.get("owner_name") or "未知用戶"
+        is_own = str(playlist_data.get("user_id")) == str(interaction.user.id)
+
+        if not tracks_raw:
+            await self._ephemeral_error(
+                interaction,
+                f"😕 歌單「**{pl_name}**」目前沒有任何歌曲！請先使用 `/music_playlist_add` 或 `/music_playlist_sync` 新增歌曲。",
+            )
+            return
+
+        playables = [self._playlist_dict_to_playable(item) for item in tracks_raw[:PLAYLIST_MAX_TRACKS]]
+        requester_name = interaction.user.display_name
+        requester_id = interaction.user.id
+
+        was_idle = self._is_player_idle(player)
+        started_first = False
+
+        for idx, track_obj in enumerate(playables):
+            if was_idle and not started_first:
+                try:
+                    await self._play_track(player, track_obj, requester_name, requester_id)
+                    started_first = True
+                except Exception as e:
+                    if self._is_session_lost_error(e):
+                        player.song_queue.extend(
+                            (t, requester_name, requester_id) for t in playables[idx:]
+                        )
+                        await self._handle_session_lost(player, e)
+                        await self._ephemeral_error(
+                            interaction,
+                            f"🔄 音訊節點連線剛重置，正在自動重新連線，完成後將立即播放歌單「{pl_name}」。",
+                        )
+                        return
+                    print(f">>> 播放歌單首曲失敗，嘗試下一首：{e}")
+                    continue
+            else:
+                player.song_queue.append((track_obj, requester_name, requester_id))
+
+        if was_idle and not started_first:
+            await self._ephemeral_error(interaction, f"❌ 歌單「**{pl_name}**」內的曲目目前皆無法播放，請稍後再試。")
+            return
+
+        owner_tag = "你的歌單" if is_own else f"{owner_name} 的歌單"
+        saved_hint = "（已透過分享碼自動收藏至你的歌單選單）" if (used_share_code and not is_own) else ""
+        notice = (
+            f"📀 **已載入{owner_tag}「{pl_name}」**：共 {len(playables)} 首曲目已排入播放佇列"
+            f" 由 {requester_name} 點播{saved_hint}"
+        )
+        self._set_panel_notice(interaction.guild.id, notice, duration=10.0)
+        await self._sync_panel(interaction.guild.id, player)
+
+        try:
+            await interaction.delete_original_response()
+        except (discord.NotFound, discord.HTTPException):
+            pass
+
+        if used_share_code and not is_own:
+            try:
+                await interaction.followup.send(
+                    f"✅ 已透過分享碼 `{playlist_data.get('share_code')}` 播放 **{owner_name}** 的歌單「**{pl_name}**」（共 {len(playables)} 首），並已自動儲存至你的 `/music_play` 歌單選單！",
+                    ephemeral=True,
+                )
+            except (discord.NotFound, discord.HTTPException):
+                pass
+
+    @app_commands.command(name="music_play", description="搜尋並播放音樂或用戶歌單（query 與 playlist 請擇一填入）")
+    @app_commands.describe(
+        query="歌曲名稱 / 關鍵字，或是 YouTube、SoundCloud、Spotify 網址（與 playlist 擇一填入）",
+        playlist="選擇你的歌單、伺服器公開歌單，或直接輸入 6 碼分享碼跨伺服器播放（與 query 擇一填入）",
+    )
     @app_commands.guild_only()
-    async def play(self, interaction: discord.Interaction, query: str):
+    async def play(
+        self,
+        interaction: discord.Interaction,
+        query: str | None = None,
+        playlist: str | None = None,
+    ):
         if not await self._check_music_channel(interaction):
             return
         if wavelink is None:
             await interaction.response.send_message("❌ 語音模組尚未安裝完成，請聯絡管理員。", ephemeral=True)
+            return
+
+        has_query = bool(query and query.strip())
+        has_playlist = bool(playlist and playlist.strip())
+        if not has_query and not has_playlist:
+            await interaction.response.send_message(
+                "❌ 請在 `query`（歌曲關鍵字／網址）與 `playlist`（歌單名稱／6 碼分享碼）之間**擇一填入**！",
+                ephemeral=True,
+            )
+            return
+        if has_query and has_playlist:
+            await interaction.response.send_message(
+                "❌ `query` 與 `playlist` 參數只能**擇一填入**，請勿同時填寫！",
+                ephemeral=True,
+            )
             return
 
         # 搜尋 + 連線語音頻道都可能花超過 3 秒，先 defer 避免 Interaction 逾時（沿用 /weather 的慣例）。
@@ -3442,6 +4283,25 @@ class Music(commands.Cog):
             await interaction.response.defer(thinking=True)
         except (discord.NotFound, discord.HTTPException) as e:
             print(f">>> /play interaction.defer() 失敗: {e}")
+            return
+
+        # 若選擇播放歌單，先驗證歌單是否存在，避免歌單無效時還讓機器人白跑進語音房
+        if has_playlist:
+            pl_data, err_msg, used_share_code = self._resolve_playlist_selection(interaction, playlist)
+            if pl_data is None:
+                await self._ephemeral_error(interaction, err_msg or "❌ 找不到指定的歌單。")
+                return
+            if not (pl_data.get("tracks") or []):
+                await self._ephemeral_error(
+                    interaction,
+                    f"😕 歌單「**{pl_data.get('name', '未命名')}**」目前是空的，請先使用 `/music_playlist_add` 新增歌曲。",
+                )
+                return
+
+            player = await self._ensure_player(interaction)
+            if player is None:
+                return
+            await self._play_user_playlist(interaction, player, pl_data, used_share_code=used_share_code)
             return
 
         player = await self._ensure_player(interaction)
@@ -3500,6 +4360,80 @@ class Music(commands.Cog):
             await interaction.delete_original_response()
         except (discord.NotFound, discord.HTTPException):
             pass
+
+    @play.autocomplete("playlist")
+    async def play_playlist_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        """自動補全 /music_play 的 playlist 選單：
+        1. 用戶自己的歌單
+        2. 用戶曾經透過 6 碼分享碼播放而自動儲存的歌單（若對方重產分享碼則自動從選單移除）
+        3. 該伺服器內其他成員設定為「公開」的歌單
+        4. 若正在輸入 6 碼分享碼，即時預覽對應的跨伺服器歌單
+        """
+        user_id = interaction.user.id
+        kw = (current or "").strip().lower()
+        choices: list[app_commands.Choice[str]] = []
+        seen_owners: set[str] = set()
+
+        # 1. 自己的歌單
+        own_pl = get_user_playlist(user_id)
+        if own_pl:
+            owner_key = str(own_pl["user_id"])
+            seen_owners.add(owner_key)
+            count = len(own_pl.get("tracks") or [])
+            vis_tag = "公開" if own_pl.get("is_public") else "私人"
+            label = f"⭐ 我的歌單：{own_pl['name']}（{count} 首・{vis_tag}）[{own_pl['share_code']}]"
+            if not kw or kw in own_pl["name"].lower() or kw in own_pl["share_code"].lower() or kw in "我的歌單":
+                choices.append(app_commands.Choice(name=label[:100], value=f"own:{user_id}"))
+
+        # 2. 已透過分享碼自動儲存的歌單
+        saved_list = get_saved_playlists_for_user(user_id)
+        for s in saved_list:
+            owner_key = str(s["user_id"])
+            if owner_key in seen_owners:
+                continue
+            seen_owners.add(owner_key)
+            count = len(s.get("tracks") or [])
+            owner_name = s.get("owner_name") or f"用戶 {owner_key}"
+            label = f"🔖 已收藏：{s['name']} — {owner_name}（{count} 首）[{s['share_code']}]"
+            if (
+                not kw
+                or kw in s["name"].lower()
+                or kw in owner_name.lower()
+                or kw in s["share_code"].lower()
+            ):
+                choices.append(app_commands.Choice(name=label[:100], value=f"saved:{owner_key}"))
+
+        # 3. 伺服器內其他成員的公開歌單
+        guild_public = self._get_guild_public_playlists(interaction.guild, exclude_user_id=user_id)
+        for p in guild_public:
+            owner_key = str(p["user_id"])
+            if owner_key in seen_owners:
+                continue
+            seen_owners.add(owner_key)
+            count = len(p.get("tracks") or [])
+            owner_name = p.get("owner_name") or f"用戶 {owner_key}"
+            label = f"🌐 公開歌單：{p['name']} — {owner_name}（{count} 首）"
+            if (
+                not kw
+                or kw in p["name"].lower()
+                or kw in owner_name.lower()
+                or kw in p.get("share_code", "").lower()
+            ):
+                choices.append(app_commands.Choice(name=label[:100], value=f"pub:{owner_key}"))
+
+        # 4. 若使用者輸入了 6 碼分享碼且不在上述清單中，即時查詢對應歌單方便點選
+        raw_code = (current or "").strip().upper()
+        if len(raw_code) == 6 and raw_code.isalnum():
+            shared_pl = get_playlist_by_share_code(raw_code)
+            if shared_pl and str(shared_pl["user_id"]) not in seen_owners:
+                count = len(shared_pl.get("tracks") or [])
+                owner_name = shared_pl.get("owner_name") or f"用戶 {shared_pl['user_id']}"
+                label = f"🔑 分享碼 [{raw_code}]：{shared_pl['name']} — {owner_name}（{count} 首）"
+                choices.insert(0, app_commands.Choice(name=label[:100], value=raw_code))
+
+        return choices[:25]
 
     @app_commands.command(name="music_play_next", description="（插播）搜尋一首歌曲並插入佇列最前面，下一首就會播放它")
     @app_commands.describe(query="歌曲名稱 / 關鍵字，或是 YouTube、SoundCloud 網址")
@@ -3733,6 +4667,12 @@ class Music(commands.Cog):
         current_requester_id 給點歌者限定操作（_check_requester_control）用：
         名稱可能重複或改名，ID 才能可靠對應成員。
         """
+        # 若是從歌單載入但尚未具備 encoded 音軌字串（例如離線由網頁新增），在起播前即時向 Lavalink 解析
+        if getattr(track, "_from_playlist_dict", False) and not getattr(track, "encoded", None):
+            resolved = await self._resolve_playlist_track_obj(track)
+            if resolved is not None:
+                track = resolved
+
         player.current_requester = requester_name
         player.current_requester_id = requester_id
         # 重置可能殘留的 end_intent 與停止標記，並記錄當前播放曲目與播放序號，防止舊事件或重複事件在關閉循環時跳過當前歌曲
@@ -3740,6 +4680,9 @@ class Music(commands.Cog):
         player._stopped_track = None
         player._active_track = track
         player._play_seq = getattr(player, "_play_seq", 0) + 1
+        player._track_started_mono = time.monotonic()
+        if not getattr(player, "_retrying_live_stream", False):
+            player._live_retry_count = 0
         # 開始播放時清除這首歌之前的拒絕鎖（例如上次播放被拒、這次重新播出）
         self._rejected_track_keys.pop(self._track_key(track), None)
         guild_obj = getattr(player, "guild", None)
@@ -4308,6 +5251,331 @@ class Music(commands.Cog):
             )
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # ==========================================================
+    # 用戶歌單管理指令（每個用戶上限 1 個歌單、最多 100 首歌）
+    # ==========================================================
+    @app_commands.command(name="music_playlist_create", description="建立個人音樂歌單並命名（每位用戶上限 1 個歌單，最多 100 首歌）")
+    @app_commands.describe(
+        name="歌單名稱（最多 50 字）",
+        is_public="是否設為公開歌單（公開後同伺服器成員可在 /music_play 選單中直接看到）",
+    )
+    async def music_playlist_create(
+        self,
+        interaction: discord.Interaction,
+        name: str,
+        is_public: bool = False,
+    ):
+        clean_name = (name or "").strip()[:50]
+        if not clean_name:
+            await interaction.response.send_message("❌ 歌單名稱不能為空白！", ephemeral=True)
+            return
+
+        existing = get_user_playlist(interaction.user.id)
+        if existing is not None:
+            await interaction.response.send_message(
+                f"⚠️ 每位用戶最多只能建立 **1 個歌單**！\n"
+                f"你目前已有歌單「**{existing['name']}**」（分享碼：`{existing['share_code']}`，共 {len(existing.get('tracks') or [])} 首）。\n"
+                f"• 如需修改名稱或內容，請使用 `/music_playlist_edit`\n"
+                f"• 如需刪除重建，請先使用 `/music_playlist_remove`",
+                ephemeral=True,
+            )
+            return
+
+        pl = create_user_playlist(
+            interaction.user.id,
+            clean_name,
+            owner_name=interaction.user.display_name,
+            is_public=is_public,
+        )
+        vis_str = "🌐 公開（同伺服器成員可於選單直接點播）" if pl["is_public"] else "🔒 私人（僅自己或透過分享碼可點播）"
+        embed = discord.Embed(
+            title=f"✅ 已建立個人歌單：{pl['name']}",
+            description=(
+                f"**權限狀態：** {vis_str}\n"
+                f"**專屬分享碼：** `{pl['share_code']}`（在 `/music_play` 的 `playlist` 輸入此 6 碼即可跨伺服器播放）\n"
+                f"**目前曲目數：** 0 / {PLAYLIST_MAX_TRACKS} 首\n\n"
+                f"💡 **接下來你可以：**\n"
+                f"• 使用 `/music_playlist_add` 搜尋並加入單曲\n"
+                f"• 使用 `/music_playlist_sync` 將目前播放佇列整批同步進歌單\n"
+                f"• 使用 `/music_playlist_edit` 或前往網頁控制面板「個人設定」編輯歌單"
+            ),
+            color=discord.Color.green(),
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="music_playlist_add", description="搜尋歌曲並新增至你的個人歌單（上限 100 首）")
+    @app_commands.describe(query="歌曲名稱 / 關鍵字，或是 YouTube、SoundCloud、Spotify 網址")
+    async def music_playlist_add(self, interaction: discord.Interaction, query: str):
+        pl = get_user_playlist(interaction.user.id)
+        if pl is None:
+            await interaction.response.send_message(
+                "❌ 你還沒有建立個人歌單！請先使用 `/music_playlist_create` 建立歌單。",
+                ephemeral=True,
+            )
+            return
+
+        current_tracks = pl.get("tracks") or []
+        if len(current_tracks) >= PLAYLIST_MAX_TRACKS:
+            await interaction.response.send_message(
+                f"⚠️ 你的歌單「**{pl['name']}**」已達上限（{PLAYLIST_MAX_TRACKS} / {PLAYLIST_MAX_TRACKS} 首），無法再新增歌曲！\n"
+                f"請先使用 `/music_playlist_edit` 刪除部分歌曲。",
+                ephemeral=True,
+            )
+            return
+
+        if wavelink is None:
+            await interaction.response.send_message("❌ 語音模組尚未安裝完成，請聯絡管理員。", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        # 支援 Spotify 連結（單曲／專輯／歌單）或一般關鍵字／YouTube／SoundCloud
+        if looks_like_spotify(query):
+            parsed = parse_spotify_url(query)
+            if parsed is None:
+                await self._ephemeral_error(interaction, "❌ 無法識別這個 Spotify 連結。")
+                return
+            kind, spotify_id = parsed
+            if not self.spotify.configured:
+                await self._ephemeral_error(interaction, "❌ 尚未設定 Spotify API 金鑰，無法解析 Spotify 連結。")
+                return
+            remaining_slots = PLAYLIST_MAX_TRACKS - len(current_tracks)
+            try:
+                sp_res = await self.spotify.fetch_tracks(kind, spotify_id, remaining_slots)
+            except SpotifyError as e:
+                await self._ephemeral_error(interaction, f"❌ {e.message}")
+                return
+            if not sp_res.tracks:
+                await self._ephemeral_error(interaction, "😕 這個 Spotify 連結中沒有可匯入的曲目。")
+                return
+            sem = asyncio.Semaphore(IMPORT_CONCURRENCY)
+            resolved_list = await asyncio.gather(*(self._search_spotify_track(sem, st) for st in sp_res.tracks[:remaining_slots]))
+            new_dicts = [
+                self._playable_to_playlist_dict(t)
+                for t in resolved_list
+                if t is not None
+            ]
+            if not new_dicts:
+                await self._ephemeral_error(interaction, "😕 找不到對應的音源，無法加入歌單。")
+                return
+            updated_pl, added_count, _ = add_tracks_to_user_playlist(
+                interaction.user.id, new_dicts, owner_name=interaction.user.display_name
+            )
+            total_now = len((updated_pl or {}).get("tracks") or [])
+            await interaction.followup.send(
+                f"✅ 已從 Spotify 新增 **{added_count}** 首歌至歌單「**{pl['name']}**」（目前共 **{total_now} / {PLAYLIST_MAX_TRACKS}** 首）！",
+                ephemeral=True,
+            )
+            return
+
+        track = await self._search_one_track(interaction, query)
+        if track is None:
+            return
+
+        track_dict = self._playable_to_playlist_dict(track, fallback_query=query)
+        updated_pl, added_count, _ = add_tracks_to_user_playlist(
+            interaction.user.id, [track_dict], owner_name=interaction.user.display_name
+        )
+        if added_count <= 0 or updated_pl is None:
+            await self._ephemeral_error(
+                interaction,
+                f"⚠️ 歌單已達上限（{PLAYLIST_MAX_TRACKS} 首），無法再新增。",
+            )
+            return
+
+        total_now = len(updated_pl.get("tracks") or [])
+        title_str = track_dict.get("title", "未知曲目")
+        uri_str = track_dict.get("uri")
+        display_song = f"[{title_str}]({uri_str})" if uri_str else f"**{title_str}**"
+        await interaction.followup.send(
+            f"✅ 已將 {display_song} 加入歌單「**{updated_pl['name']}**」（第 **{total_now} / {PLAYLIST_MAX_TRACKS}** 首）！",
+            ephemeral=True,
+        )
+
+    @app_commands.command(name="music_playlist_edit", description="編輯個人歌單（刪除歌曲、重新排序、切換公開/私人、重新命名或重產分享碼）")
+    @app_commands.describe(
+        delete_index="要刪除的歌曲編號（1 ~ 100）",
+        move_from="重新排序：要移動的歌曲原編號（1 ~ 100）",
+        move_to="重新排序：要移往的目標位置編號（1 ~ 100）",
+        is_public="設定歌單為公開（True）或私人（False）",
+        name="修改歌單名稱（最多 50 字）",
+        regenerate_share_code="是否重新產生 6 碼分享碼（設為 True 後舊分享碼立即失效）",
+    )
+    async def music_playlist_edit(
+        self,
+        interaction: discord.Interaction,
+        delete_index: int | None = None,
+        move_from: int | None = None,
+        move_to: int | None = None,
+        is_public: bool | None = None,
+        name: str | None = None,
+        regenerate_share_code: bool = False,
+    ):
+        pl = get_user_playlist(interaction.user.id)
+        if pl is None:
+            await interaction.response.send_message(
+                "❌ 你還沒有建立個人歌單！請先使用 `/music_playlist_create` 建立歌單。",
+                ephemeral=True,
+            )
+            return
+
+        changes: list[str] = []
+
+        # 1. 名稱與公開狀態更新
+        new_name = name.strip()[:50] if (name and name.strip()) else None
+        if new_name is not None or is_public is not None:
+            pl = update_user_playlist(
+                interaction.user.id,
+                name=new_name,
+                owner_name=interaction.user.display_name,
+                is_public=is_public,
+            ) or pl
+            if new_name is not None:
+                changes.append(f"✏️ 歌單名稱已更新為「**{pl['name']}**」")
+            if is_public is not None:
+                vis_label = "🌐 公開" if pl["is_public"] else "🔒 私人"
+                changes.append(f"🔄 公開狀態已切換為 **{vis_label}**")
+
+        # 2. 重新排序
+        if move_from is not None or move_to is not None:
+            if move_from is None or move_to is None:
+                changes.append("⚠️ 重新排序需要同時填寫 `move_from` 與 `move_to` 兩個編號。")
+            else:
+                updated_pl, moved_track = reorder_track_in_user_playlist(
+                    interaction.user.id, move_from - 1, move_to - 1
+                )
+                if moved_track is None or updated_pl is None:
+                    changes.append(f"⚠️ 重新排序失敗：請確認編號 `{move_from}` 與 `{move_to}` 在有效範圍內。")
+                else:
+                    pl = updated_pl
+                    changes.append(
+                        f"🔀 已將「**{moved_track.get('title', '未知曲目')}**」從第 {move_from} 首移至第 {move_to} 首"
+                    )
+
+        # 3. 刪除指定編號歌曲
+        if delete_index is not None:
+            updated_pl, removed_track = remove_track_from_user_playlist(
+                interaction.user.id, delete_index - 1
+            )
+            if removed_track is None or updated_pl is None:
+                changes.append(f"⚠️ 刪除失敗：找不到編號為 `{delete_index}` 的歌曲。")
+            else:
+                pl = updated_pl
+                changes.append(f"🗑️ 已刪除第 {delete_index} 首：「**{removed_track.get('title', '未知曲目')}**」")
+
+        # 4. 重新產生分享碼
+        if regenerate_share_code:
+            updated_pl = regenerate_user_playlist_share_code(interaction.user.id)
+            if updated_pl is not None:
+                pl = updated_pl
+                changes.append(f"🔑 分享碼已重新產生為 `{pl['share_code']}`（舊分享碼已失效）")
+
+        view = PlaylistEditView(self, interaction.user.id, page=0)
+        embed = build_playlist_page_embed(pl, page=view.page, title_prefix="🛠️ 編輯歌單：")
+        content_msg = "\n".join(changes) if changes else "👇 請使用下方選單與按鈕編輯歌單（刪除歌曲、重新排序、切換公開/私人、重產分享碼）："
+        await interaction.response.send_message(content=content_msg, embed=embed, view=view, ephemeral=True)
+        try:
+            view.message = await interaction.original_response()
+        except (discord.NotFound, discord.HTTPException):
+            pass
+
+    @app_commands.command(name="music_playlist_remove", description="刪除你的個人歌單（會跳出確認訊息）")
+    async def music_playlist_remove(self, interaction: discord.Interaction):
+        pl = get_user_playlist(interaction.user.id)
+        if pl is None:
+            await interaction.response.send_message(
+                "ℹ️ 你目前沒有建立任何個人歌單。",
+                ephemeral=True,
+            )
+            return
+
+        track_count = len(pl.get("tracks") or [])
+        embed = discord.Embed(
+            title="⚠️ 確定要刪除個人歌單嗎？",
+            description=(
+                f"即將刪除歌單：「**{pl['name']}**」\n"
+                f"• **目前曲目數：** {track_count} 首\n"
+                f"• **分享碼：** `{pl['share_code']}`\n\n"
+                f"❗ **此操作無法復原**，且其他用戶透過分享碼收藏的連結也會一併失效。請確認是否繼續："
+            ),
+            color=discord.Color.red(),
+        )
+        view = PlaylistRemoveConfirmView(self, interaction.user.id, pl["name"])
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    @app_commands.command(name="music_playlist_sync", description="將目前伺服器的播放佇列直接新增至你的個人歌單內")
+    async def music_playlist_sync(self, interaction: discord.Interaction):
+        pl = get_user_playlist(interaction.user.id)
+        if pl is None:
+            await interaction.response.send_message(
+                "❌ 你還沒有建立個人歌單！請先使用 `/music_playlist_create` 建立歌單後再同步佇列。",
+                ephemeral=True,
+            )
+            return
+
+        if wavelink is None or interaction.guild is None:
+            await interaction.response.send_message("❌ 目前無法讀取伺服器播放佇列。", ephemeral=True)
+            return
+
+        player = interaction.guild.voice_client
+        if not isinstance(player, wavelink.Player):
+            await interaction.response.send_message("ℹ️ 機器人目前不在語音頻道中，沒有播放佇列可供同步。", ephemeral=True)
+            return
+
+        queue_tracks = []
+        current_track = getattr(player, "current", None) or getattr(player, "_active_track", None)
+        if current_track is not None:
+            queue_tracks.append(current_track)
+        song_queue = getattr(player, "song_queue", None)
+        if song_queue:
+            for item in list(song_queue):
+                if isinstance(item, (tuple, list)) and len(item) >= 1 and item[0] is not None:
+                    queue_tracks.append(item[0])
+
+        if not queue_tracks:
+            await interaction.response.send_message("ℹ️ 目前沒有正在播放的歌曲，待播佇列也是空的。", ephemeral=True)
+            return
+
+        current_saved = len(pl.get("tracks") or [])
+        if current_saved >= PLAYLIST_MAX_TRACKS:
+            await interaction.response.send_message(
+                f"⚠️ 你的歌單「**{pl['name']}**」已達 {PLAYLIST_MAX_TRACKS} 首上限，無法再同步新增曲目！",
+                ephemeral=True,
+            )
+            return
+
+        track_dicts = [self._playable_to_playlist_dict(t) for t in queue_tracks]
+        updated_pl, added_count, skipped_count = add_tracks_to_user_playlist(
+            interaction.user.id, track_dicts, owner_name=interaction.user.display_name
+        )
+        total_now = len((updated_pl or {}).get("tracks") or [])
+        skip_note = f"（因達 {PLAYLIST_MAX_TRACKS} 首上限，略過 {skipped_count} 首）" if skipped_count > 0 else ""
+        await interaction.response.send_message(
+            f"✅ 已將目前播放佇列中的 **{added_count}** 首歌同步新增至歌單「**{pl['name']}**」{skip_note}！\n"
+            f"📊 目前歌單共有 **{total_now} / {PLAYLIST_MAX_TRACKS}** 首歌曲。",
+            ephemeral=True,
+        )
+
+    @app_commands.command(name="music_playlist", description="查看你的個人歌單（分頁顯示，一頁顯示 10 首）")
+    async def music_playlist_view(self, interaction: discord.Interaction):
+        pl = get_user_playlist(interaction.user.id)
+        if pl is None:
+            await interaction.response.send_message(
+                "ℹ️ 你目前還沒有建立個人歌單！\n"
+                "• 輸入 `/music_playlist_create` 立即建立歌單\n"
+                "• 或前往網頁控制面板右上角頭像選單 →「**個人設定**」管理歌單",
+                ephemeral=True,
+            )
+            return
+
+        view = PlaylistPaginationView(self, interaction.user.id, page=0)
+        embed = build_playlist_page_embed(pl, page=0)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        try:
+            view.message = await interaction.original_response()
+        except (discord.NotFound, discord.HTTPException):
+            pass
 
 
 async def setup(bot: commands.Bot):
