@@ -345,6 +345,7 @@ def privacy_page():
 
 # ---------- GitHub 最新 Commit 紀錄快取與解析 ----------
 COMMITS_CACHE_FILE = os.path.join(BASE_DIR, 'commits_cache.json')
+TZ_UTC8 = datetime.timezone(datetime.timedelta(hours=8))
 _commits_cache: dict[str, Any] = {
     'timestamp': 0.0,
     'commits': [],
@@ -361,7 +362,7 @@ def _format_commit_info(
     iso_date: str = '',
     body: str = '',
 ) -> dict[str, Any]:
-    """格式化單則 Commit 資訊，支援 Conventional Commits 前綴解析與相對時間計算。"""
+    """格式化單則 Commit 資訊，支援 Conventional Commits 前綴解析與相對時間計算（統一使用 UTC+8 時區）。"""
     match = re.match(r'^([a-zA-Z]+)(?:\(([^)]+)\))?!?:\s*(.*)$', raw_subject)
     if match:
         c_type = match.group(1).lower()
@@ -387,7 +388,13 @@ def _format_commit_info(
         try:
             clean_iso = iso_date.replace('Z', '+00:00')
             commit_dt = datetime.datetime.fromisoformat(clean_iso)
-            now_dt = datetime.datetime.now(commit_dt.tzinfo)
+            if commit_dt.tzinfo is None:
+                commit_dt = commit_dt.replace(tzinfo=TZ_UTC8)
+            else:
+                commit_dt = commit_dt.astimezone(TZ_UTC8)
+            date_str = commit_dt.strftime('%Y-%m-%d %H:%M:%S')
+            iso_date = commit_dt.isoformat()
+            now_dt = datetime.datetime.now(TZ_UTC8)
             diff = max(0.0, (now_dt - commit_dt).total_seconds())
             if diff < 60:
                 relative_time = '剛剛'
@@ -466,7 +473,7 @@ def _parse_github_api_commit(item: dict[str, Any]) -> Optional[dict[str, Any]]:
     date_str = iso_date
     if iso_date:
         try:
-            dt = datetime.datetime.fromisoformat(iso_date.replace('Z', '+00:00')).astimezone()
+            dt = datetime.datetime.fromisoformat(iso_date.replace('Z', '+00:00')).astimezone(TZ_UTC8)
             date_str = dt.strftime('%Y-%m-%d %H:%M:%S')
         except Exception:
             pass
@@ -578,13 +585,45 @@ def _fetch_commits_from_github_api(limit: int = 10) -> list[dict[str, Any]]:
 
 
 def _load_disk_cached_commits() -> list[dict[str, Any]]:
-    """從硬碟備援檔案讀取最後一次成功的 commit 快取（自動過濾 commits_cache.json 相關項目）。"""
+    """從硬碟備援檔案讀取最後一次成功的 commit 快取（自動過濾 commits_cache.json 相關項目，並校準至 UTC+8）。"""
     if os.path.isfile(COMMITS_CACHE_FILE):
         try:
             with open(COMMITS_CACHE_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 if isinstance(data, list):
-                    return [c for c in data if not _is_cache_commit(c)]
+                    commits = []
+                    for c in data:
+                        if not _is_cache_commit(c):
+                            # 若快取中有 iso_date，重新以 UTC+8 校準 date 與 relative_time
+                            iso = c.get('iso_date') or ''
+                            if iso:
+                                try:
+                                    clean_iso = iso.replace('Z', '+00:00')
+                                    dt = datetime.datetime.fromisoformat(clean_iso)
+                                    if dt.tzinfo is None:
+                                        dt = dt.replace(tzinfo=TZ_UTC8)
+                                    else:
+                                        dt = dt.astimezone(TZ_UTC8)
+                                    c['date'] = dt.strftime('%Y-%m-%d %H:%M:%S')
+                                    c['iso_date'] = dt.isoformat()
+                                    now_dt = datetime.datetime.now(TZ_UTC8)
+                                    diff = max(0.0, (now_dt - dt).total_seconds())
+                                    if diff < 60:
+                                        c['relative_time'] = '剛剛'
+                                    elif diff < 3600:
+                                        c['relative_time'] = f'{int(diff // 60)} 分鐘前'
+                                    elif diff < 86400:
+                                        c['relative_time'] = f'{int(diff // 3600)} 小時前'
+                                    elif diff < 86400 * 30:
+                                        c['relative_time'] = f'{int(diff // 86400)} 天前'
+                                    elif diff < 86400 * 365:
+                                        c['relative_time'] = f'{int(diff // (86400 * 30))} 個月前'
+                                    else:
+                                        c['relative_time'] = f'{int(diff // (86400 * 365))} 年前'
+                                except Exception:
+                                    pass
+                            commits.append(c)
+                    return commits
         except Exception:
             pass
     return []
