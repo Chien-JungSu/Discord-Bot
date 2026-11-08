@@ -3930,8 +3930,8 @@ class Music(commands.Cog):
 
         author = getattr(message, "author", None)
         if not is_queue_message and author is not None:
-            if getattr(author, "bot", False):
-                return
+            # 僅忽略本機器人自己發送的非 queue 訊息（避免自我觸發置底迴圈）；
+            # 其他機器人（如 Jockie Music、Mee6 等）發送的訊息出現在面板下方時照常觸發置底
             if self.bot.user is not None and getattr(author, "id", None) == getattr(self.bot.user, "id", None):
                 return
 

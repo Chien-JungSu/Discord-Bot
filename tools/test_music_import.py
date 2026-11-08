@@ -456,6 +456,18 @@ async def test_sticky_panel_auto_bump():
         await cog.on_message(bot_msg)
         check(GID not in cog._panel_bump_tasks, "機器人自身發送的普通訊息不會誤觸置底任務")
 
+        # 0.05 驗證其他機器人發送的訊息出現在面板下方時會成功觸發置底任務
+        other_bot_msg = SimpleNamespace(
+            id=255,
+            guild=guild,
+            channel=SimpleNamespace(id=10),
+            author=SimpleNamespace(id=888, bot=True),
+            flags=SimpleNamespace(ephemeral=False, loading=False),
+        )
+        await cog.on_message(other_bot_msg)
+        check(GID in cog._panel_bump_tasks, "其他機器人發送的訊息會正常觸發面板置底任務")
+        cog._cancel_panel_bump(GID, force=True)
+
         # 0.1 驗證 /music_queue 產生的公開佇列訊息會成功觸發置底任務（即使 author.bot 為 True）
         queue_bot_msg = SimpleNamespace(
             id=260,
