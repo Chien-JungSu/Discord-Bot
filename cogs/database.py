@@ -3075,6 +3075,100 @@ def _normalize_playlist_track(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _canonicalize_track_url(uri: Any, identifier: Any = None) -> Optional[str]:
+    """標準化歌曲網址連結，用於精確比對兩首歌曲連結是否一致。
+    依使用者需求：必須歌曲連結一致才判定為重複。
+    """
+    u = str(uri or "").strip()
+    ident = str(identifier or "").strip()
+    if ident.lower() in ("none", "null", "unknown"):
+        ident = ""
+
+    # 若無 URI 但 identifier 本身是網址，以 identifier 為網址
+    if not u and (ident.startswith("http://") or ident.startswith("https://")):
+        u = ident
+
+    if not u and not ident:
+        return None
+
+    import re
+    from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+
+    # 1. 檢查 YouTube 影片 ID（支援 watch?v=, youtu.be/, shorts/, embed/, live/）
+    yt_match = re.search(r'(?:v=|youtu\.be/|shorts/|embed/|live/)([a-zA-Z0-9_-]+)', u)
+    if yt_match:
+        return f"https://www.youtube.com/watch?v={yt_match.group(1)}"
+
+    # 2. 檢查 Spotify Track
+    sp_match = re.search(r'spotify\.com/track/([a-zA-Z0-9]+)', u)
+    if sp_match:
+        return f"https://open.spotify.com/track/{sp_match.group(1)}"
+    sp_uri_match = re.search(r'spotify:track:([a-zA-Z0-9]+)', u)
+    if sp_uri_match:
+        return f"https://open.spotify.com/track/{sp_uri_match.group(1)}"
+
+    # 3. 若有 identifier 且 URI 為空或包含 youtube / youtu
+    if ident and (not u or 'youtube' in u.lower() or 'youtu' in u.lower()):
+        return f"https://www.youtube.com/watch?v={ident}"
+
+    # 4. 一般 URL 連結：標準化協定、網域名稱、路徑，並移除追蹤查詢參數
+    if u.startswith("http://") or u.startswith("https://"):
+        try:
+            parsed = urlparse(u)
+            ignored_params = {
+                "si", "feature", "utm_source", "utm_medium", "utm_campaign",
+                "utm_term", "utm_content", "fbclid", "gclid", "ref", "sp_pass_through"
+            }
+            query_pairs = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=False) if k.lower() not in ignored_params]
+            query_pairs.sort(key=lambda x: x[0])
+            clean_query = urlencode(query_pairs)
+            clean_path = parsed.path.rstrip("/")
+            return urlunparse((
+                parsed.scheme.lower(),
+                parsed.netloc.lower(),
+                clean_path,
+                "",
+                clean_query,
+                "",
+            ))
+        except Exception:
+            return u.split("?")[0].rstrip("/").lower()
+
+    if u:
+        return u.split("?")[0].rstrip("/").lower()
+
+    if ident:
+        return f"ident:{ident.lower()}"
+
+    return None
+
+
+def are_tracks_duplicate(t1: Any, t2: Any) -> bool:
+    """判斷兩首歌曲是否重複（相容 wavelink.Playable 物件與資料庫曲目 dict）。
+
+    比對規則（依使用者需求）：
+    必須歌曲連結（URL）一致才判定為重複。
+    絕不比對曲名或演出者文字，避免同名不同曲被誤判為重複。
+    """
+    if t1 is None or t2 is None:
+        return False
+    if t1 is t2:
+        return True
+
+    def get_f(t: Any, attr: str) -> Any:
+        if isinstance(t, dict):
+            return t.get(attr)
+        return getattr(t, attr, None)
+
+    url1 = _canonicalize_track_url(get_f(t1, "uri"), get_f(t1, "identifier"))
+    url2 = _canonicalize_track_url(get_f(t2, "uri"), get_f(t2, "identifier"))
+
+    if not url1 or not url2:
+        return False
+
+    return url1 == url2
+
+
 def _row_to_playlist_dict(row: sqlite3.Row | None) -> Optional[dict[str, Any]]:
     if row is None:
         return None
@@ -3220,9 +3314,9 @@ def add_tracks_to_user_playlist(
     user_id: str | int,
     new_tracks: list[dict[str, Any]],
     owner_name: Optional[str] = None,
-) -> tuple[Optional[dict[str, Any]], int, int]:
-    """將一或多首歌曲加入用戶歌單（遵守 100 首上限）。
-    回傳 (更新後的歌單字典, 實際新增首數, 因超過 100 首上限而略過的首數)。
+) -> tuple[Optional[dict[str, Any]], int, int, int]:
+    """將一或多首歌曲加入用戶歌單（自動檢查並忽略重複歌曲，遵守 100 首上限）。
+    回傳 (更新後的歌單字典, 實際新增首數, 忽略的重複首數, 因超過 100 首上限而略過的首數)。
     """
     init_db()
     uid = str(user_id).strip()
@@ -3235,25 +3329,38 @@ def add_tracks_to_user_playlist(
             cursor.execute("SELECT * FROM user_playlists WHERE user_id = ?;", (uid,))
             current = _row_to_playlist_dict(cursor.fetchone())
             if current is None:
-                return None, 0, len(new_tracks)
+                return None, 0, 0, len(new_tracks)
             existing = list(current["tracks"])
-            remaining = max(0, PLAYLIST_MAX_TRACKS - len(existing))
             valid_incoming = [_normalize_playlist_track(t) for t in new_tracks if isinstance(t, dict)]
-            to_add = valid_incoming[:remaining]
-            skipped = max(0, len(valid_incoming) - len(to_add))
-            existing.extend(to_add)
-            new_owner = (owner_name.strip()[:80] if owner_name and owner_name.strip() else current["owner_name"])
-            cursor.execute(
-                """
-                UPDATE user_playlists
-                SET tracks_json = ?, owner_name = ?, updated_at = ?
-                WHERE user_id = ?;
-                """,
-                (json.dumps(existing, ensure_ascii=False), new_owner, now, uid),
-            )
-            conn.commit()
+
+            to_add: list[dict[str, Any]] = []
+            duplicate_count = 0
+            for t in valid_incoming:
+                # 檢查是否與歌單內現有歌曲重複，或與同批次先前已排入之新曲目重複
+                if any(are_tracks_duplicate(t, ex) for ex in existing) or any(are_tracks_duplicate(t, a) for a in to_add):
+                    duplicate_count += 1
+                    continue
+                to_add.append(t)
+
+            remaining = max(0, PLAYLIST_MAX_TRACKS - len(existing))
+            final_to_add = to_add[:remaining]
+            overflow_count = max(0, len(to_add) - len(final_to_add))
+
+            if final_to_add:
+                existing.extend(final_to_add)
+                new_owner = (owner_name.strip()[:80] if owner_name and owner_name.strip() else current["owner_name"])
+                cursor.execute(
+                    """
+                    UPDATE user_playlists
+                    SET tracks_json = ?, owner_name = ?, updated_at = ?
+                    WHERE user_id = ?;
+                    """,
+                    (json.dumps(existing, ensure_ascii=False), new_owner, now, uid),
+                )
+                conn.commit()
+
             cursor.execute("SELECT * FROM user_playlists WHERE user_id = ?;", (uid,))
-            return _row_to_playlist_dict(cursor.fetchone()), len(to_add), skipped
+            return _row_to_playlist_dict(cursor.fetchone()), len(final_to_add), duplicate_count, overflow_count
         finally:
             conn.close()
 

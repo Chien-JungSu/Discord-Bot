@@ -13,7 +13,7 @@
 """
 import sys
 
-sys.stdout.reconfigure(encoding="utf-8")
+sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
 
 import asyncio
 import os
@@ -61,8 +61,18 @@ class FakePlayer:
 
 
 def fake_track(name, **kw):
-    return SimpleNamespace(title=name, uri=f"https://x/{name}", author="A", length=200000,
-                           is_stream=False, is_seekable=True, artwork=None, source="youtube", **kw)
+    defaults = {
+        "title": name,
+        "uri": f"https://x/{name}",
+        "author": "A",
+        "length": 200000,
+        "is_stream": False,
+        "is_seekable": True,
+        "artwork": None,
+        "source": "youtube",
+    }
+    defaults.update(kw)
+    return SimpleNamespace(**defaults)
 
 
 def make_cog(player):
@@ -83,6 +93,9 @@ def make_interaction():
     it.user = SimpleNamespace(id=7, display_name="測試者")
     it.delete_original_response = AsyncMock()
     it.followup.send = AsyncMock()
+    it.response.defer = AsyncMock()
+    it.response.send_message = AsyncMock()
+    it.response.is_done = MagicMock(return_value=False)
     return it
 
 
@@ -441,7 +454,34 @@ async def test_sticky_panel_auto_bump():
             flags=SimpleNamespace(ephemeral=False, loading=False),
         )
         await cog.on_message(bot_msg)
-        check(GID not in cog._panel_bump_tasks, "機器人自身發送的訊息不會誤觸置底任務")
+        check(GID not in cog._panel_bump_tasks, "機器人自身發送的普通訊息不會誤觸置底任務")
+
+        # 0.1 驗證 /music_queue 產生的公開佇列訊息會成功觸發置底任務（即使 author.bot 為 True）
+        queue_bot_msg = SimpleNamespace(
+            id=260,
+            guild=guild,
+            channel=SimpleNamespace(id=10),
+            author=SimpleNamespace(id=999, bot=True),
+            flags=SimpleNamespace(ephemeral=False, loading=False),
+            interaction_metadata=SimpleNamespace(name="music_queue"),
+            embeds=[SimpleNamespace(title="🎵 播放佇列")],
+        )
+        await cog.on_message(queue_bot_msg)
+        check(GID in cog._panel_bump_tasks, "on_message: /music_queue 的播放佇列訊息會觸發置底任務")
+        cog._cancel_panel_bump(GID, force=True)
+
+        # 0.2 驗證呼叫 /music_queue 指令時會主動為該訊息排程面板置底任務
+        it_q = make_interaction()
+        it_q.guild = guild
+        it_q.channel = SimpleNamespace(id=10)
+        it_q.channel_id = 10
+        q_msg_obj = SimpleNamespace(id=270)
+        it_q.original_response = AsyncMock(return_value=q_msg_obj)
+        cog._check_music_channel = AsyncMock(return_value=True)
+        await cog.queue_.callback(cog, it_q)
+        check(GID in cog._panel_bump_tasks, "/music_queue 指令執行後成功排程面板置底任務")
+        check(270 in cog._bump_trigger_msgs.get(GID, set()), "/music_queue 訊息 ID 成功加入置底觸發集合")
+        cog._cancel_panel_bump(GID, force=True)
 
         # 1. 暫時訊息發出後立刻被刪除（如指令 defer 思考訊息）-> 取消置底，不重發面板
         temp_msg = SimpleNamespace(
@@ -719,7 +759,66 @@ async def test_session_lost_recovery():
         regenerate_user_playlist_share_code,
         delete_user_playlist,
         get_saved_playlists_for_user,
+        are_tracks_duplicate,
     )
+
+    # 歌曲重複判斷邏輯測試（必須歌曲連結一致才判定為重複）
+    t_a1 = fake_track("Idol", identifier="id_idol", author="YOASOBI", uri="https://youtu.be/id_idol")
+    t_a2 = fake_track("Idol", identifier="id_idol", author="YOASOBI", uri="https://www.youtube.com/watch?v=id_idol")
+    t_a3 = SimpleNamespace(title="idol", author="yoasobi", uri="https://youtu.be/id_idol?si=123")
+    t_same_title_diff_url1 = fake_track("Amore", uri="https://www.youtube.com/watch?v=11111111111", identifier="11111111111")
+    t_same_title_diff_url2 = fake_track("Amore", uri="https://www.youtube.com/watch?v=22222222222", identifier="22222222222")
+    check(are_tracks_duplicate(t_a1, t_a2) is True, "are_tracks_duplicate: 相同 YouTube ID 連結判定重複")
+    check(are_tracks_duplicate(t_a1, t_a3) is True, "are_tracks_duplicate: 帶追蹤參數與短網址判定重複")
+    check(are_tracks_duplicate(t_same_title_diff_url1, t_same_title_diff_url2) is False, "are_tracks_duplicate: 同歌名但不同連結不判定重複（解決同名誤判）")
+
+    # 播放佇列點歌重複測試：加入播放佇列時不阻擋重複歌曲點播
+    player_dup = RecoverablePlayer()
+    cog_dup = make_cog(player_dup)
+    t_playing = fake_track("PlayingNow", uri="https://x/play_now", identifier="id_play_now")
+    await cog_dup._play_track(player_dup, t_playing, "點歌者", 1)
+    player_dup._current = t_playing
+    player_dup.current = t_playing
+    it_dup_play = make_interaction()
+    it_dup_play.user = SimpleNamespace(id=1, display_name="點歌者")
+    it_dup_play.guild = SimpleNamespace(id=GID, voice_client=player_dup)
+    cog_dup._check_music_channel = AsyncMock(return_value=True)
+    cog_dup._ensure_player = AsyncMock(return_value=player_dup)
+    cog_dup._search_one_track = AsyncMock(return_value=fake_track("PlayingNow", uri="https://x/play_now", identifier="id_play_now"))
+    await cog_dup.play.callback(cog_dup, it_dup_play, query="PlayingNow")
+    check(len(player_dup.song_queue) == 1, "/music_play 點播重複歌曲不被阻擋，正常加入待播佇列")
+
+    # 測試隨機播放模式（shuffle mode）
+    player_shuf = RecoverablePlayer()
+    cog_shuf = make_cog(player_shuf)
+    view_shuf = music_mod.MusicControlView(cog_shuf, player=player_shuf)
+    check(hasattr(view_shuf, "btn_shuffle") and view_shuf.btn_shuffle.custom_id == "music:shuffle", "控制面板具備隨機播放按鈕 (CUSTOM_ID_SHUFFLE)")
+    check(view_shuf.btn_shuffle.label == "隨機：關閉" and getattr(player_shuf, "shuffle", False) is False, "隨機播放預設關閉")
+
+    # 點擊開啟隨機播放模式：打亂佇列（不影響當前正在播放曲目）
+    t_curr = fake_track("Playing", uri="https://x/playing")
+    await cog_shuf._play_track(player_shuf, t_curr, "DJ", 1)
+    player_shuf.current = t_curr
+    for i in range(10):
+        player_shuf.song_queue.append((fake_track(f"QSong-{i}", uri=f"https://x/q{i}"), "DJ", 1))
+
+    it_shuf = make_interaction()
+    it_shuf.guild = SimpleNamespace(id=GID, voice_client=player_shuf)
+    await view_shuf.toggle_shuffle(it_shuf)
+    check(player_shuf.shuffle is True, "點擊按鈕成功切換 player.shuffle 為 True")
+    view_shuf.refresh_buttons(player_shuf)
+    check(view_shuf.btn_shuffle.label == "隨機：開啟", "按鈕標籤刷新為「隨機：開啟」")
+    check(player_shuf.current is t_curr, "隨機播放打亂佇列時，當前正在播放曲目保持不變")
+
+    # /music_play 支援 shuffle 參數
+    it_play_shuf = make_interaction()
+    it_play_shuf.user = SimpleNamespace(id=1, display_name="點歌者")
+    it_play_shuf.guild = SimpleNamespace(id=GID, voice_client=player_shuf)
+    cog_shuf._check_music_channel = AsyncMock(return_value=True)
+    cog_shuf._ensure_player = AsyncMock(return_value=player_shuf)
+    cog_shuf._search_one_track = AsyncMock(return_value=fake_track("NewShufSong", uri="https://x/new_shuf"))
+    await cog_shuf.play.callback(cog_shuf, it_play_shuf, query="NewShufSong", shuffle=True)
+    check(player_shuf.shuffle is True, "/music_play 帶入 shuffle=True 成功啟用隨機播放模式")
 
     uid_owner = "999000111222333444"
     uid_listener = 888000111222333444
@@ -738,18 +837,26 @@ async def test_session_lost_recovery():
         cog._playable_to_playlist_dict(fake_track(f"Song-{i}", identifier=f"id_{i}"))
         for i in range(1, 4)
     ]
-    pl, added_n, _ = add_tracks_to_user_playlist(uid_owner, sample_tracks, owner_name="歌單主人")
-    check(added_n == 3 and len(pl["tracks"]) == 3, "成功新增 3 首歌曲至 SQLite 歌單")
+    pl, added_n, dup_n, overflow_n = add_tracks_to_user_playlist(uid_owner, sample_tracks, owner_name="歌單主人")
+    check(added_n == 3 and dup_n == 0 and len(pl["tracks"]) == 3, "成功新增 3 首歌曲至 SQLite 歌單")
+
+    # 測試歌單新增重複歌曲：自動忽略並回報重複首數
+    dup_sample = [
+        cog._playable_to_playlist_dict(fake_track("Song-1", identifier="id_1")),
+        cog._playable_to_playlist_dict(fake_track("Song-New", identifier="id_new")),
+    ]
+    pl, added_n2, dup_n2, _ = add_tracks_to_user_playlist(uid_owner, dup_sample, owner_name="歌單主人")
+    check(added_n2 == 1 and dup_n2 == 1 and len(pl["tracks"]) == 4, "歌單新增曲目時自動忽略重複歌曲 (dup_count=1, added=1)")
 
     pl, moved = reorder_track_in_user_playlist(uid_owner, 0, 2)
     check(
-        moved["title"] == "Song-1" and [t["title"] for t in pl["tracks"]] == ["Song-2", "Song-3", "Song-1"],
+        moved["title"] == "Song-1" and [t["title"] for t in pl["tracks"]] == ["Song-2", "Song-3", "Song-1", "Song-New"],
         "重新排序歌單曲目成功更新 SQLite 順序",
     )
 
     pl, removed = remove_track_from_user_playlist(uid_owner, 1)
     check(
-        removed["title"] == "Song-3" and [t["title"] for t in pl["tracks"]] == ["Song-2", "Song-1"],
+        removed["title"] == "Song-3" and [t["title"] for t in pl["tracks"]] == ["Song-2", "Song-1", "Song-New"],
         "刪除指定編號歌曲成功",
     )
 
@@ -776,6 +883,58 @@ async def test_session_lost_recovery():
         and len(get_saved_playlists_for_user(uid_listener)) == 0,
         f"重新產生分享碼 ({code1} -> {code2}) 後舊分享碼與他人舊收藏立即失效",
     )
+
+    # 測試 PlaylistPaginationView / PlaylistEditView / PlaylistRemoveConfirmView 參數容錯與 slash 指令呼叫
+    # 1. 驗證傳入 cog (self) 作為第一參數不會報 TypeError
+    pv_cog = music_mod.PlaylistPaginationView(cog, int(uid_owner), page=0)
+    check(pv_cog.user_id == int(uid_owner), "PlaylistPaginationView 支援 (cog, user_id, ...) 呼叫且不拋 TypeError")
+    pv_direct = music_mod.PlaylistPaginationView(int(uid_owner), page=0)
+    check(pv_direct.user_id == int(uid_owner), "PlaylistPaginationView 支援 (user_id, ...) 呼叫")
+
+    ev_cog = music_mod.PlaylistEditView(cog, int(uid_owner), page=0)
+    check(ev_cog.user_id == int(uid_owner), "PlaylistEditView 支援 (cog, user_id, ...) 呼叫且不拋 TypeError")
+    ev_direct = music_mod.PlaylistEditView(int(uid_owner), page=0)
+    check(ev_direct.user_id == int(uid_owner), "PlaylistEditView 支援 (user_id, ...) 呼叫")
+
+    rv_cog = music_mod.PlaylistRemoveConfirmView(cog, int(uid_owner), "測試歌單")
+    check(rv_cog.user_id == int(uid_owner) and rv_cog.playlist_name == "測試歌單", "PlaylistRemoveConfirmView 支援 (cog, user_id, ...) 呼叫且不拋 TypeError")
+    rv_direct = music_mod.PlaylistRemoveConfirmView(int(uid_owner), "測試歌單")
+    check(rv_direct.user_id == int(uid_owner) and rv_direct.playlist_name == "測試歌單", "PlaylistRemoveConfirmView 支援 (user_id, ...) 呼叫")
+
+    # 2. 呼叫 /music_playlist 指令回呼驗證
+    it_view = make_interaction()
+    it_view.user = SimpleNamespace(id=int(uid_owner), display_name="歌單主人")
+    it_view.original_response = AsyncMock()
+    await cog.music_playlist_view.callback(cog, it_view)
+    check(it_view.response.send_message.called, "/music_playlist 指令正常發送訊息")
+    view_call_kwargs = it_view.response.send_message.call_args.kwargs
+    sent_embed = view_call_kwargs.get("embed")
+    sent_view = view_call_kwargs.get("view")
+    check(isinstance(sent_embed, music_mod.discord.Embed), "/music_playlist 送出之 embed 為 discord.Embed 實例（非 tuple）")
+    check(isinstance(sent_view, music_mod.PlaylistPaginationView), "/music_playlist 正確掛載 PlaylistPaginationView")
+
+    # 3. 呼叫 /music_playlist_edit 指令回呼驗證
+    it_edit = make_interaction()
+    it_edit.user = SimpleNamespace(id=int(uid_owner), display_name="歌單主人")
+    it_edit.original_response = AsyncMock()
+    await cog.music_playlist_edit.callback(cog, it_edit, name=None, is_public=None, move_from=None, move_to=None, delete_index=None, regenerate_share_code=False)
+    check(it_edit.response.send_message.called, "/music_playlist_edit 指令正常發送訊息")
+    edit_call_kwargs = it_edit.response.send_message.call_args.kwargs
+    sent_edit_embed = edit_call_kwargs.get("embed")
+    sent_edit_view = edit_call_kwargs.get("view")
+    check(isinstance(sent_edit_embed, music_mod.discord.Embed), "/music_playlist_edit 送出之 embed 為 discord.Embed 實例（非 tuple）")
+    check(isinstance(sent_edit_view, music_mod.PlaylistEditView), "/music_playlist_edit 正確掛載 PlaylistEditView")
+
+    # 4. 呼叫 /music_playlist_remove 指令回呼驗證
+    it_remove = make_interaction()
+    it_remove.user = SimpleNamespace(id=int(uid_owner), display_name="歌單主人")
+    await cog.music_playlist_remove.callback(cog, it_remove)
+    check(it_remove.response.send_message.called, "/music_playlist_remove 指令正常發送確認訊息")
+    rem_call_kwargs = it_remove.response.send_message.call_args.kwargs
+    sent_rem_embed = rem_call_kwargs.get("embed")
+    sent_rem_view = rem_call_kwargs.get("view")
+    check(isinstance(sent_rem_embed, music_mod.discord.Embed), "/music_playlist_remove 送出之 embed 為 discord.Embed 實例")
+    check(isinstance(sent_rem_view, music_mod.PlaylistRemoveConfirmView), "/music_playlist_remove 正確掛載 PlaylistRemoveConfirmView")
 
     # 清理測試歌單資料
     delete_user_playlist(uid_owner)

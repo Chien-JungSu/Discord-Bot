@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import random
 import re
 import sys
 import tempfile
@@ -103,6 +104,7 @@ from cogs.database import (
     save_music_settings as _save_music_settings,
     build_panel_link_view,
     PLAYLIST_MAX_TRACKS,
+    are_tracks_duplicate,
     get_user_playlist,
     get_playlist_by_share_code,
     create_user_playlist,
@@ -245,6 +247,8 @@ def build_now_playing_container(
         author = getattr(track, "author", None) or "未知"
         loop_mode = getattr(player, "loop_mode", "off")
         loop_label = LOOP_LABELS.get(loop_mode, "🔁 循環：關閉")
+        is_shuffle = bool(getattr(player, "shuffle", False))
+        mode_str = f"**{loop_label}**" + (" ｜ **🔀 隨機播放**" if is_shuffle else "")
 
         header = ui.TextDisplay(
             f"### {status_icon} {status_text}\n"
@@ -268,7 +272,7 @@ def build_now_playing_container(
         # 作者與循環模式分行顯示，並適度加寬行距提升視覺呼吸感
         middle_lines = [
             f"**👤 {author}**",
-            f"**{loop_label}**\n",
+            f"{mode_str}\n",
             f"{progress_str}\n",
             f"{vol_str}",
         ]
@@ -728,6 +732,7 @@ class MusicControlView(ui.LayoutView):
     CUSTOM_ID_VOL_DOWN = "music:vol_down"
     CUSTOM_ID_VOL_UP = "music:vol_up"
     CUSTOM_ID_LOOP = "music:loop"
+    CUSTOM_ID_SHUFFLE = "music:shuffle"
 
     def __init__(
         self,
@@ -803,7 +808,15 @@ class MusicControlView(ui.LayoutView):
         )
         self.btn_loop.callback = self.toggle_loop
 
-        # 組裝成兩列 ActionRow：Row 1 (5 顆)，Row 2 (3 顆：音量 - / 音量 + / 循環)
+        self.btn_shuffle = ui.Button(
+            label="隨機：關閉",
+            emoji="🔀",
+            style=discord.ButtonStyle.secondary,
+            custom_id=self.CUSTOM_ID_SHUFFLE,
+        )
+        self.btn_shuffle.callback = self.toggle_shuffle
+
+        # 組裝成兩列 ActionRow：Row 1 (5 顆)，Row 2 (4 顆：音量 - / 音量 + / 循環 / 隨機)
         self.row1 = ui.ActionRow(
             self.btn_toggle,
             self.btn_rewind,
@@ -811,7 +824,7 @@ class MusicControlView(ui.LayoutView):
             self.btn_skip,
             self.btn_stop,
         )
-        self.row2 = ui.ActionRow(self.btn_vol_down, self.btn_vol_up, self.btn_loop)
+        self.row2 = ui.ActionRow(self.btn_vol_down, self.btn_vol_up, self.btn_loop, self.btn_shuffle)
 
         # 組裝 Container
         self.container = build_now_playing_container(
@@ -831,6 +844,7 @@ class MusicControlView(ui.LayoutView):
         - 佇列沒有下一首：切歌按鈕 disabled。
         - 音量到 0% 時，「−」disabled；音量到 100% 時，「+」disabled。
         - 循環按鈕：依 loop_mode（off / single / all）切換文字、圖示與按鈕顏色。
+        - 隨機按鈕：依 shuffle（開啟 / 關閉）切換文字、顏色。
         """
         has_current = player is not None and getattr(player, "current", None) is not None
         is_paused = bool(getattr(player, "paused", False)) if player else False
@@ -846,6 +860,9 @@ class MusicControlView(ui.LayoutView):
             self.btn_loop.label = "循環：關閉"
             self.btn_loop.emoji = "🔁"
             self.btn_loop.style = discord.ButtonStyle.secondary
+            self.btn_shuffle.label = "隨機：關閉"
+            self.btn_shuffle.emoji = "🔀"
+            self.btn_shuffle.style = discord.ButtonStyle.secondary
             return
 
         track = player.current
@@ -898,6 +915,18 @@ class MusicControlView(ui.LayoutView):
             self.btn_loop.label = "循環：關閉"
             self.btn_loop.emoji = "🔁"
             self.btn_loop.style = discord.ButtonStyle.secondary
+
+        # 隨機播放按鈕：依 shuffle（開啟 / 關閉）切換狀態
+        is_shuffle = bool(getattr(player, "shuffle", False))
+        self.btn_shuffle.disabled = False
+        if is_shuffle:
+            self.btn_shuffle.label = "隨機：開啟"
+            self.btn_shuffle.emoji = "🔀"
+            self.btn_shuffle.style = discord.ButtonStyle.primary
+        else:
+            self.btn_shuffle.label = "隨機：關閉"
+            self.btn_shuffle.emoji = "🔀"
+            self.btn_shuffle.style = discord.ButtonStyle.secondary
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         """統一權限與狀態防呆：
@@ -1071,6 +1100,7 @@ class MusicControlView(ui.LayoutView):
         if song_queue:
             song_queue.clear()
         player.loop_mode = "off"
+        player.shuffle = False
         current_track = getattr(player, "current", None) or getattr(player, "_active_track", None)
         if cog:
             cog._clear_rejection(current_track)
@@ -1131,6 +1161,29 @@ class MusicControlView(ui.LayoutView):
                 f"{LOOP_LABELS[new_mode]}（操作者：{interaction.user.display_name}）",
                 duration=8.0,
             )
+            await cog._sync_panel(interaction.guild.id, player, interaction=interaction)
+
+    async def toggle_shuffle(self, interaction: discord.Interaction, button: ui.Button | None = None):
+        """在音樂控制面板直接切換隨機播放模式（開啟 / 關閉）。
+        開啟時自動將待播佇列（player.song_queue）順序打亂（不包含正在播放中的曲目）。
+        """
+        player: "wavelink_module.Player" = interaction.guild.voice_client
+        cog: "Music" = self.cog or interaction.client.get_cog("Music")
+
+        is_shuffle = bool(getattr(player, "shuffle", False))
+        new_shuffle = not is_shuffle
+        player.shuffle = new_shuffle
+
+        shuffled_count = 0
+        if new_shuffle and cog:
+            shuffled_count = cog._shuffle_queue(player)
+
+        if cog:
+            if new_shuffle:
+                notice = f"🔀 **已開啟隨機播放模式**：已將待播佇列中的 {shuffled_count} 首歌順序隨機打亂！（操作者：{interaction.user.display_name}）"
+            else:
+                notice = f"➡️ **已關閉隨機播放模式**：佇列將依照目前順序依序播放。（操作者：{interaction.user.display_name}）"
+            cog._set_panel_notice(interaction.guild.id, notice, duration=8.0)
             await cog._sync_panel(interaction.guild.id, player, interaction=interaction)
 
 
@@ -1194,11 +1247,42 @@ def build_playlist_page_embed(
 class PlaylistPaginationView(ui.View):
     """/music_playlist 分頁檢視器（每頁顯示 10 首）。"""
 
-    def __init__(self, user_id: int, playlist_owner_id: str | int, page: int = 0, timeout: float = 180.0):
+    def __init__(
+        self,
+        *args,
+        user_id: int | None = None,
+        playlist_owner_id: str | int | None = None,
+        page: int = 0,
+        timeout: float = 180.0,
+        **kwargs,
+    ):
         super().__init__(timeout=timeout)
+        pos = list(args)
+        if pos and not isinstance(pos[0], (int, str)):
+            self.cog = pos.pop(0)
+        elif pos and isinstance(pos[0], str) and not pos[0].isdigit():
+            self.cog = pos.pop(0)
+        else:
+            self.cog = None
+
+        if user_id is None:
+            if pos:
+                user_id = pos.pop(0)
+            else:
+                user_id = 0
         self.user_id = int(user_id)
+
+        if playlist_owner_id is None:
+            if pos and isinstance(pos[0], (int, str)) and (str(pos[0]).isdigit() or len(str(pos[0])) > 10):
+                playlist_owner_id = pos.pop(0)
+            else:
+                playlist_owner_id = self.user_id
         self.playlist_owner_id = str(playlist_owner_id)
+
+        if pos:
+            page = pos.pop(0)
         self.page = int(page)
+
         self._sync_buttons()
 
     def _load_playlist(self) -> dict[str, Any] | None:
@@ -1345,10 +1429,38 @@ class PlaylistReorderModal(ui.Modal, title="重新排序歌單曲目"):
 class PlaylistEditView(ui.View):
     """/music_playlist_edit 互動式歌單編輯面板（支援刪除歌曲、重新排序、切換公開／私人、重新命名、重產分享碼）。"""
 
-    def __init__(self, user_id: int, page: int = 0, notice: str | None = None, timeout: float = 300.0):
+    def __init__(
+        self,
+        *args,
+        user_id: int | None = None,
+        page: int = 0,
+        notice: str | None = None,
+        timeout: float = 300.0,
+        **kwargs,
+    ):
         super().__init__(timeout=timeout)
+        pos = list(args)
+        if pos and not isinstance(pos[0], (int, str)):
+            self.cog = pos.pop(0)
+        elif pos and isinstance(pos[0], str) and not pos[0].isdigit():
+            self.cog = pos.pop(0)
+        else:
+            self.cog = None
+
+        if user_id is None:
+            if pos:
+                user_id = pos.pop(0)
+            else:
+                user_id = 0
         self.user_id = int(user_id)
+
+        if pos:
+            page = pos.pop(0)
         self.page = int(page)
+
+        if notice is None and pos:
+            notice = str(pos.pop(0))
+
         self.last_embed: discord.Embed | None = None
         pl = get_user_playlist(self.user_id)
         if pl is not None:
@@ -1528,9 +1640,32 @@ class PlaylistEditView(ui.View):
 class PlaylistRemoveConfirmView(ui.View):
     """/music_playlist_remove 刪除歌單確認訊息 View。"""
 
-    def __init__(self, user_id: int, playlist_name: str, timeout: float = 60.0):
+    def __init__(
+        self,
+        *args,
+        user_id: int | None = None,
+        playlist_name: str = "",
+        timeout: float = 60.0,
+        **kwargs,
+    ):
         super().__init__(timeout=timeout)
+        pos = list(args)
+        if pos and not isinstance(pos[0], (int, str)):
+            self.cog = pos.pop(0)
+        elif pos and isinstance(pos[0], str) and not pos[0].isdigit():
+            self.cog = pos.pop(0)
+        else:
+            self.cog = None
+
+        if user_id is None:
+            if pos:
+                user_id = pos.pop(0)
+            else:
+                user_id = 0
         self.user_id = int(user_id)
+
+        if not playlist_name and pos:
+            playlist_name = str(pos.pop(0))
         self.playlist_name = playlist_name
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -2972,6 +3107,9 @@ class Music(commands.Cog):
         if getattr(player, "song_queue", None) is None:
             player.song_queue = deque()
 
+        if not hasattr(player, "shuffle"):
+            player.shuffle = False
+
         # 使用者現在就在頻道裡跟機器人互動，代表頻道一定不是空的，
         # 保險起見取消任何可能殘留的自動離開計時器。
         self._cancel_empty_channel_timer(interaction.guild.id)
@@ -3680,17 +3818,29 @@ class Music(commands.Cog):
             return
         guild_id = message.guild.id
 
-        # 1. 正在發送面板期間，或訊息本身就是控制面板／機器人訊息時，絕不觸發置底（防止自我觸發無限迴圈）
+        # 1. 正在發送面板期間，或訊息本身就是控制面板訊息時，絕不觸發置底（防止自我觸發無限迴圈）
         if guild_id in self._sending_panel_guilds:
             return
+        if self._is_panel_message(message):
+            return
+
+        # 檢查是否為 /music_queue 產生的公開佇列訊息（雖然為機器人訊息，但出現於面板下方時應觸發面板置底）
+        is_queue_message = False
+        interaction_meta = getattr(message, "interaction_metadata", None) or getattr(message, "interaction", None)
+        if interaction_meta and getattr(interaction_meta, "name", None) == "music_queue":
+            is_queue_message = True
+        elif getattr(message, "embeds", None):
+            for emb in message.embeds:
+                if getattr(emb, "title", None) == "🎵 播放佇列":
+                    is_queue_message = True
+                    break
+
         author = getattr(message, "author", None)
-        if author is not None:
+        if not is_queue_message and author is not None:
             if getattr(author, "bot", False):
                 return
             if self.bot.user is not None and getattr(author, "id", None) == getattr(self.bot.user, "id", None):
                 return
-        if self._is_panel_message(message):
-            return
 
         panel_info = self.panel_messages.get(guild_id)
         if not panel_info:
@@ -3851,11 +4001,11 @@ class Music(commands.Cog):
         task.add_done_callback(_on_done)
 
     async def _run_spotify_import(self, interaction: discord.Interaction, player, kind: str, spotify_id: str) -> None:
-        """背景匯入主流程（每個伺服器同時最多一個）。"""
+        """背景匯入主流程（每個伺服器同時最多一個），自動檢查並過濾重複歌曲。"""
         guild_id = interaction.guild.id
         requester_name = interaction.user.display_name
         requester_id = interaction.user.id
-        ok = fail = done = 0
+        ok = fail = done = dup = 0
         thinking_cleared = False
 
         async def clear_thinking():
@@ -3900,6 +4050,7 @@ class Music(commands.Cog):
                     continue
                 if not alive():
                     return
+
                 was_idle = self._is_player_idle(player)
                 player.song_queue.append((playable, requester_name, requester_id))
                 ok += 1
@@ -3908,11 +4059,11 @@ class Music(commands.Cog):
                 await self._start_if_idle(player)
                 await clear_thinking()
 
-            if ok == 0:
+            if ok == 0 and fail >= total:
                 await self._ephemeral_error(interaction, "😕 這份 Spotify 內容的曲目都找不到對應的音源，請稍後再試。")
                 return
 
-            # ---- 3. 其餘曲目：分批解析、依原順序加入佇列 ----
+            # ---- 3. 其餘曲目：分批解析後依序加入佇列 ----
             trunc_hint = f"（已截斷至前 {IMPORT_MAX_TRACKS} 首）" if result.truncated else ""
             last_progress = 0.0
             while index < total:
@@ -3942,6 +4093,9 @@ class Music(commands.Cog):
                     )
                     await self._sync_panel(guild_id, player)
 
+            if getattr(player, "shuffle", False) and len(player.song_queue) > 1:
+                self._shuffle_queue(player)
+
             # ---- 4. 結果回報（寫在面板底部，一段時間後自動消失）----
             if total == 1:
                 if queued_position:
@@ -3952,6 +4106,8 @@ class Music(commands.Cog):
                     )
             else:
                 extras = []
+                if dup > 0:
+                    extras.append(f"忽略 {dup} 首重複歌曲")
                 if result.truncated:
                     extras.append(f"超過上限，僅匯入前 {IMPORT_MAX_TRACKS} 首")
                 if result.skipped:
@@ -4174,10 +4330,27 @@ class Music(commands.Cog):
 
         return None, f"❌ 找不到名稱或分享碼為「`{val}`」的歌單。", False
 
+    def _find_queue_duplicate(self, player, track) -> tuple[str, int] | None:
+        """檢查曲目是否已在目前播放中或待播佇列中。
+        若重複，回傳 ("current", 0) 或 ("queue", 佇列序號 1-based)；若無重複回傳 None。
+        """
+        current_track = getattr(player, "current", None) or getattr(player, "_active_track", None)
+        if current_track is not None and are_tracks_duplicate(track, current_track):
+            return ("current", 0)
+
+        song_queue = getattr(player, "song_queue", None)
+        if song_queue:
+            for idx, item in enumerate(song_queue):
+                q_track = item[0] if isinstance(item, (tuple, list)) and item else item
+                if q_track is not None and are_tracks_duplicate(track, q_track):
+                    return ("queue", idx + 1)
+
+        return None
+
     async def _play_user_playlist(
         self, interaction: discord.Interaction, player, playlist_data: dict, used_share_code: bool = False
     ) -> None:
-        """將整個用戶歌單載入播放佇列，若目前閒置則立即開始播放第一首。"""
+        """將整個用戶歌單載入播放佇列，自動過濾與現有播放中/佇列重複之歌曲，若目前閒置則立即開始播放第一首。"""
         tracks_raw = playlist_data.get("tracks") or []
         pl_name = playlist_data.get("name", "未命名歌單")
         owner_name = playlist_data.get("owner_name") or "未知用戶"
@@ -4222,10 +4395,14 @@ class Music(commands.Cog):
             await self._ephemeral_error(interaction, f"❌ 歌單「**{pl_name}**」內的曲目目前皆無法播放，請稍後再試。")
             return
 
+        if getattr(player, "shuffle", False) and len(player.song_queue) > 1:
+            self._shuffle_queue(player)
+
         owner_tag = "你的歌單" if is_own else f"{owner_name} 的歌單"
         saved_hint = "（已透過分享碼自動收藏至你的歌單選單）" if (used_share_code and not is_own) else ""
+        shuffle_hint = "（🔀 已開啟隨機佇列）" if getattr(player, "shuffle", False) else ""
         notice = (
-            f"📀 **已載入{owner_tag}「{pl_name}」**：共 {len(playables)} 首曲目已排入播放佇列"
+            f"📀 **已載入{owner_tag}「{pl_name}」**：共 {len(playables)} 首曲目已排入播放佇列{shuffle_hint}"
             f" 由 {requester_name} 點播{saved_hint}"
         )
         self._set_panel_notice(interaction.guild.id, notice, duration=10.0)
@@ -4239,7 +4416,7 @@ class Music(commands.Cog):
         if used_share_code and not is_own:
             try:
                 await interaction.followup.send(
-                    f"✅ 已透過分享碼 `{playlist_data.get('share_code')}` 播放 **{owner_name}** 的歌單「**{pl_name}**」（共 {len(playables)} 首），並已自動儲存至你的 `/music_play` 歌單選單！",
+                    f"✅ 已透過分享碼 `{playlist_data.get('share_code')}` 播放 **{owner_name}** 的歌單「**{pl_name}**」（共 {len(playables)} 首{shuffle_hint}），並已自動儲存至你的 `/music_play` 歌單選單！",
                     ephemeral=True,
                 )
             except (discord.NotFound, discord.HTTPException):
@@ -4249,6 +4426,7 @@ class Music(commands.Cog):
     @app_commands.describe(
         query="歌曲名稱 / 關鍵字，或是 YouTube、SoundCloud、Spotify 網址（與 playlist 擇一填入）",
         playlist="選擇你的歌單、伺服器公開歌單，或直接輸入 6 碼分享碼跨伺服器播放（與 query 擇一填入）",
+        shuffle="是否開啟隨機播放模式（開啟時自動打亂待播佇列順序，預設關閉）",
     )
     @app_commands.guild_only()
     async def play(
@@ -4256,6 +4434,7 @@ class Music(commands.Cog):
         interaction: discord.Interaction,
         query: str | None = None,
         playlist: str | None = None,
+        shuffle: bool = False,
     ):
         if not await self._check_music_channel(interaction):
             return
@@ -4301,12 +4480,17 @@ class Music(commands.Cog):
             player = await self._ensure_player(interaction)
             if player is None:
                 return
+            if shuffle:
+                player.shuffle = True
             await self._play_user_playlist(interaction, player, pl_data, used_share_code=used_share_code)
             return
 
         player = await self._ensure_player(interaction)
         if player is None:
             return  # 錯誤訊息已經在 _ensure_player 內送出
+
+        if shuffle:
+            player.shuffle = True
 
         # 第 7 週新增：Spotify 連結改走背景匯入流程（立刻返回，不阻塞 Gateway 與其他指令）
         if looks_like_spotify(query):
@@ -4324,11 +4508,14 @@ class Music(commands.Cog):
         # 一段時間後自動清除，並刪除 defer 訊息避免洗版。
         if not self._is_player_idle(player):
             player.song_queue.append((track, interaction.user.display_name, interaction.user.id))
+            if getattr(player, "shuffle", False) and len(player.song_queue) > 1:
+                self._shuffle_queue(player)
             position = len(player.song_queue)
             track_title = getattr(track, "title", "未知曲目")
             track_uri = getattr(track, "uri", None)
             title_display = f"[{track_title}]({track_uri})" if track_uri else track_title
-            notice = f"➕ **已新增至待播清單（第 {position} 位）**：{title_display} 由 {interaction.user.display_name} 點播"
+            shuffle_tag = "（🔀 隨機佇列）" if getattr(player, "shuffle", False) else f"（第 {position} 位）"
+            notice = f"➕ **已新增至待播清單{shuffle_tag}**：{title_display} 由 {interaction.user.display_name} 點播"
             self._set_panel_notice(interaction.guild.id, notice, duration=8.0)
             await self._sync_panel(interaction.guild.id, player)
             try:
@@ -4340,6 +4527,8 @@ class Music(commands.Cog):
         # ---- 佇列與播放器都是空的，直接開始播放 ----
         try:
             await self._play_track(player, track, interaction.user.display_name, interaction.user.id)
+            if getattr(player, "shuffle", False) and len(player.song_queue) > 1:
+                self._shuffle_queue(player)
         except Exception as e:
             if self._is_session_lost_error(e):
                 await self._handle_session_lost(player, e)
@@ -4536,7 +4725,10 @@ class Music(commands.Cog):
             lines.append("\n📭 佇列目前是空的，播完這首就結束囉，輸入 `/music_play` 繼續點歌吧！")
 
         lines.append("")
-        lines.append(LOOP_LABELS.get(getattr(player, "loop_mode", "off"), LOOP_LABELS["off"]))
+        loop_str = LOOP_LABELS.get(getattr(player, "loop_mode", "off"), LOOP_LABELS["off"])
+        is_shuffle = bool(getattr(player, "shuffle", False))
+        shuffle_str = "🔀 隨機播放：開啟" if is_shuffle else "🔀 隨機播放：關閉"
+        lines.append(f"{loop_str} ｜ {shuffle_str}")
 
         embed = discord.Embed(
             title="🎵 播放佇列",
@@ -4544,6 +4736,21 @@ class Music(commands.Cog):
             color=discord.Color.blurple(),
         )
         await interaction.response.send_message(embed=embed)
+        try:
+            queue_msg = await interaction.original_response()
+            queue_msg_id = getattr(queue_msg, "id", None)
+            if queue_msg_id is not None and interaction.guild is not None:
+                g_id = interaction.guild.id
+                p_info = self.panel_messages.get(g_id)
+                if p_info:
+                    p_channel_id, p_msg_id = p_info
+                    curr_ch_id = getattr(interaction, "channel_id", None) or getattr(getattr(interaction, "channel", None), "id", None)
+                    if (curr_ch_id is None or curr_ch_id == p_channel_id) and queue_msg_id > p_msg_id:
+                        if self._is_playback_active(player):
+                            self._bump_trigger_msgs.setdefault(g_id, set()).add(queue_msg_id)
+                            self._schedule_panel_bump(g_id)
+        except Exception:
+            pass
 
     @app_commands.command(name="music_queue_clear", description="清空目前的播放佇列（不影響正在播放的歌曲）")
     @app_commands.guild_only()
@@ -4603,6 +4810,21 @@ class Music(commands.Cog):
         return not has_comparable
 
     # ---------- 第4週新增：播放控制 ----------
+    @staticmethod
+    def _shuffle_queue(player: Any) -> int:
+        """將待播佇列（player.song_queue）中的歌曲順序隨機打亂（不包含正在播放中的曲目）。
+        回傳打亂的歌曲數量。
+        """
+        song_queue = getattr(player, "song_queue", None)
+        if not song_queue or len(song_queue) <= 1:
+            return len(song_queue) if song_queue else 0
+
+        items = list(song_queue)
+        random.shuffle(items)
+        song_queue.clear()
+        song_queue.extend(items)
+        return len(items)
+
     @staticmethod
     def _split_queue_item(queue_item: tuple) -> tuple:
         """把佇列項目拆成 (track, 點歌者名稱, 點歌者ID)。
@@ -5359,12 +5581,24 @@ class Music(commands.Cog):
             if not new_dicts:
                 await self._ephemeral_error(interaction, "😕 找不到對應的音源，無法加入歌單。")
                 return
-            updated_pl, added_count, _ = add_tracks_to_user_playlist(
+            updated_pl, added_count, dup_count, overflow_count = add_tracks_to_user_playlist(
                 interaction.user.id, new_dicts, owner_name=interaction.user.display_name
             )
             total_now = len((updated_pl or {}).get("tracks") or [])
+            if added_count == 0 and dup_count > 0:
+                await interaction.followup.send(
+                    f"⚠️ 所選的 **{dup_count}** 首 Spotify 歌曲皆已存在於歌單「**{pl['name']}**」中，已全部自動忽略！",
+                    ephemeral=True,
+                )
+                return
+            notes = []
+            if dup_count > 0:
+                notes.append(f"已自動忽略 **{dup_count}** 首重複歌曲")
+            if overflow_count > 0:
+                notes.append(f"超過 {PLAYLIST_MAX_TRACKS} 首上限略過 **{overflow_count}** 首")
+            tail_msg = f"（{'，'.join(notes)}）" if notes else ""
             await interaction.followup.send(
-                f"✅ 已從 Spotify 新增 **{added_count}** 首歌至歌單「**{pl['name']}**」（目前共 **{total_now} / {PLAYLIST_MAX_TRACKS}** 首）！",
+                f"✅ 已從 Spotify 新增 **{added_count}** 首歌至歌單「**{pl['name']}**」{tail_msg}（目前共 **{total_now} / {PLAYLIST_MAX_TRACKS}** 首）！",
                 ephemeral=True,
             )
             return
@@ -5374,9 +5608,20 @@ class Music(commands.Cog):
             return
 
         track_dict = self._playable_to_playlist_dict(track, fallback_query=query)
-        updated_pl, added_count, _ = add_tracks_to_user_playlist(
+        updated_pl, added_count, dup_count, overflow_count = add_tracks_to_user_playlist(
             interaction.user.id, [track_dict], owner_name=interaction.user.display_name
         )
+        title_str = track_dict.get("title", "未知曲目")
+        uri_str = track_dict.get("uri")
+        display_song = f"[{title_str}]({uri_str})" if uri_str else f"**{title_str}**"
+
+        if dup_count > 0:
+            await interaction.followup.send(
+                f"⚠️ 你的歌單「**{pl['name']}**」中已存在相同歌曲 {display_song}，已自動忽略重複新增！",
+                ephemeral=True,
+            )
+            return
+
         if added_count <= 0 or updated_pl is None:
             await self._ephemeral_error(
                 interaction,
@@ -5385,9 +5630,6 @@ class Music(commands.Cog):
             return
 
         total_now = len(updated_pl.get("tracks") or [])
-        title_str = track_dict.get("title", "未知曲目")
-        uri_str = track_dict.get("uri")
-        display_song = f"[{title_str}]({uri_str})" if uri_str else f"**{title_str}**"
         await interaction.followup.send(
             f"✅ 已將 {display_song} 加入歌單「**{updated_pl['name']}**」（第 **{total_now} / {PLAYLIST_MAX_TRACKS}** 首）！",
             ephemeral=True,
@@ -5471,8 +5713,8 @@ class Music(commands.Cog):
                 pl = updated_pl
                 changes.append(f"🔑 分享碼已重新產生為 `{pl['share_code']}`（舊分享碼已失效）")
 
-        view = PlaylistEditView(self, interaction.user.id, page=0)
-        embed = build_playlist_page_embed(pl, page=view.page, title_prefix="🛠️ 編輯歌單：")
+        view = PlaylistEditView(interaction.user.id, page=0)
+        embed, _, _ = build_playlist_page_embed(pl, page=view.page, title_prefix="🛠️ 編輯歌單")
         content_msg = "\n".join(changes) if changes else "👇 請使用下方選單與按鈕編輯歌單（刪除歌曲、重新排序、切換公開/私人、重產分享碼）："
         await interaction.response.send_message(content=content_msg, embed=embed, view=view, ephemeral=True)
         try:
@@ -5501,7 +5743,7 @@ class Music(commands.Cog):
             ),
             color=discord.Color.red(),
         )
-        view = PlaylistRemoveConfirmView(self, interaction.user.id, pl["name"])
+        view = PlaylistRemoveConfirmView(interaction.user.id, pl["name"])
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
     @app_commands.command(name="music_playlist_sync", description="將目前伺服器的播放佇列直接新增至你的個人歌單內")
@@ -5546,11 +5788,22 @@ class Music(commands.Cog):
             return
 
         track_dicts = [self._playable_to_playlist_dict(t) for t in queue_tracks]
-        updated_pl, added_count, skipped_count = add_tracks_to_user_playlist(
+        updated_pl, added_count, dup_count, skipped_count = add_tracks_to_user_playlist(
             interaction.user.id, track_dicts, owner_name=interaction.user.display_name
         )
         total_now = len((updated_pl or {}).get("tracks") or [])
-        skip_note = f"（因達 {PLAYLIST_MAX_TRACKS} 首上限，略過 {skipped_count} 首）" if skipped_count > 0 else ""
+        if added_count == 0 and dup_count > 0:
+            await interaction.response.send_message(
+                f"ℹ️ 目前播放佇列中的歌曲已全部存在於歌單「**{pl['name']}**」中，已自動忽略重複歌曲，未新增任何曲目。",
+                ephemeral=True,
+            )
+            return
+        notes = []
+        if dup_count > 0:
+            notes.append(f"已自動忽略 **{dup_count}** 首重複歌曲")
+        if skipped_count > 0:
+            notes.append(f"因達 {PLAYLIST_MAX_TRACKS} 首上限略過 **{skipped_count}** 首")
+        skip_note = f"（{'，'.join(notes)}）" if notes else ""
         await interaction.response.send_message(
             f"✅ 已將目前播放佇列中的 **{added_count}** 首歌同步新增至歌單「**{pl['name']}**」{skip_note}！\n"
             f"📊 目前歌單共有 **{total_now} / {PLAYLIST_MAX_TRACKS}** 首歌曲。",
@@ -5569,8 +5822,8 @@ class Music(commands.Cog):
             )
             return
 
-        view = PlaylistPaginationView(self, interaction.user.id, page=0)
-        embed = build_playlist_page_embed(pl, page=0)
+        view = PlaylistPaginationView(interaction.user.id, playlist_owner_id=interaction.user.id, page=0)
+        embed, _, _ = build_playlist_page_embed(pl, page=0)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
         try:
             view.message = await interaction.original_response()
