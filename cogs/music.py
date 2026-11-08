@@ -3870,7 +3870,11 @@ class Music(commands.Cog):
 
         # 檢查是否為 /music_queue 產生的公開佇列訊息（雖然為機器人訊息，但出現於面板下方時應觸發面板置底）
         is_queue_message = False
-        interaction_meta = getattr(message, "interaction_metadata", None) or getattr(message, "interaction", None)
+        if hasattr(message, "interaction_metadata"):
+            interaction_meta = message.interaction_metadata
+        else:
+            interaction_meta = getattr(message, "interaction", None)
+
         if interaction_meta and getattr(interaction_meta, "name", None) == "music_queue":
             is_queue_message = True
         elif getattr(message, "embeds", None):
