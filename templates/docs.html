@@ -271,9 +271,9 @@
         <ul>
           <li><strong>/music_join</strong>：加入使用者目前所在的語音頻道。</li>
           <li><strong>/music_leave</strong>：離開語音頻道並清空播放佇列。</li>
-          <li><strong>/music_play</strong> <em>query:&lt;關鍵字或網址&gt;</em>：搜尋並播放音樂；若有歌曲正在播放則排入 FIFO 佇列。支援 YouTube／SoundCloud 關鍵字或直接貼網址。</li>
+          <li><strong>/music_play</strong> <em>[query:&lt;關鍵字或網址&gt;] [playlist:&lt;歌單名稱或6碼分享碼&gt;] [shuffle:&lt;True/False&gt;]</em>：搜尋並播放音樂、點播自己的個人歌單、伺服器公開歌單或輸入他人 6 碼跨服分享碼點播；若有歌曲正在播放則排入 FIFO 佇列。支援 YouTube／SoundCloud 關鍵字、網址或 Spotify 外部歌單；可選開啟 <em>shuffle</em> 隨機播放模式（打亂佇列曲目順序，不影響當前播放中的歌曲）。</li>
           <li><strong>/music_play_next</strong> <em>query:&lt;關鍵字或網址&gt;</em>：插播，插入佇列最前面，下一首優先播放。</li>
-          <li><strong>/music_queue</strong>：顯示正在播放的歌曲與接下來最多 10 首的佇列清單。</li>
+          <li><strong>/music_queue</strong>：顯示正在播放的歌曲與接下來最多 10 首的佇列清單（送出時支援觸發控制面板自動置底）。</li>
           <li><strong>/music_queue_clear</strong>：清空播放佇列（不影響正在播放的歌曲）。</li>
           <li><strong>/music_pause</strong>：暫停目前播放的歌曲，回覆會附上操作者戳記。</li>
           <li><strong>/music_resume</strong>：繼續播放被暫停的歌曲，回覆會附上操作者戳記。</li>
@@ -283,6 +283,19 @@
           <li><strong>/music_stop</strong>：停止播放並清空佇列（需全員投票同意，見下方操作鎖說明）。</li>
           <li><strong>/music_node_status</strong>：查看 Lavalink 節點連線狀態（URI、Session ID、連線伺服器數），僅使用者可見。</li>
           <li><strong>/music_set_channel</strong> <em>[channel]</em>：設定點歌頻道，設定後音樂指令只在該頻道回應；不帶參數則取消限制，恢復全頻道可用。需「管理伺服器」權限。</li>
+          <li><strong>/music_playlist</strong> <em>[member:&lt;成員&gt;]</em>：查看自己或指定成員的個人專屬音樂歌單（分頁檢視，每頁 10 首，附前往網頁控制面板個人設定專區編輯按鈕）。</li>
+          <li><strong>/music_playlist_create</strong> <em>name:&lt;歌單名稱&gt; [is_public:&lt;公開/私人&gt;]</em>：建立個人專屬音樂歌單（每位使用者上限 1 個歌單，最多 100 首歌曲；系統配發獨一無二的 6 碼跨服分享碼，他人輸入該代碼即可跨服點播並自動加入收藏歌單）。</li>
+          <li><strong>/music_playlist_add</strong> <em>query:&lt;關鍵字或網址&gt;</em>：搜尋歌曲並新增至個人歌單（上限 100 首；具備 URL 去重機制，重複歌曲自動忽略並提示）。</li>
+          <li><strong>/music_playlist_edit</strong> <em>[name] [is_public] [move_from] [move_to] [delete_index] [regenerate_share_code]</em>：編輯個人歌單（修改歌單名稱、切換公開/私人狀態、以序號調整播放順序、刪除指定曲目，或重新產生 6 碼分享碼使其餘舊碼立即失效）。</li>
+          <li><strong>/music_playlist_remove</strong>：刪除個人專屬音樂歌單（彈出確認訊息與防呆按鈕）。</li>
+          <li><strong>/music_playlist_sync</strong>：一鍵將當前伺服器語音播放佇列中的所有曲目同步批次加入至個人歌單中。</li>
+          <li><strong>現代化 Container 控制面板與進階播放特性</strong>：
+            <ul>
+              <li><strong>UI Components V2 Container</strong>：採用 Discord 最新 Container 架構，頂部 Section 右上角配備封面縮圖（Thumbnail），提供 6 顆即時操作按鈕（暫停/續播、切歌、停止、音量微調、循環切換、隨機打亂按鈕）。</li>
+              <li><strong>防洗版自動置底（Sticky Panel）</strong>：點歌頻道出現普通成員訊息或 <code>/music_queue</code> 訊息時，觸發防抖定時器安全將控制面板重新發送至最底端並刪除舊面板，杜絕雙重面板與幽靈訊息。</li>
+              <li><strong>自動故障復原（Auto-Recovery）</strong>：自動捕捉 Lavalink 404 Session Lost，自動重連並於中斷秒數恢復播放；直播串流（<code>is_stream=True</code>）長播斷流時自動重抓 URL 續播，防止直播中斷。</li>
+            </ul>
+          </li>
           <li><strong>點歌者操作鎖（/music_pause、/music_resume、/music_skip、/music_stop、/music_seek）</strong>：每首歌的點歌者若還在機器人所在的語音頻道，僅點歌者能直接操作該曲；點歌者退出語音頻道後，任何人都能操作。
             <ul>
               <li><strong>暫停／續播／跳過／跳轉</strong>：非點歌者使用時會被直接拒絕（僅提示可見）。其中<strong>暫停與續播</strong>會另外在原文字頻道公開發送請求，附「✅ 允許／❌ 拒絕」按鈕，只有點歌者能按，按完按鈕即失效（一次性），<strong>30 秒</strong>內未決定視為拒絕。</li>

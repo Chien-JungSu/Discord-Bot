@@ -24,17 +24,24 @@ Supported features:
 - `/reaction_roles_edit`: select a message from a dropdown menu to edit it interactively with the new visual pair editor (native Discord role selector + click reactions directly on the message to capture, no copying IDs required), modify message text, or toggle strict mode. Requires **Manage Server** permission
 - `/music_join`: join the voice channel where the user is currently connected
 - `/music_leave`: leave the current voice channel
-- `/music_play <query>`: search and play music; automatically queues the track if something is already playing (accepts keywords, or a YouTube/SoundCloud URL)
+- `/music_play [query] [playlist] [shuffle]`: search and play music, personal playlists, server public playlists, or a 6-character cross-server share code; automatically queues the track if something is already playing (accepts YouTube/SoundCloud keywords or URLs, or Spotify playlists; optional `shuffle` mode to randomize queue order)
 - `/music_play_next <query>`: play next (jump the queue), search a track and insert it at the front of the queue
-- `/music_queue`: show the current server's playback queue (now playing + upcoming tracks)
+- `/music_queue`: show the current server's playback queue (now playing + upcoming tracks; triggers sticky panel bump)
 - `/music_queue_clear`: clear the current playback queue (does not affect the currently playing track)
 - `/music_pause`: pause the currently playing track
 - `/music_resume`: resume a paused track
 - `/music_skip`: skip the current track and play the next one in the queue
+- `/music_loop [mode]`: switch loop mode (Off → Single → Queue, or specify mode directly)
 - `/music_seek <time>`: seek to a position (seconds, `mm:ss`, `hh:mm:ss`, or relative `+10` / `-15`)
 - `/music_stop`: stop playback and clear the queue (requires a group vote)
 - `/music_set_channel [channel]`: restrict music commands to a single text channel; run without arguments to lift the restriction. Requires **Manage Server** permission
 - `/music_node_status`: view the connection status of all registered Lavalink nodes (URI, status, Session ID, and connected guild count)
+- `/music_playlist [member]`: view your own or another user's personal playlist (paged view, with a button to open the web panel editor)
+- `/music_playlist_create <name> [is_public]`: create a personal music playlist (up to 1 playlist per user, 100 tracks max; automatically generates a 6-character cross-server share code)
+- `/music_playlist_add <query>`: search and add tracks to your playlist (built-in URL deduplication to ignore duplicates)
+- `/music_playlist_edit [name] [is_public] [move_from] [move_to] [delete_index] [regenerate_share_code]`: edit your playlist (rename, toggle visibility, reorder songs, delete songs, or regenerate share code)
+- `/music_playlist_remove`: delete your personal music playlist (with confirmation prompt)
+- `/music_playlist_sync`: import all tracks from the server's current voice playback queue directly into your personal playlist
 - `/auto_reply_add`: add a keyword auto-reply rule (rule name, trigger keyword, bot reply text, active scope). Requires **Manage Server** permission
 - `/auto_reply_edit`: edit an auto-reply rule (edit keywords / reply text in modals, leaving a field empty deletes that entry; can also pause or resume the whole rule). Requires **Manage Server** permission
 - `/auto_reply_list`: list all auto-reply rules (one rule per page, with paging: rule name, status, keywords, reply text, active scope). Requires **Manage Server** permission
@@ -65,14 +72,15 @@ The five commands `/music_pause`, `/music_resume`, `/music_skip`, `/music_stop`,
 
 When a track begins playing (`on_wavelink_track_start`), the bot automatically sends an interactive multi-button control panel to the music text channel:
 
-- **5 Interactive Control Buttons**:
+- **6 Interactive Control Buttons**:
   - `⏯ Pause/Resume`: A single toggle button displaying blue "Pause" during playback and green "Resume" when paused.
   - `⏭ Skip`: Skip the current track to play the next one; automatically `disabled` when the queue is empty.
-  - `⏹ Stop`: Stop playback and clear the queue.
+  - `⏹ Stop`: Stop playback and clear the queue (initiates a group vote).
   - `🔉 Volume −`: Decrease player volume by 10%; automatically `disabled` at 0%.
   - `🔊 Volume +`: Increase player volume by 10%; automatically `disabled` at 100%.
+  - `🔀 Shuffle: Off / On`: Toggle queue shuffle mode in real time (randomizes the queue order without interrupting the current track).
 - **Dynamic State Synchronization**:
-  - Buttons and embed information update in-place (`edit_message`) upon skipping, pausing, resuming, volume adjustments, or queue changes, preventing message spam.
+  - Buttons and embed information update in-place (`edit_message`) upon skipping, pausing, resuming, volume adjustments, shuffle mode changes, or queue changes, preventing message spam.
   - When playback ends, the queue clears, or the bot leaves the voice channel, the panel transitions to an "Ended" state with all buttons disabled.
 - **Persistent View & Graceful Restart Handling**:
   - Implemented as a persistent `discord.ui.View` (`bot.add_view()`, `timeout=None`, unique fixed `custom_id` for every button).
@@ -80,6 +88,32 @@ When a track begins playing (`on_wavelink_track_start`), the bot automatically s
 - **Multi-Server Isolation & Voice Channel Safety**:
   - Panel tracking messages are strictly isolated per `guild_id` in memory, ensuring operations in one server never interfere with another.
   - Operator voice state is checked uniformly in `interaction_check`; users not in the bot's voice channel are denied with an ephemeral message.
+
+
+### Modern UI Components V2 & Advanced Playback Resilience (Week 7)
+
+In alignment with Discord's latest UI specifications, the music control panel has been upgraded to UI Components V2, integrating several high-reliability auto-recovery mechanisms:
+
+- **Container Architecture & Artwork Thumbnail Accessory**:
+  - The control panel is structured using `discord.ui.Container`, with a top `ui.Section` featuring an `accessory=ui.Thumbnail(artwork_url)` thumbnail in the top-right corner.
+  - Artwork URLs are automatically derived via `get_track_artwork()` from YouTube URLs / video IDs (`hqdefault.jpg`), consuming zero host memory cache.
+- **Anti-Spam Sticky Panel (Auto-Bump)**:
+  - When members send text chat in the music channel or run `/music_queue`, a debounce timer is scheduled to safely re-send the control panel at the bottom of the channel and delete the previous panel message, preventing the control interface from being scrolled away.
+  - Features strict message ID tracking to eliminate infinite bounce loops and ghost messages.
+- **Lavalink 404 Session Lost Auto-Recovery**:
+  - Automatically captures 404 Session Lost errors from Lavalink, dedupes reconnect attempts, automatically reconnects the WebSocket, re-dispatches voice state, and resumes playback from the exact position where it left off.
+- **Live Stream Disconnect Protection**:
+  - When long-running live streams (`is_stream=True`) trigger finished events due to HLS window resets, the system automatically fetches fresh stream URLs and seamlessly resumes streaming without interruption.
+
+
+### User Personal Playlists & 6-Character Cross-Server Share Codes (Week 7)
+
+Every Discord member can create a personal music playlist stored persistently in the SQLite database (`bot_database.db`):
+
+- **Capacity & Limits**: Each user can create 1 personal playlist holding up to 100 tracks.
+- **6-Character Cross-Server Share Code**: Upon creation, the system issues a unique 6-character alphanumeric share code (e.g., `5Y1V36`). Whether set to Public or Private, entering this code in `/music_play playlist:<CODE>` in any Discord server allows cross-server playback and automatically adds the playlist to the caller's saved list. Regenerating the code immediately invalidates previous shares.
+- **Intelligent URL Deduplication**: When adding tracks, URLs are sanitized and compared (including YouTube video ID resolution). Duplicate tracks are automatically skipped with friendly count notifications.
+- **Web Panel Management Suite**: Logged-in users can access "Personal Settings" on the Web Control Panel to manage their playlist with an interactive UI (in-place renaming, drag-and-drop / arrow reordering, URL search, confirm modals for deletion, code regeneration, and saved playlist management).
 
 ### Dynamic Now-Playing Embed & Progress Bar Rendering (Week 6)
 
@@ -185,17 +219,24 @@ When launched, the bot starts the Flask background server from `cogs/web_server.
   Changing pairs automatically syncs reactions on the message (unused emojis are cleared along with members' reactions; newly added emojis are added by the bot; pairs still in use remain untouched). All interactions happen in place on the same message without spam; buttons expire after 120 seconds of inactivity. Requires **Manage Server** permission.
 - `/music_join`: join the user's current voice channel. Requires `wavelink` and a configured Lavalink node.
 - `/music_leave`: leave the current voice channel, and clear that server's playback queue.
-- `/music_play query:<keywords or URL>`: search and play music; auto-joins your voice channel if the bot isn't connected yet. If something is already playing (or paused), the new track is appended to the FIFO queue instead of replacing it.
+- `/music_play [query:<keywords or URL>] [playlist:<playlist name or 6-char share code>] [shuffle:<True/False>]`: search and play music, personal playlists, server public playlists, or a 6-character cross-server share code; auto-joins your voice channel if the bot isn't connected yet. If something is already playing (or paused), the track is appended to the FIFO queue; supports `shuffle` mode to randomize the queue order (without affecting the currently playing track).
 - `/music_play_next query:<keywords or URL>`: play next / jump the queue. Same search as `/music_play`, but the track is inserted at the front of the queue and plays right after the current one.
-- `/music_queue`: show what's currently playing plus the upcoming tracks in the queue (up to the first 10).
+- `/music_queue`: show what's currently playing plus the upcoming tracks in the queue (up to the first 10; triggers sticky panel bump).
 - `/music_queue_clear`: clear the current server's queue. The currently playing track is not affected.
 - `/music_pause`: pause the currently playing track. Protected by the requester control lock described above.
 - `/music_resume`: resume a paused track. Protected by the requester control lock described above.
 - `/music_skip`: skip the current track and play the next one in the queue. Protected by the requester control lock described above.
-- `/music_stop`: stop playback and clear the queue (starts a group vote). Protected by the requester control lock described above.
+- `/music_loop [mode:<off/single/queue>]`: switch loop mode (Off → Single → Queue, or specify the mode directly).
 - `/music_seek time:<90 | 1:30 | +10 | -15>`: seek to an absolute position (seconds, `mm:ss`, `hh:mm:ss`) or a relative offset (`+10` / `-15`). Protected by the requester control lock described above.
+- `/music_stop`: stop playback and clear the queue (starts a group vote). Protected by the requester control lock described above.
 - `/music_set_channel [channel]`: restrict music commands to a single text channel; run without arguments to lift the restriction. Requires **Manage Server** permission.
 - `/music_node_status`: view the connection status of all registered Lavalink nodes (URL, connection state, Session ID, connected guild count). Ephemeral (only visible to you).
+- `/music_playlist [member:<user>]`: view your own or another user's personal playlist (paged view, with a button to open the web panel editor).
+- `/music_playlist_create name:<name> [is_public:<public/private>]`: create a personal music playlist (up to 1 playlist per user, 100 tracks max; automatically generates a unique 6-character cross-server share code).
+- `/music_playlist_add query:<keywords or URL>`: search and add tracks to your playlist (up to 100 tracks; built-in URL deduplication to ignore duplicates).
+- `/music_playlist_edit [name] [is_public] [move_from] [move_to] [delete_index] [regenerate_share_code]`: edit your playlist (rename, toggle visibility, reorder songs by index, delete songs, or regenerate share code).
+- `/music_playlist_remove`: delete your personal music playlist (with confirmation prompt).
+- `/music_playlist_sync`: import all tracks from the server's current voice playback queue directly into your personal playlist.
 - `/auto_reply_add keyword:<keyword> reply:<reply> [name:<rule name>] [channel:<channel>]`: add an auto-reply rule. When a member's message **contains** the keyword (case-insensitive, extra whitespace ignored), the bot quotes that message and auto-replies; without `channel` the rule applies to the whole server, and without `name` the keyword is used as the rule name. Up to 10 rules per server. Requires **Manage Server** permission.
 - `/auto_reply_edit`: edit an auto-reply rule. After submission the bot builds a dropdown from the **rule names** of all current rules (older rules fall back to showing their trigger keyword); selecting one shows four buttons: "Edit keywords", "Edit reply text", "⏸️ Pause rule" (becomes "▶️ Resume rule" while paused), and "Cancel". Both edit modals hold 5 input boxes per page (Discord's limit), pre-filled with the current values, and **leaving a box empty deletes that entry**; saving **edits that same message in place** (it never keeps posting new messages) and always leaves an "Edit entries 6-10" button on it (and "Back to entries 1-5" after editing the second page) so you can jump between pages whenever you want. When a rule has more than one reply it automatically switches to **random reply mode** (picks one reply at random on every trigger). Requires **Manage Server** permission.
 - `/auto_reply_list`: a quick way to review the current rules. **One rule per page** (paged with "◀️ Previous / Next ▶️"), showing the rule name, status, all keywords, reply text, and active scope; a single reply longer than 300 characters is truncated, and if the content still does not fit it is marked as shortened with a hint to use `/auto_reply_edit`. Tells you to add one with `/auto_reply_add` when there is no rule yet. Requires **Manage Server** permission.
