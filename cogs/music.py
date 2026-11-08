@@ -2207,6 +2207,8 @@ class Music(commands.Cog):
         """判斷曲目是否為直播串流（is_stream=True、不可跳轉、或時長 >= 24 小時 86,400,000 ms）。"""
         if track is None:
             return False
+        if bool(getattr(track, "_is_live_stream", False)):
+            return True
         if bool(getattr(track, "is_stream", False)):
             return True
         if not getattr(track, "is_seekable", True):
@@ -2285,6 +2287,10 @@ class Music(commands.Cog):
             await self._notify_panel(guild_id, "🔄 音訊節點連線已自動恢復，繼續播放中。", duration=8.0)
         except Exception as exc:
             print(f"❌ [Session 復原] 恢復播放失敗 (guild_id={guild_id})：{exc}")
+            if is_stream:
+                print(f"ℹ️ [Session 復原] 直播「{getattr(track, 'title', '?')}」重連失敗，視為直播結束，不予報錯")
+                await self.on_wavelink_track_end(SimpleNamespace(player=player, reason="loadfailed", track=track))
+                return
             await self.bot.notify_owner_error(exc, extra_info=f"Lavalink Session 重置後恢復播放失敗 guild_id={guild_id}")
             await self._notify_panel(
                 guild_id, "⚠️ 音訊節點連線已恢復，但無法接續播放，請按停止後重新點歌。", duration=15.0
@@ -2617,6 +2623,26 @@ class Music(commands.Cog):
         track_title = getattr(track, "title", None) or "未知曲目"
         print(f"❌ Lavalink TrackException｜track={track_title} severity={severity} message={message} cause={cause}")
 
+        # 直播防斷流與結束判斷：若為直播串流或重連中，直接視為直播已結束，絕不向開發者報錯亦不向頻道發送錯誤訊息
+        is_live = (
+            self._is_live_track(track)
+            or self._is_live_track(getattr(player, "_active_track", None))
+            or self._is_live_track(getattr(player, "current", None))
+            or getattr(player, "_retrying_live_stream", False)
+            or getattr(player, "_is_current_stream", False)
+            or int(getattr(player, "_live_retry_count", 0) or 0) > 0
+        )
+        if is_live:
+            print(f"ℹ️ [直播防斷流] 直播「{track_title}」重連失敗或串流已結束 (TrackException)，視為直播結束，不予報錯")
+            if player is not None:
+                player._retrying_live_stream = False
+                player._live_retry_count = 3  # 標記重試上限，確保後續不再無效重試
+                player._is_current_stream = False
+                guild_obj = getattr(player, "guild", None)
+                if guild_obj is not None and not getattr(player, "advancing", False):
+                    await self.on_wavelink_track_end(SimpleNamespace(player=player, reason="loadfailed", track=track))
+            return
+
         channel = getattr(player, "home_channel", None) if player else None
         if channel is None:
             return  # 沒有記錄到文字頻道（例如 Player 不是透過 /join 或 /play 建立），只留後台 log
@@ -2681,7 +2707,10 @@ class Music(commands.Cog):
                 player._retrying_live_stream = True
                 await self._play_track(player, fresh_track, requester_name, requester_id)
             except Exception as exc:
-                print(f"⚠️ [直播防斷流] TrackStuck 重新銜接直播失敗：{exc}")
+                print(f"ℹ️ [直播防斷流] TrackStuck 重新銜接直播失敗（視為直播結束）：{exc}")
+                player._live_retry_count = 3
+                player._is_current_stream = False
+                await self.on_wavelink_track_end(SimpleNamespace(player=player, reason="loadfailed", track=track))
             finally:
                 player._retrying_live_stream = False
             return
@@ -2793,7 +2822,11 @@ class Music(commands.Cog):
         # 導致 Lavalink 發出 TrackEndEvent(reason="finished" 或 "loadFailed")，進而讓機器人誤以為「歌播完了」而自動結束播放。
         # 解法：只要該曲目為直播（_is_live_track）且非使用者主動跳過或停止（intent is None），
         # 自動重新解析直播串流網址並無縫續播（若已穩定播放超過 25 秒則歸零重試計數；連續瞬斷最多重試 3 次）。
-        if intent is None and replay_track is not None and self._is_live_track(replay_track) and reason in ("finished", "loadfailed", "load_failed"):
+        is_live = replay_track is not None and (
+            self._is_live_track(replay_track)
+            or getattr(player, "_is_current_stream", False)
+        )
+        if intent is None and is_live and reason in ("finished", "loadfailed", "load_failed"):
             started_mono = float(getattr(player, "_track_started_mono", 0.0) or 0.0)
             if started_mono > 0.0 and (time.monotonic() - started_mono) >= 25.0:
                 player._live_retry_count = 0
@@ -2813,13 +2846,24 @@ class Music(commands.Cog):
                     await self._play_track(player, fresh_track, requester_name, requester_id)
                     return
                 except Exception as exc:
-                    print(f"⚠️ [直播防斷流] 自動續播直播失敗：{exc}")
+                    print(f"ℹ️ [直播防斷流] 自動續播直播失敗（視為直播結束）：{exc}")
                     if self._is_session_lost_error(exc):
                         await self._handle_session_lost(player, exc)
                         return
+                    # 直播重連失敗時直接視為直播結束，跳出重試
                 finally:
                     player._retrying_live_stream = False
                     player.advancing = False
+            else:
+                print(
+                    f"ℹ️ [直播防斷流] 直播「{getattr(replay_track, 'title', '?')}」重試次數達上限或重連失敗，視為直播已結束。"
+                )
+
+            # 直播重連失敗或重試次數達上限：直接視為直播結束，重置計數，不報錯，亦不參與單曲/佇列循環
+            player._live_retry_count = 0
+            player._is_current_stream = False
+            ended_track = None
+            replay_track = None
 
         if reason in ("loadfailed", "load_failed"):
             ended_track = None
@@ -2859,12 +2903,13 @@ class Music(commands.Cog):
             if guild_obj is not None:
                 self._cancel_panel_bump(guild_obj.id, force=True)
                 # 第 7 週：「播放完畢」改寫在面板最終狀態裡，不再另外發訊息
+                end_reason = "📭 直播已結束，輸入 `/music_play` 繼續點歌吧！" if is_live else "📭 播放佇列已經全部播完囉，輸入 `/music_play` 繼續點歌吧！"
                 shown = await self._update_panel_ended(
-                    guild_obj.id, reason="📭 播放佇列已經全部播完囉，輸入 `/music_play` 繼續點歌吧！"
+                    guild_obj.id, reason=end_reason
                 )
                 if not shown and channel is not None:
                     try:
-                        await channel.send("📭 播放佇列已經全部播完囉，輸入 `/music_play` 繼續點歌吧！")
+                        await channel.send(end_reason)
                     except discord.HTTPException:
                         pass
             return
@@ -4900,6 +4945,9 @@ class Music(commands.Cog):
         player._started_track = None
         player.current_requester = None
         player.current_requester_id = None
+        player._is_current_stream = False
+        player._retrying_live_stream = False
+        player._live_retry_count = 0
         for attr in ("_current", "current"):
             try:
                 setattr(player, attr, None)
@@ -4951,6 +4999,13 @@ class Music(commands.Cog):
         player._active_track = track
         player._play_seq = getattr(player, "_play_seq", 0) + 1
         player._track_started_mono = time.monotonic()
+        is_stream = self._is_live_track(track)
+        player._is_current_stream = is_stream
+        if is_stream:
+            try:
+                setattr(track, "_is_live_stream", True)
+            except Exception:
+                pass
         if not getattr(player, "_retrying_live_stream", False):
             player._live_retry_count = 0
         # 開始播放時清除這首歌之前的拒絕鎖（例如上次播放被拒、這次重新播出）

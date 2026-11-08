@@ -748,6 +748,63 @@ async def test_session_lost_recovery():
         "直播串流因 HLS 視窗刷新觸發 finished 時自動重連續播，不會自動結束播放",
     )
 
+    # G-1b: 直播串流重連失敗（重試次數達上限或續播異常）時，直接視為直播結束，不向開發者報錯 (不呼叫 notify_owner_error)
+    player = RecoverablePlayer()
+    cog = make_cog(player)
+    cog.bot.notify_owner_error = AsyncMock()
+    channel = AsyncMock()
+    player.home_channel = channel
+    live_t_fail = SimpleNamespace(
+        title="24/7 Lofi Live Ended",
+        author="Lofi Girl",
+        uri="https://www.youtube.com/watch?v=live_ended",
+        identifier="live_ended",
+        length=0,
+        is_stream=True,
+        is_seekable=False,
+        source="youtube",
+        artwork=None,
+    )
+    cog._refresh_live_stream_track = AsyncMock(side_effect=RuntimeError("Stream ended (404)"))
+    cog._update_panel_ended = AsyncMock(return_value=True)
+    await cog._play_track(player, live_t_fail, "聽眾A", 123)
+    await cog.on_wavelink_track_end(SimpleNamespace(player=player, reason="finished", track=live_t_fail))
+    check(
+        cog.bot.notify_owner_error.call_count == 0,
+        "直播重連失敗時不呼叫 notify_owner_error（不報錯）",
+    )
+    check(
+        cog._update_panel_ended.called is True,
+        "直播重連失敗時直接視為直播結束並更新面板為結束狀態",
+    )
+    check(
+        getattr(player, "_live_retry_count", 0) == 0 and getattr(player, "_is_current_stream", False) is False,
+        "直播結束後播放器串流狀態與重試計數成功重置",
+    )
+
+    # G-1c: 直播中收到 TrackException (404/斷流) 時直接視為直播結束，不向開發者報錯，亦不在頻道發送錯誤訊息
+    player = RecoverablePlayer()
+    cog = make_cog(player)
+    cog.bot.notify_owner_error = AsyncMock()
+    channel = AsyncMock()
+    player.home_channel = channel
+    cog._update_panel_ended = AsyncMock(return_value=True)
+    await cog._play_track(player, live_t_fail, "聽眾B", 456)
+    exception_payload = SimpleNamespace(
+        player=player,
+        track=live_t_fail,
+        exception={"severity": "fault", "message": "invalid status code: 404", "cause": "404 Not Found"},
+    )
+    await cog.on_wavelink_track_exception(exception_payload)
+    check(
+        cog.bot.notify_owner_error.call_count == 0,
+        "直播收到 TrackException 時不呼叫 notify_owner_error（不報錯）",
+    )
+    check(
+        channel.send.call_count == 0,
+        "直播收到 TrackException 時不在文字頻道發送錯誤訊息",
+    )
+
     # G-2: 用戶歌單 SQLite CRUD、6 碼英數分享碼、重產失效、以及 /music_play 分享碼自動收藏測試
     from cogs.database import (
         create_user_playlist,
