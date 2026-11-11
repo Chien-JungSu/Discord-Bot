@@ -253,7 +253,7 @@ def init_db():
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_temp_messages_expire_at ON temp_messages (expire_at);")
 
-            # 18. 用戶音樂歌單表 (每位用戶上限 1 個歌單，最多 100 首歌，附帶獨一無二 6 碼英數混合分享碼)
+            # 18. 用戶音樂歌單表 (每位用戶上限 1 個歌單，最多 500 首歌，附帶獨一無二 6 碼英數混合分享碼)
             cursor.execute("""
             CREATE TABLE IF NOT EXISTS user_playlists (
                 user_id TEXT PRIMARY KEY,
@@ -3005,10 +3005,29 @@ def load_temp_messages() -> list[dict[str, Any]]:
 import secrets as _secrets
 import string as _string
 
-PLAYLIST_MAX_TRACKS = 100
+PLAYLIST_MAX_TRACKS = 500
 _SHARE_CODE_LETTERS = _string.ascii_uppercase
 _SHARE_CODE_DIGITS = _string.digits
 _SHARE_CODE_ALPHANUM = _SHARE_CODE_LETTERS + _SHARE_CODE_DIGITS
+
+
+def is_live_track_data(t: Any) -> bool:
+    """判斷曲目資料是否為直播串流（直播串流不可存入個人歌單）。"""
+    if not isinstance(t, dict):
+        return False
+    if bool(t.get("_is_live_stream", False)) or bool(t.get("is_stream", False)):
+        return True
+    if not bool(t.get("is_seekable", True)):
+        return True
+    length = t.get("length", None)
+    if length is not None:
+        try:
+            val = int(length)
+            if val <= 0 or val >= 86_400_000:
+                return True
+        except (ValueError, TypeError):
+            pass
+    return False
 
 
 def _ensure_playlist_tables(cursor: sqlite3.Cursor) -> None:
@@ -3336,7 +3355,7 @@ def update_user_playlist(
     is_public: Optional[bool] = None,
     tracks: Optional[list[dict[str, Any]]] = None,
 ) -> Optional[dict[str, Any]]:
-    """更新用戶歌單的名稱、公開狀態或曲目清單（曲目上限 100 首）。"""
+    """更新用戶歌單的名稱、公開狀態或曲目清單（曲目上限 500 首，自動過濾直播影片）。"""
     init_db()
     uid = str(user_id).strip()
     now = time.time()
@@ -3353,7 +3372,11 @@ def update_user_playlist(
             new_owner = (owner_name.strip()[:80] if owner_name is not None and owner_name.strip() else current["owner_name"])
             new_public = (1 if is_public else 0) if is_public is not None else (1 if current["is_public"] else 0)
             if tracks is not None:
-                norm_tracks = [_normalize_playlist_track(t) for t in tracks if isinstance(t, dict)][:PLAYLIST_MAX_TRACKS]
+                norm_tracks = [
+                    _normalize_playlist_track(t)
+                    for t in tracks
+                    if isinstance(t, dict) and not is_live_track_data(t)
+                ][:PLAYLIST_MAX_TRACKS]
             else:
                 norm_tracks = current["tracks"]
             tracks_json = json.dumps(norm_tracks, ensure_ascii=False)
@@ -3377,8 +3400,8 @@ def add_tracks_to_user_playlist(
     new_tracks: list[dict[str, Any]],
     owner_name: Optional[str] = None,
 ) -> tuple[Optional[dict[str, Any]], int, int, int]:
-    """將一或多首歌曲加入用戶歌單（自動檢查並忽略重複歌曲，遵守 100 首上限）。
-    回傳 (更新後的歌單字典, 實際新增首數, 忽略的重複首數, 因超過 100 首上限而略過的首數)。
+    """將一或多首歌曲加入用戶歌單（自動檢查並忽略重複歌曲與直播影片，遵守 500 首上限）。
+    回傳 (更新後的歌單字典, 實際新增首數, 忽略的重複首數, 因超過 500 首上限而略過的首數)。
     """
     init_db()
     uid = str(user_id).strip()
@@ -3393,7 +3416,12 @@ def add_tracks_to_user_playlist(
             if current is None:
                 return None, 0, 0, len(new_tracks)
             existing = list(current["tracks"])
-            valid_incoming = [_normalize_playlist_track(t) for t in new_tracks if isinstance(t, dict)]
+            # 自動過濾直播串流影片
+            valid_incoming = [
+                _normalize_playlist_track(t)
+                for t in new_tracks
+                if isinstance(t, dict) and not is_live_track_data(t)
+            ]
 
             to_add: list[dict[str, Any]] = []
             duplicate_count = 0

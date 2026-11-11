@@ -27,6 +27,8 @@ from dotenv import load_dotenv
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(BASE_DIR, '.env'))
 
+from services.spotify import looks_like_spotify
+
 from cogs.database import (
     AI_PROVIDER_MODELS,
     authorize_guild_ai,
@@ -611,7 +613,7 @@ def get_guild_data(guild_id: str):
         {"name": "/music_stop", "description": "停止播放並清空佇列", "category": "Music", "permission": "所有成員"},
         {"name": "/music_queue", "description": "顯示播放佇列", "category": "Music", "permission": "所有成員"},
         {"name": "/music_playlist", "description": "查看個人歌單（分頁顯示，每頁 10 首）", "category": "Music", "permission": "所有成員"},
-        {"name": "/music_playlist_create", "description": "建立個人歌單並命名（上限 1 個，100 首）", "category": "Music", "permission": "所有成員"},
+        {"name": "/music_playlist_create", "description": "建立個人歌單並命名（上限 1 個，500 首）", "category": "Music", "permission": "所有成員"},
         {"name": "/music_playlist_add", "description": "搜尋歌曲並新增至個人歌單", "category": "Music", "permission": "所有成員"},
         {"name": "/music_playlist_edit", "description": "編輯個人歌單（刪除、重新排序、公開設定）", "category": "Music", "permission": "所有成員"},
         {"name": "/music_playlist_remove", "description": "刪除個人歌單（附確認提示）", "category": "Music", "permission": "所有成員"},
@@ -2035,6 +2037,13 @@ def user_playlist_add_track_api():
     if not query:
         return jsonify({'status': 'error', 'message': '請輸入歌曲名稱、關鍵字或網址'}), 400
 
+    # 依指示：在具備 Premium 應用程式前，輸入 Spotify 連結一律提示不支援
+    if looks_like_spotify(query):
+        return jsonify({
+            'status': 'error',
+            'message': '目前不支援 Spotify 音源，請改用 YouTube 或 SoundCloud 連結／關鍵字。',
+        }), 400
+
     track_dict = None
     bot = get_bot()
     if bot and getattr(bot, 'loop', None) and bot.loop.is_running():
@@ -2047,12 +2056,20 @@ def user_playlist_add_track_api():
                 first = tracks[0] if not hasattr(tracks, 'tracks') else (tracks.tracks[0] if tracks.tracks else None)
                 if first is None:
                     return None
+                if music_cog._is_live_track(first):
+                    return 'IS_LIVE'
                 return music_cog._playable_to_playlist_dict(first, fallback_query=query)
 
             try:
                 track_dict = run_coroutine_threadsafe(_resolve_via_lavalink(), timeout=12)
             except Exception as exc:
                 print(f"⚠️ 網頁面板透過 Lavalink 解析歌曲失敗 ({query}): {exc}")
+
+    if track_dict == 'IS_LIVE':
+        return jsonify({
+            'status': 'error',
+            'message': '直播串流（Live Stream）無法加入個人歌單，請選擇一般的音訊或影片歌曲。',
+        }), 400
 
     # 若 Lavalink 暫時未連線或找不到，仍允許以關鍵字/網址預存，待實際於語音頻道播放時由 _play_track 即時解析
     if track_dict is None:

@@ -2275,8 +2275,24 @@ class Music(commands.Cog):
 
     @staticmethod
     def _is_live_track(track: Any) -> bool:
-        """判斷曲目是否為直播串流（is_stream=True、不可跳轉、或時長 >= 24 小時 86,400,000 ms）。"""
+        """判斷曲目是否為直播串流（is_stream=True、不可跳轉、或時長 >= 24 小時 86,400,000 ms，支援曲目物件與字典結構）。"""
         if track is None:
+            return False
+        if isinstance(track, dict):
+            if bool(track.get("_is_live_stream", False)):
+                return True
+            if bool(track.get("is_stream", False)):
+                return True
+            if not bool(track.get("is_seekable", True)):
+                return True
+            length = track.get("length", None)
+            if length is not None:
+                try:
+                    val = int(length)
+                    if val <= 0 or val >= 86_400_000:
+                        return True
+                except (ValueError, TypeError):
+                    pass
             return False
         if bool(getattr(track, "_is_live_stream", False)):
             return True
@@ -4700,8 +4716,15 @@ class Music(commands.Cog):
         if shuffle:
             player.shuffle = True
 
-        # 第 7 週新增：Spotify 連結改走背景匯入流程（立刻返回，不阻塞 Gateway 與其他指令）
-        if looks_like_spotify(query) or parse_youtube_playlist_url(query):
+        # 依指示：在具備 Premium 應用程式前，輸入 Spotify 連結一律提示不支援（底層 SpotifyClient 服務程式完整保留）
+        if looks_like_spotify(query):
+            await interaction.followup.send(
+                "❌ 目前不支援 Spotify 音源播放，請改用 YouTube 或 SoundCloud 連結／關鍵字點歌。",
+                ephemeral=True,
+            )
+            return
+
+        if parse_youtube_playlist_url(query):
             await self._start_spotify_import(interaction, player, query, shuffle=shuffle)
             return
 
@@ -4849,7 +4872,7 @@ class Music(commands.Cog):
             return
 
         if looks_like_spotify(query):
-            await self._ephemeral_error(interaction, "ℹ️ 插播暫不支援 Spotify 連結，請改用 `/music_play` 匯入。")
+            await self._ephemeral_error(interaction, "❌ 目前不支援 Spotify 音源播放，請改用 YouTube 或 SoundCloud 連結／關鍵字點歌。")
             return
 
         track = await self._search_one_track(interaction, query)
@@ -5689,7 +5712,7 @@ class Music(commands.Cog):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # ==========================================================
-    # 用戶歌單管理指令（每個用戶上限 1 個歌單、最多 100 首歌）
+    # 用戶歌單管理指令（每個用戶上限 1 個歌單、最多 500 首歌）
     # ==========================================================
     @app_commands.command(name="music_playlist_create", description="建立個人歌單")
     @app_commands.describe(
@@ -5741,7 +5764,7 @@ class Music(commands.Cog):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="music_playlist_add", description="新增歌曲到個人歌單")
-    @app_commands.describe(query="歌曲名稱 / 關鍵字，或是 YouTube、SoundCloud、Spotify 網址")
+    @app_commands.describe(query="歌曲名稱 / 關鍵字，或是 YouTube、SoundCloud 網址")
     async def music_playlist_add(self, interaction: discord.Interaction, query: str):
         pl = get_user_playlist(interaction.user.id)
         if pl is None:
@@ -5766,59 +5789,24 @@ class Music(commands.Cog):
 
         await interaction.response.defer(ephemeral=True, thinking=True)
 
-        # 支援 Spotify 連結（單曲／專輯／歌單）或一般關鍵字／YouTube／SoundCloud
+        # 依指示：在具備 Premium 應用程式前，輸入 Spotify 連結一律提示不支援
         if looks_like_spotify(query):
-            parsed = parse_spotify_url(query)
-            if parsed is None:
-                await self._ephemeral_error(interaction, "❌ 無法識別這個 Spotify 連結。")
-                return
-            kind, spotify_id = parsed
-            if not self.spotify.configured:
-                await self._ephemeral_error(interaction, "❌ 尚未設定 Spotify API 金鑰，無法解析 Spotify 連結。")
-                return
-            remaining_slots = PLAYLIST_MAX_TRACKS - len(current_tracks)
-            try:
-                sp_res = await self.spotify.fetch_tracks(kind, spotify_id, remaining_slots)
-            except SpotifyError as e:
-                await self._ephemeral_error(interaction, f"❌ {e.message}")
-                return
-            if not sp_res.tracks:
-                await self._ephemeral_error(interaction, "😕 這個 Spotify 連結中沒有可匯入的曲目。")
-                return
-            sem = asyncio.Semaphore(IMPORT_CONCURRENCY)
-            resolved_list = await asyncio.gather(*(self._search_spotify_track(sem, st) for st in sp_res.tracks[:remaining_slots]))
-            new_dicts = [
-                self._playable_to_playlist_dict(t)
-                for t in resolved_list
-                if t is not None
-            ]
-            if not new_dicts:
-                await self._ephemeral_error(interaction, "😕 找不到對應的音源，無法加入歌單。")
-                return
-            updated_pl, added_count, dup_count, overflow_count = add_tracks_to_user_playlist(
-                interaction.user.id, new_dicts, owner_name=interaction.user.display_name
-            )
-            total_now = len((updated_pl or {}).get("tracks") or [])
-            if added_count == 0 and dup_count > 0:
-                await interaction.followup.send(
-                    f"⚠️ 所選的 **{dup_count}** 首 Spotify 歌曲皆已存在於歌單「**{pl['name']}**」中，已全部自動忽略！",
-                    ephemeral=True,
-                )
-                return
-            notes = []
-            if dup_count > 0:
-                notes.append(f"已自動忽略 **{dup_count}** 首重複歌曲")
-            if overflow_count > 0:
-                notes.append(f"超過 {PLAYLIST_MAX_TRACKS} 首上限略過 **{overflow_count}** 首")
-            tail_msg = f"（{'，'.join(notes)}）" if notes else ""
-            await interaction.followup.send(
-                f"✅ 已從 Spotify 新增 **{added_count}** 首歌至歌單「**{pl['name']}**」{tail_msg}（目前共 **{total_now} / {PLAYLIST_MAX_TRACKS}** 首）！",
-                ephemeral=True,
+            await self._ephemeral_error(
+                interaction,
+                "❌ 目前不支援 Spotify 音源，請改用 YouTube 或 SoundCloud 連結／關鍵字加入歌單。",
             )
             return
 
         track = await self._search_one_track(interaction, query)
         if track is None:
+            return
+
+        # 自動攔截直播影片：直播串流不可存入歌單
+        if self._is_live_track(track):
+            await self._ephemeral_error(
+                interaction,
+                "❌ 直播串流（Live Stream）無法加入個人歌單！請選擇一般的音訊或影片歌曲。",
+            )
             return
 
         track_dict = self._playable_to_playlist_dict(track, fallback_query=query)
@@ -5851,9 +5839,9 @@ class Music(commands.Cog):
 
     @app_commands.command(name="music_playlist_edit", description="編輯個人歌單")
     @app_commands.describe(
-        delete_index="要刪除的歌曲編號（1 ~ 100）",
-        move_from="重新排序：要移動的歌曲原編號（1 ~ 100）",
-        move_to="重新排序：要移往的目標位置編號（1 ~ 100）",
+        delete_index="要刪除的歌曲編號（1 ~ 500）",
+        move_from="重新排序：要移動的歌曲原編號（1 ~ 500）",
+        move_to="重新排序：要移往的目標位置編號（1 ~ 500）",
         is_public="設定歌單為公開（True）或私人（False）",
         name="修改歌單名稱（最多 50 字）",
         regenerate_share_code="是否重新產生 6 碼分享碼（設為 True 後舊分享碼立即失效）",
@@ -5993,6 +5981,16 @@ class Music(commands.Cog):
             await interaction.response.send_message("ℹ️ 目前沒有正在播放的歌曲，待播佇列也是空的。", ephemeral=True)
             return
 
+        # 自動攔截直播影片：過濾佇列中的直播串流
+        non_live_tracks = [t for t in queue_tracks if not self._is_live_track(t)]
+        live_skipped = len(queue_tracks) - len(non_live_tracks)
+        if not non_live_tracks:
+            await interaction.response.send_message(
+                "❌ 目前播放佇列中皆為直播串流（Live Stream），無法加入個人歌單！",
+                ephemeral=True,
+            )
+            return
+
         current_saved = len(pl.get("tracks") or [])
         if current_saved >= PLAYLIST_MAX_TRACKS:
             await interaction.response.send_message(
@@ -6001,18 +5999,21 @@ class Music(commands.Cog):
             )
             return
 
-        track_dicts = [self._playable_to_playlist_dict(t) for t in queue_tracks]
+        track_dicts = [self._playable_to_playlist_dict(t) for t in non_live_tracks]
         updated_pl, added_count, dup_count, skipped_count = add_tracks_to_user_playlist(
             interaction.user.id, track_dicts, owner_name=interaction.user.display_name
         )
         total_now = len((updated_pl or {}).get("tracks") or [])
         if added_count == 0 and dup_count > 0:
+            extra_live = f"（已略過 {live_skipped} 首直播串流）" if live_skipped > 0 else ""
             await interaction.response.send_message(
-                f"ℹ️ 目前播放佇列中的歌曲已全部存在於歌單「**{pl['name']}**」中，已自動忽略重複歌曲，未新增任何曲目。",
+                f"ℹ️ 目前播放佇列中的歌曲已全部存在於歌單「**{pl['name']}**」中，已自動忽略重複歌曲，未新增任何曲目{extra_live}。",
                 ephemeral=True,
             )
             return
         notes = []
+        if live_skipped > 0:
+            notes.append(f"已自動略過 **{live_skipped}** 首直播串流")
         if dup_count > 0:
             notes.append(f"已自動忽略 **{dup_count}** 首重複歌曲")
         if skipped_count > 0:

@@ -3205,7 +3205,7 @@
   // =========================================================================
   let personalPlaylistData = null;
   let personalSavedPlaylists = [];
-  let personalMaxTracks = 100;
+  let personalMaxTracks = 500;
   let personalDragFromIdx = null;
 
   function formatDurationMs(ms) {
@@ -3239,7 +3239,7 @@
       if (data.status === 'ok') {
         personalPlaylistData = data.playlist || null;
         personalSavedPlaylists = Array.isArray(data.saved_playlists) ? data.saved_playlists : [];
-        personalMaxTracks = Number(data.max_tracks || 100);
+        personalMaxTracks = Number(data.max_tracks || 500);
         renderPersonalPlaylistUI();
       }
     } catch (err) {
