@@ -24,7 +24,7 @@
 - `/reaction_roles_edit`：以選單選擇要編輯的訊息，支援視覺化編輯配對（身分組原生選單＋到訊息上按表符直接捕捉，免複製 ID）、修改訊息文字或切換「僅限有效表符」；需「管理伺服器」權限
 - `/music_join`：加入使用者目前所在的語音頻道
 - `/music_leave`：離開目前所在的語音頻道
-- `/music_play [query] [playlist] [shuffle]`：搜尋並播放音樂、點播個人歌單、伺服器公開歌單或輸入他人 6 碼跨服分享碼點播；若目前已在播放，會自動排入佇列（支援 YouTube／SoundCloud 關鍵字、網址或 Spotify 外部歌單；可選開啟 `shuffle` 隨機播放模式）
+- `/music_play [query] [playlist] [shuffle]`：搜尋並播放音樂、點播個人歌單、伺服器公開歌單或輸入他人 6 碼跨服分享碼點播；若目前已在播放，會自動排入佇列（支援 YouTube／SoundCloud 關鍵字、網址、Spotify 外部歌單或 YouTube 播放清單網址（`/playlist?list=`）批量匯入；可選開啟 `shuffle`，僅在開啟當下將歌單整份隨機排列，之後新增歌曲一律排在佇列尾端）
 - `/music_play_next <query>`：插播，搜尋一首歌曲並插入佇列最前面，下一首就會播放它
 - `/music_queue`：顯示目前伺服器的播放佇列（正在播放中的歌曲＋接下來排隊的清單；支援觸發控制面板自動置底）
 - `/music_queue_clear`：清空目前的播放佇列（不影響正在播放的歌曲）

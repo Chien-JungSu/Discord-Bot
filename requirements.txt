@@ -9,3 +9,4 @@ gTTS
 aiosqlite
 openai>=1.50.0
 Pillow
+

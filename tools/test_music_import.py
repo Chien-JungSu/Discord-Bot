@@ -1045,7 +1045,26 @@ async def test_session_lost_recovery():
     check(get_user_playlist(uid_owner) is None, "刪除歌單成功清除 SQLite 紀錄")
 
 
+def test_youtube_playlist_helpers():
+    pu = music_mod.parse_youtube_playlist_url
+    check(pu("https://www.youtube.com/playlist?list=PLabc123") == "https://www.youtube.com/playlist?list=PLabc123", "YouTube /playlist 網址可辨識")
+    check(pu("https://www.youtube.com/watch?v=abc&list=RDabc") is None, "list=RD 合輯不視為播放清單")
+    check(pu("https://www.youtube.com/watch?v=abc&list=PLabc") is None, "watch 網址帶 list 只播單曲")
+    check(pu("https://www.youtube.com/playlist?list=RDabc") is None, "/playlist?list=RD 合輯不視為播放清單")
+    check(pu("周杰倫 晴天") is None, "一般關鍵字不是播放清單")
+    mk = lambda title, ident="x": SimpleNamespace(title=title, identifier=ident)
+    res = music_mod.filter_youtube_tracks(
+        [mk("好歌", "a1"), mk("[Deleted video]", "b2"), mk("[Private video]", "c3"), mk("", "d4"), mk("無ID", ""), mk("另一首", "e5")],
+        10,
+    )
+    check([t_.title for t_ in res.tracks] == ["好歌", "另一首"] and res.skipped == 4, "過濾已刪除／私人／無效曲目")
+    res2 = music_mod.filter_youtube_tracks([mk(f"t{i}", str(i)) for i in range(5)], 3)
+    check(len(res2.tracks) == 3 and res2.truncated, "超過上限時截斷")
+    check(res.tracks[0].playable.identifier == "a1", "YouTube 曲目攜帶 Lavalink Playable，不需再搜尋")
+
+
 def main():
+    test_youtube_playlist_helpers()
     print("=== 開始執行第 7 週匯入與面板單元測試 ===")
     asyncio.run(main_async())
     total = len(PASS) + len(FAIL)

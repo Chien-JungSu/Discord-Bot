@@ -24,7 +24,7 @@ Supported features:
 - `/reaction_roles_edit`: select a message from a dropdown menu to edit it interactively with the new visual pair editor (native Discord role selector + click reactions directly on the message to capture, no copying IDs required), modify message text, or toggle strict mode. Requires **Manage Server** permission
 - `/music_join`: join the voice channel where the user is currently connected
 - `/music_leave`: leave the current voice channel
-- `/music_play [query] [playlist] [shuffle]`: search and play music, personal playlists, server public playlists, or a 6-character cross-server share code; automatically queues the track if something is already playing (accepts YouTube/SoundCloud keywords or URLs, or Spotify playlists; optional `shuffle` mode to randomize queue order)
+- `/music_play [query] [playlist] [shuffle]`: search and play music, personal playlists, server public playlists, or a 6-character cross-server share code; automatically queues the track if something is already playing (accepts YouTube/SoundCloud keywords or URLs, Spotify playlists, or YouTube playlist URLs (`/playlist?list=`) for bulk import; optional `shuffle` randomizes the whole playlist once when enabled, later additions are appended to the end of the queue)
 - `/music_play_next <query>`: play next (jump the queue), search a track and insert it at the front of the queue
 - `/music_queue`: show the current server's playback queue (now playing + upcoming tracks; triggers sticky panel bump)
 - `/music_queue_clear`: clear the current playback queue (does not affect the currently playing track)

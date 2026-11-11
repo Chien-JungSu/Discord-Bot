@@ -10,6 +10,7 @@ import tempfile
 import time
 import traceback
 from collections import deque
+from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
@@ -17,6 +18,8 @@ import aiohttp
 import discord
 from discord import app_commands, ui
 from discord.ext import commands, tasks
+
+from cogs.sanitize import redact_secrets
 
 from services.spotify import (
     SpotifyClient,
@@ -79,6 +82,79 @@ IMPORT_SEARCH_TIMEOUT = float(os.getenv('IMPORT_SEARCH_TIMEOUT', '15'))
 IMPORT_BATCH_SIZE = max(IMPORT_CONCURRENCY, int(os.getenv('IMPORT_BATCH_SIZE', '9')))
 # 匯入進度訊息的最短更新間隔：沿用第 6 週節流原則（至少 5 秒），避免觸發 Discord 429。
 IMPORT_PROGRESS_INTERVAL = max(5.0, PROGRESS_UPDATE_INTERVAL)
+
+
+# ---------- YouTube 播放清單批量匯入 ----------
+# 已刪除／私人影片在 extract_flat 清單中的標題（皆為小寫比對）。
+YT_INVALID_TITLES = frozenset({"[deleted video]", "[private video]", "deleted video", "private video"})
+_YT_HOSTS = frozenset({"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com"})
+
+
+def parse_youtube_playlist_url(text: str | None) -> str | None:
+    """判斷是否為「明確的 YouTube 播放清單網址」（/playlist?list=...），是的話回傳正規化後的網址。
+
+    - 帶 list=RD...（YouTube 自動生成的無限合輯 Mix）一律不視為播放清單，維持單曲播放。
+    - watch?v=...&list=... 這類「正在播放某首並附帶清單」的網址也只播單曲。
+    """
+    if not text:
+        return None
+    from urllib.parse import parse_qs, urlparse
+
+    raw = text.strip()
+    if " " in raw:
+        return None
+    try:
+        parsed = urlparse(raw if "://" in raw else f"https://{raw}")
+    except ValueError:
+        return None
+    if (parsed.hostname or "").lower() not in _YT_HOSTS:
+        return None
+    if parsed.path.rstrip("/") != "/playlist":
+        return None
+    list_ids = parse_qs(parsed.query).get("list") or []
+    if not list_ids:
+        return None
+    list_id = list_ids[0].strip()
+    if not list_id or list_id.upper().startswith("RD"):
+        return None
+    return f"https://www.youtube.com/playlist?list={list_id}"
+
+
+@dataclass(slots=True)
+class YouTubeTrack:
+    """YouTube 清單中的單一曲目：直接攜帶 Lavalink 已解析好的 Playable，不需再逐首搜尋。"""
+
+    title: str
+    playable: Any
+
+    def search_query(self) -> str:
+        return self.title
+
+
+@dataclass(slots=True)
+class YouTubeFetchResult:
+    """YouTube 播放清單解析結果，欄位與 SpotifyFetchResult 對齊以共用匯入流程。"""
+
+    tracks: list[YouTubeTrack]
+    truncated: bool
+    skipped: int
+
+
+def filter_youtube_tracks(playables: list[Any] | None, limit: int) -> YouTubeFetchResult:
+    """過濾 Lavalink 回傳的曲目：剔除已刪除／私人／無標題或無法辨識的項目，並套用數量上限。"""
+    tracks: list[YouTubeTrack] = []
+    skipped = 0
+    truncated = False
+    for pl in playables or []:
+        title = str(getattr(pl, "title", "") or "").strip()
+        if not title or title.lower() in YT_INVALID_TITLES or not getattr(pl, "identifier", None):
+            skipped += 1
+            continue
+        if len(tracks) >= limit:
+            truncated = True
+            break
+        tracks.append(YouTubeTrack(title=title, playable=pl))
+    return YouTubeFetchResult(tracks=tracks, truncated=truncated, skipped=skipped)
 
 
 def format_duration(length_ms: int | None) -> str:
@@ -3349,6 +3425,14 @@ class Music(commands.Cog):
             raise last_error
         return None
 
+    async def _fetch_youtube_playlist(self, url: str, limit: int) -> YouTubeFetchResult:
+        """透過 Lavalink 解析 YouTube 播放清單（解析在節點端進行，不佔用 bot 事件迴圈）。"""
+        found = await asyncio.wait_for(self._fetch_tracks_with_fallback(url), timeout=IMPORT_SEARCH_TIMEOUT * 2)
+        if not found:
+            return YouTubeFetchResult(tracks=[], truncated=False, skipped=0)
+        playables = found.tracks if isinstance(found, wavelink.Playlist) else list(found)
+        return filter_youtube_tracks(list(playables), limit)
+
     async def _search_one_track(
         self, interaction: discord.Interaction, query: str
     ) -> "wavelink_module.Playable | None":
@@ -4042,6 +4126,9 @@ class Music(commands.Cog):
         Semaphore 限制同時搜尋數量（保護 Lavalink 節點與 512MB 記憶體）；
         單首逾時／失敗只回傳 None，不影響整批。
         """
+        preset = getattr(st, "playable", None)
+        if preset is not None:
+            return preset  # YouTube 清單：Lavalink 已解析完成，無須再搜尋
         async with sem:
             try:
                 found = await asyncio.wait_for(
@@ -4058,9 +4145,12 @@ class Music(commands.Cog):
             return found.tracks[0] if found.tracks else None
         return found[0]
 
-    async def _start_spotify_import(self, interaction: discord.Interaction, player, query: str) -> None:
-        """/music_play 的 Spotify 入口：驗證後建立背景任務並立刻返回（呼叫端已 defer）。"""
-        parsed = parse_spotify_url(query)
+    async def _start_spotify_import(
+        self, interaction: discord.Interaction, player, query: str, shuffle: bool = False
+    ) -> None:
+        """/music_play 的 Spotify / YouTube 播放清單入口：驗證後建立背景任務並立刻返回（呼叫端已 defer）。"""
+        yt_url = parse_youtube_playlist_url(query)
+        parsed = ("youtube", "playlist") if yt_url else parse_spotify_url(query)
         if parsed is None:
             await self._ephemeral_error(
                 interaction,
@@ -4068,7 +4158,7 @@ class Music(commands.Cog):
                 "`https://open.spotify.com/playlist/...` 或 `spotify:album:...`。",
             )
             return
-        if not self.spotify.enabled:
+        if not yt_url and not self.spotify.enabled:
             await self._ephemeral_error(
                 interaction, "ℹ️ Spotify 匯入功能目前未啟用（管理員尚未設定 Spotify 金鑰），請改用歌名或 YouTube 連結點歌。"
             )
@@ -4078,12 +4168,14 @@ class Music(commands.Cog):
         running = self._import_tasks.get(guild_id)
         if running is not None and not running.done():
             await self._ephemeral_error(
-                interaction, "⌛ 這個伺服器已經有一份 Spotify 歌單正在匯入，請等它完成（或先 `/music_stop`）再匯入新的。"
+                interaction, "⌛ 這個伺服器已經有一份歌單正在匯入，請等它完成（或先 `/music_stop`）再匯入新的。"
             )
             return
 
         kind, spotify_id = parsed
-        task = asyncio.create_task(self._run_spotify_import(interaction, player, kind, spotify_id))
+        task = asyncio.create_task(
+            self._run_spotify_import(interaction, player, kind, spotify_id, yt_url=yt_url, shuffle=shuffle)
+        )
         self._import_tasks[guild_id] = task
 
         def _on_done(t: asyncio.Task, gid: int = guild_id) -> None:
@@ -4093,8 +4185,20 @@ class Music(commands.Cog):
 
         task.add_done_callback(_on_done)
 
-    async def _run_spotify_import(self, interaction: discord.Interaction, player, kind: str, spotify_id: str) -> None:
-        """背景匯入主流程（每個伺服器同時最多一個），自動檢查並過濾重複歌曲。"""
+    async def _run_spotify_import(
+        self,
+        interaction: discord.Interaction,
+        player,
+        kind: str,
+        spotify_id: str,
+        yt_url: str | None = None,
+        shuffle: bool = False,
+    ) -> None:
+        """背景匯入主流程（每個伺服器同時最多一個），自動檢查並過濾重複歌曲。
+
+        yt_url 有值時改為匯入 YouTube 播放清單；shuffle 為 True 時只在匯入當下將整份清單（含第一首）隨機排列。
+        """
+        label = "YouTube" if yt_url else "Spotify"
         guild_id = interaction.guild.id
         requester_name = interaction.user.display_name
         requester_id = interaction.user.id
@@ -4118,14 +4222,27 @@ class Music(commands.Cog):
         try:
             # ---- 1. 取得曲目清單（只保留曲名／歌手／時長）----
             try:
-                result = await self.spotify.fetch_tracks(kind, spotify_id, IMPORT_MAX_TRACKS)
+                if yt_url:
+                    result = await self._fetch_youtube_playlist(yt_url, IMPORT_MAX_TRACKS)
+                else:
+                    result = await self.spotify.fetch_tracks(kind, spotify_id, IMPORT_MAX_TRACKS)
             except SpotifyError as e:
                 await self._ephemeral_error(interaction, f"❌ {e.message}")
                 return
-            tracks = result.tracks
+            except Exception as e:
+                if not yt_url:
+                    raise
+                print(f">>> YouTube 播放清單解析失敗：{redact_secrets(str(e))}")
+                await self._ephemeral_error(
+                    interaction, "❌ 無法讀取這份 YouTube 播放清單，可能是私人清單、網址無效或來源暫時無法連線。"
+                )
+                return
+            tracks = list(result.tracks)
+            if shuffle:
+                random.shuffle(tracks)  # 只在匯入當下整份隨機排列（含第一首）
             total = len(tracks)
             if total == 0:
-                await self._ephemeral_error(interaction, "😕 這份 Spotify 內容裡沒有可以匯入的曲目。")
+                await self._ephemeral_error(interaction, f"😕 這份 {label} 內容裡沒有可以匯入的曲目。")
                 return
 
             sem = asyncio.Semaphore(IMPORT_CONCURRENCY)
@@ -4153,7 +4270,7 @@ class Music(commands.Cog):
                 await clear_thinking()
 
             if ok == 0 and fail >= total:
-                await self._ephemeral_error(interaction, "😕 這份 Spotify 內容的曲目都找不到對應的音源，請稍後再試。")
+                await self._ephemeral_error(interaction, f"😕 這份 {label} 內容的曲目都找不到對應的音源，請稍後再試。")
                 return
 
             # ---- 3. 其餘曲目：分批解析後依序加入佇列 ----
@@ -4181,13 +4298,10 @@ class Music(commands.Cog):
                     last_progress = now
                     self._set_panel_notice(
                         guild_id,
-                        f"📥 **Spotify 匯入中**：已處理 {done}/{total}（成功 {ok}／失敗 {fail}）{trunc_hint}",
+                        f"📥 **{label} 匯入中**：已處理 {done}/{total}（成功 {ok}／失敗 {fail}）{trunc_hint}",
                         duration=None,
                     )
                     await self._sync_panel(guild_id, player)
-
-            if getattr(player, "shuffle", False) and len(player.song_queue) > 1:
-                self._shuffle_queue(player)
 
             # ---- 4. 結果回報（寫在面板底部，一段時間後自動消失）----
             if total == 1:
@@ -4208,7 +4322,7 @@ class Music(commands.Cog):
                 tail = f"（{'；'.join(extras)}）" if extras else ""
                 self._panel_notices.pop(guild_id, None)
                 await self._notify_panel(
-                    guild_id, f"✅ **Spotify 匯入完成**：成功 {ok} 首／失敗 {fail} 首{tail}", duration=15.0
+                    guild_id, f"✅ **{label} 匯入完成**：成功 {ok} 首／失敗 {fail} 首{tail}", duration=15.0
                 )
 
             # 匯入期間曲目可能已全部播完（面板在 track_end 時刻意沒有收尾），此時補上結束狀態
@@ -4217,9 +4331,9 @@ class Music(commands.Cog):
         except asyncio.CancelledError:
             raise  # 被 /stop、/leave 等取消：清理已在 _cancel_import 完成
         except Exception as e:
-            print(f">>> Spotify 匯入發生未預期錯誤：{e}")
-            await self.bot.notify_owner_error(e, interaction, extra_info=f"Spotify 匯入失敗 kind={kind}")
-            await self._ephemeral_error(interaction, "❌ 匯入 Spotify 內容時發生錯誤，已回報開發者。")
+            print(f">>> {label} 匯入發生未預期錯誤：{redact_secrets(str(e))}")
+            await self.bot.notify_owner_error(e, interaction, extra_info=f"{label} 匯入失敗 kind={kind}")
+            await self._ephemeral_error(interaction, f"❌ 匯入 {label} 內容時發生錯誤，已回報開發者。")
         finally:
             # 保險：若任務是自然結束／出錯，清掉殘留的「匯入中」提示
             notice = self._panel_notices.get(guild_id)
@@ -4441,7 +4555,12 @@ class Music(commands.Cog):
         return None
 
     async def _play_user_playlist(
-        self, interaction: discord.Interaction, player, playlist_data: dict, used_share_code: bool = False
+        self,
+        interaction: discord.Interaction,
+        player,
+        playlist_data: dict,
+        used_share_code: bool = False,
+        shuffle: bool = False,
     ) -> None:
         """將整個用戶歌單載入播放佇列，自動過濾與現有播放中/佇列重複之歌曲，若目前閒置則立即開始播放第一首。"""
         tracks_raw = playlist_data.get("tracks") or []
@@ -4457,6 +4576,8 @@ class Music(commands.Cog):
             return
 
         playables = [self._playlist_dict_to_playable(item) for item in tracks_raw[:PLAYLIST_MAX_TRACKS]]
+        if shuffle:
+            random.shuffle(playables)  # 只在指定 shuffle 的當下整份歌單隨機排列（含第一首）
         requester_name = interaction.user.display_name
         requester_id = interaction.user.id
 
@@ -4488,12 +4609,9 @@ class Music(commands.Cog):
             await self._ephemeral_error(interaction, f"❌ 歌單「**{pl_name}**」內的曲目目前皆無法播放，請稍後再試。")
             return
 
-        if getattr(player, "shuffle", False) and len(player.song_queue) > 1:
-            self._shuffle_queue(player)
-
         owner_tag = "你的歌單" if is_own else f"{owner_name} 的歌單"
         saved_hint = "（已透過分享碼自動收藏至你的歌單選單）" if (used_share_code and not is_own) else ""
-        shuffle_hint = "（🔀 已開啟隨機佇列）" if getattr(player, "shuffle", False) else ""
+        shuffle_hint = "（🔀 已隨機排列）" if shuffle else ""
         notice = (
             f"📀 **已載入{owner_tag}「{pl_name}」**：共 {len(playables)} 首曲目已排入播放佇列{shuffle_hint}"
             f" 由 {requester_name} 點播{saved_hint}"
@@ -4575,7 +4693,9 @@ class Music(commands.Cog):
                 return
             if shuffle:
                 player.shuffle = True
-            await self._play_user_playlist(interaction, player, pl_data, used_share_code=used_share_code)
+            await self._play_user_playlist(
+                interaction, player, pl_data, used_share_code=used_share_code, shuffle=shuffle
+            )
             return
 
         player = await self._ensure_player(interaction)
@@ -4586,8 +4706,8 @@ class Music(commands.Cog):
             player.shuffle = True
 
         # 第 7 週新增：Spotify 連結改走背景匯入流程（立刻返回，不阻塞 Gateway 與其他指令）
-        if looks_like_spotify(query):
-            await self._start_spotify_import(interaction, player, query)
+        if looks_like_spotify(query) or parse_youtube_playlist_url(query):
+            await self._start_spotify_import(interaction, player, query, shuffle=shuffle)
             return
 
         track = await self._search_one_track(interaction, query)
@@ -4601,13 +4721,11 @@ class Music(commands.Cog):
         # 一段時間後自動清除，並刪除 defer 訊息避免洗版。
         if not self._is_player_idle(player):
             player.song_queue.append((track, interaction.user.display_name, interaction.user.id))
-            if getattr(player, "shuffle", False) and len(player.song_queue) > 1:
-                self._shuffle_queue(player)
             position = len(player.song_queue)
             track_title = getattr(track, "title", "未知曲目")
             track_uri = getattr(track, "uri", None)
             title_display = f"[{track_title}]({track_uri})" if track_uri else track_title
-            shuffle_tag = "（🔀 隨機佇列）" if getattr(player, "shuffle", False) else f"（第 {position} 位）"
+            shuffle_tag = f"（第 {position} 位）"
             notice = f"➕ **已新增至待播清單{shuffle_tag}**：{title_display} 由 {interaction.user.display_name} 點播"
             self._set_panel_notice(interaction.guild.id, notice, duration=8.0)
             await self._sync_panel(interaction.guild.id, player)
@@ -4620,8 +4738,6 @@ class Music(commands.Cog):
         # ---- 佇列與播放器都是空的，直接開始播放 ----
         try:
             await self._play_track(player, track, interaction.user.display_name, interaction.user.id)
-            if getattr(player, "shuffle", False) and len(player.song_queue) > 1:
-                self._shuffle_queue(player)
         except Exception as e:
             if self._is_session_lost_error(e):
                 await self._handle_session_lost(player, e)
