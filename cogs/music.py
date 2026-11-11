@@ -321,12 +321,8 @@ def build_now_playing_container(
         uri = getattr(track, "uri", None)
         title_display = f"[{raw_title}]({uri})" if uri else raw_title
 
-        # 2. 作者與循環模式
+        # 2. 作者（循環與隨機狀態已由按鈕顯示，不重複列出）
         author = getattr(track, "author", None) or "未知"
-        loop_mode = getattr(player, "loop_mode", "off")
-        loop_label = LOOP_LABELS.get(loop_mode, "🔁 循環：關閉")
-        is_shuffle = bool(getattr(player, "shuffle", False))
-        mode_str = f"**{loop_label}**" + (" ｜ **🔀 隨機播放**" if is_shuffle else "")
 
         # 3. 頂部區塊：狀態、標題、作者與循環狀態，並將封面縮圖置於右上角（Section accessory，小圖）
         artwork_url = get_track_artwork(track)
@@ -334,7 +330,6 @@ def build_now_playing_container(
             f"### {status_icon} {status_text}",
             f"## {title_display}",
             f"**👤 {author}**",
-            f"{mode_str}",
         ]
         top_text = "\n".join(top_lines)
 
