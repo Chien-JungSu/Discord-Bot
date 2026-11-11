@@ -255,7 +255,7 @@
         <ul>
           <li><strong>/music_join</strong>：加入你所在的語音頻道。</li>
           <li><strong>/music_leave</strong>：離開語音頻道並清空佇列。</li>
-          <li><strong>/music_play</strong> <em>[query:&lt;關鍵字或網址&gt;] [playlist:&lt;歌單或6碼分享碼&gt;] [shuffle:&lt;True/False&gt;]</em>：播放歌曲或歌單，播放中則排入佇列。支援 YouTube／SoundCloud 與 YouTube 播放清單網址（<code>/playlist?list=</code>，自動剔除已刪除／私人影片）。<em>shuffle</em> 僅在開啟當下將整份歌單（含第一首）隨機排列，之後新增的歌曲排在佇列尾端。</li>
+          <li><strong>/music_play</strong> <em>[query:&lt;關鍵字或網址&gt;] [playlist:&lt;歌單或6碼分享碼&gt;] [shuffle:&lt;True/False&gt;]</em>：播放歌曲或歌單，播放中則排入佇列。支援 YouTube／SoundCloud 與 YouTube 播放清單網址（<code>/playlist?list=</code>、<code>watch?v=...&amp;list=</code>、<code>youtu.be</code>，自動剔除已刪除／私人／直播串流影片，具備 yt-dlp 平坦解析備援）。<em>shuffle</em> 僅在開啟當下將整份歌單（含第一首）隨機排列，之後新增的歌曲排在佇列尾端。</li>
           <li><strong>/music_play_next</strong> <em>query:&lt;關鍵字或網址&gt;</em>：插播到佇列最前面。</li>
           <li><strong>/music_queue</strong>：顯示播放中與接下來最多 10 首。</li>
           <li><strong>/music_queue_clear</strong>：清空佇列，不影響播放中的歌曲。</li>
@@ -269,7 +269,7 @@
           <li><strong>/music_set_channel</strong> <em>[channel]</em>：限定點歌頻道，留空則取消限制。需「管理伺服器」權限。</li>
           <li><strong>/music_playlist</strong> <em>[member:&lt;成員&gt;]</em>：查看個人歌單，每頁 10 首。</li>
           <li><strong>/music_playlist_create</strong> <em>name:&lt;歌單名稱&gt; [is_public:&lt;公開/私人&gt;]</em>：建立歌單（每人 1 個、最多 500 首），並配發 6 碼跨服分享碼。</li>
-          <li><strong>/music_playlist_add</strong> <em>query:&lt;關鍵字或網址&gt;</em>：新增歌曲至歌單（最多 500 首，自動攔截直播串流，重複自動忽略）。</li>
+          <li><strong>/music_playlist_add</strong> <em>query:&lt;關鍵字或網址&gt;</em>：新增單曲或 YouTube 播放清單至歌單（最多 500 首，自動攔截直播串流，重複自動忽略）。</li>
           <li><strong>/music_playlist_edit</strong> <em>[name] [is_public] [move_from] [move_to] [delete_index] [regenerate_share_code]</em>：改名、切換公開／私人、調整順序、刪除曲目，或重產分享碼（舊碼立即失效）。</li>
           <li><strong>/music_playlist_remove</strong>：刪除個人歌單，需確認。</li>
           <li><strong>/music_playlist_sync</strong>：將目前佇列非直播歌曲全部加入個人歌單。</li>

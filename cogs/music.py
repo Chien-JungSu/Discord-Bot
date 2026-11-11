@@ -87,29 +87,36 @@ IMPORT_PROGRESS_INTERVAL = max(5.0, PROGRESS_UPDATE_INTERVAL)
 # ---------- YouTube 播放清單批量匯入 ----------
 # 已刪除／私人影片在 extract_flat 清單中的標題（皆為小寫比對）。
 YT_INVALID_TITLES = frozenset({"[deleted video]", "[private video]", "deleted video", "private video"})
-_YT_HOSTS = frozenset({"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com"})
+_YT_HOSTS = frozenset({
+    "youtube.com",
+    "www.youtube.com",
+    "m.youtube.com",
+    "music.youtube.com",
+    "youtu.be",
+    "www.youtu.be",
+})
 
 
 def parse_youtube_playlist_url(text: str | None) -> str | None:
-    """判斷是否為「明確的 YouTube 播放清單網址」（/playlist?list=...），是的話回傳正規化後的網址。
+    """判斷是否為 YouTube 播放清單網址，回傳正規化後的歌單網址（https://www.youtube.com/playlist?list=...）。
 
-    - 帶 list=RD...（YouTube 自動生成的無限合輯 Mix）一律不視為播放清單，維持單曲播放。
-    - watch?v=...&list=... 這類「正在播放某首並附帶清單」的網址也只播單曲。
+    - 支援 /playlist?list=...、/watch?v=...&list=...、youtu.be/<id>?list=... 等各種格式。
+    - 支援以 Discord 語法包覆之角括號 <https://...>。
+    - 自動過濾以 RD 開頭的合輯（Mix/Radio，YouTube 自動生成的無限合輯），不視為播放清單以維持單曲播放。
     """
     if not text:
         return None
     from urllib.parse import parse_qs, urlparse
 
-    raw = text.strip()
+    raw = text.strip().strip("<> \t\r\n")
     if " " in raw:
         return None
     try:
         parsed = urlparse(raw if "://" in raw else f"https://{raw}")
     except ValueError:
         return None
-    if (parsed.hostname or "").lower() not in _YT_HOSTS:
-        return None
-    if parsed.path.rstrip("/") != "/playlist":
+    hostname = (parsed.hostname or "").lower()
+    if hostname not in _YT_HOSTS:
         return None
     list_ids = parse_qs(parsed.query).get("list") or []
     if not list_ids:
@@ -122,13 +129,14 @@ def parse_youtube_playlist_url(text: str | None) -> str | None:
 
 @dataclass(slots=True)
 class YouTubeTrack:
-    """YouTube 清單中的單一曲目：直接攜帶 Lavalink 已解析好的 Playable，不需再逐首搜尋。"""
+    """YouTube 清單中的單一曲目：直接攜帶 Lavalink 已解析好的 Playable，或 search_text 供備援解析。"""
 
     title: str
-    playable: Any
+    playable: Any = None
+    search_text: str | None = None
 
     def search_query(self) -> str:
-        return self.title
+        return self.search_text or self.title
 
 
 @dataclass(slots=True)
@@ -141,13 +149,17 @@ class YouTubeFetchResult:
 
 
 def filter_youtube_tracks(playables: list[Any] | None, limit: int) -> YouTubeFetchResult:
-    """過濾 Lavalink 回傳的曲目：剔除已刪除／私人／無標題或無法辨識的項目，並套用數量上限。"""
+    """過濾 Lavalink 回傳的曲目：剔除已刪除／私人／無標題、無法辨識或直播串流的項目，並套用數量上限。"""
     tracks: list[YouTubeTrack] = []
     skipped = 0
     truncated = False
     for pl in playables or []:
         title = str(getattr(pl, "title", "") or "").strip()
         if not title or title.lower() in YT_INVALID_TITLES or not getattr(pl, "identifier", None):
+            skipped += 1
+            continue
+        # 播放清單中的直播串流一律跳過
+        if getattr(pl, "is_stream", False):
             skipped += 1
             continue
         if len(tracks) >= limit:
@@ -3436,17 +3448,81 @@ class Music(commands.Cog):
             raise last_error
         return None
 
+    @staticmethod
+    def _fetch_youtube_playlist_via_ytdlp(
+        url: str, limit: int
+    ) -> tuple[list[YouTubeTrack], bool, int]:
+        """在背景執行緒中使用 yt-dlp 進行平坦解析（extract_flat），快速取得播放清單曲目列表。"""
+        import yt_dlp
+
+        ydl_opts = {
+            "extract_flat": "in_playlist",
+            "skip_download": True,
+            "quiet": True,
+            "no_warnings": True,
+            "playlistend": limit + 50,
+        }
+        tracks: list[YouTubeTrack] = []
+        skipped = 0
+        truncated = False
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                if not info:
+                    return [], False, 0
+                entries = info.get("entries") or []
+                for entry in entries:
+                    if not entry:
+                        skipped += 1
+                        continue
+                    title = str(entry.get("title") or "").strip()
+                    if not title or title.lower() in YT_INVALID_TITLES:
+                        skipped += 1
+                        continue
+                    if entry.get("is_live") or entry.get("live_status") in ("is_live", "is_upcoming"):
+                        skipped += 1
+                        continue
+                    if len(tracks) >= limit:
+                        truncated = True
+                        break
+                    vid = entry.get("id")
+                    url_item = f"https://www.youtube.com/watch?v={vid}" if vid else entry.get("url")
+                    tracks.append(YouTubeTrack(title=title, playable=None, search_text=url_item or title))
+        except Exception as e:
+            print(f">>> yt-dlp extract_info 例外：{e}")
+        return tracks, truncated, skipped
+
     async def _fetch_youtube_playlist(self, url: str, limit: int) -> YouTubeFetchResult:
-        """透過 Lavalink 解析 YouTube 播放清單（解析在節點端進行，不佔用 bot 事件迴圈）。"""
-        found = await asyncio.wait_for(self._fetch_tracks_with_fallback(url), timeout=IMPORT_SEARCH_TIMEOUT * 2)
-        if not found:
+        """透過 Lavalink 解析 YouTube 播放清單；若 Lavalink 節點失敗或未回傳完整清單，自動以 yt-dlp 平坦解析備援。"""
+        playables = None
+        try:
+            found = await asyncio.wait_for(self._fetch_tracks_with_fallback(url), timeout=IMPORT_SEARCH_TIMEOUT * 2)
+            if found:
+                if isinstance(found, wavelink.Playlist):
+                    playables = found.tracks
+                elif isinstance(found, (list, tuple)) and len(found) > 1:
+                    playables = list(found)
+        except Exception as e:
+            print(f">>> Lavalink 播放清單解析失敗，準備切換至 yt-dlp 備援：{e}")
+
+        if playables:
+            filtered = filter_youtube_tracks(list(playables), limit)
+            if filtered.tracks:
+                return filtered
+
+        # Lavalink 無法載入或回傳空清單時，使用 yt-dlp flat 模式備援解析
+        try:
+            tracks, truncated, skipped = await asyncio.to_thread(
+                self._fetch_youtube_playlist_via_ytdlp, url, limit
+            )
+            return YouTubeFetchResult(tracks=tracks, truncated=truncated, skipped=skipped)
+        except Exception as e:
+            print(f">>> yt-dlp 備援解析播放清單失敗：{e}")
             return YouTubeFetchResult(tracks=[], truncated=False, skipped=0)
-        playables = found.tracks if isinstance(found, wavelink.Playlist) else list(found)
-        return filter_youtube_tracks(list(playables), limit)
 
     async def _search_one_track(
         self, interaction: discord.Interaction, query: str
-    ) -> "wavelink_module.Playable | None":
+    ) -> Any:
         """共用的搜尋邏輯，/play 與 /play_next（插播）都會用到。
 
         回傳 None 代表搜尋失敗或找不到結果，錯誤訊息已經透過 _ephemeral_error 送出私人訊息，
@@ -3455,10 +3531,6 @@ class Music(commands.Cog):
         try:
             tracks = await self._fetch_tracks_with_fallback(query)
         except Exception as e:
-            # wavelink 搜尋失敗常見原因：來源網站暫時掛掉、網址格式不支援，
-            # 或是 YouTube 端觸發了反爬蟲機制（poToken / OAuth2 相關）。
-            # 第8週會處理 poToken/OAuth2 設定，這裡先統一攔截、回報開發者，
-            # 避免整個指令直接噴未捕捉例外。
             print(f">>> wavelink 搜尋失敗：{e}")
             await self.bot.notify_owner_error(e, interaction, extra_info=f"音樂搜尋失敗 query={query}")
             await self._ephemeral_error(
@@ -3475,10 +3547,11 @@ class Music(commands.Cog):
             return None
 
         # wavelink.Playable.search 對於歌單網址會回傳 Playlist，單曲/關鍵字則回傳 list[Playable]。
-        # 本週先只取第一首，完整歌單匯入排到第7週（Spotify 批次解析）再實作。
         if isinstance(tracks, wavelink.Playlist):
-            return tracks.tracks[0] if tracks.tracks else None
-        return tracks[0]
+            return tracks
+        if isinstance(tracks, (list, tuple)):
+            return tracks[0] if tracks else None
+        return tracks
 
     def _build_track_embed(
         self,
@@ -4724,13 +4797,52 @@ class Music(commands.Cog):
             )
             return
 
-        if parse_youtube_playlist_url(query):
-            await self._start_spotify_import(interaction, player, query, shuffle=shuffle)
+        yt_url = parse_youtube_playlist_url(query)
+        if yt_url:
+            await self._start_spotify_import(interaction, player, yt_url, shuffle=shuffle)
             return
 
         track = await self._search_one_track(interaction, query)
         if track is None:
             return  # 錯誤訊息已經在 _search_one_track 內送出
+
+        # 若搜尋結果為非 YouTube 之多曲播放清單（例如 SoundCloud Sets）
+        if isinstance(track, wavelink.Playlist) and len(track.tracks) > 1:
+            plist_tracks = list(track.tracks)
+            if shuffle:
+                random.shuffle(plist_tracks)
+            if self._is_player_idle(player):
+                first_trk = plist_tracks[0]
+                for pl_t in plist_tracks[1:]:
+                    player.song_queue.append((pl_t, interaction.user.display_name, interaction.user.id))
+                try:
+                    await self._play_track(player, first_trk, interaction.user.display_name, interaction.user.id)
+                except Exception as e:
+                    if self._is_session_lost_error(e):
+                        await self._handle_session_lost(player, e)
+                        await self._ephemeral_error(
+                            interaction,
+                            f"🔄 音訊節點連線剛重置，正在自動重新連線，完成後將立即播放「{getattr(first_trk, 'title', '此曲目')}」。",
+                        )
+                        return
+                    raise
+            else:
+                for pl_t in plist_tracks:
+                    player.song_queue.append((pl_t, interaction.user.display_name, interaction.user.id))
+            p_name = getattr(track, "name", "播放清單")
+            notice = f"➕ **已新增播放清單**：{p_name}（共 {len(plist_tracks)} 首） 由 {interaction.user.display_name} 點播"
+            self._set_panel_notice(interaction.guild.id, notice, duration=8.0)
+            await self._sync_panel(interaction.guild.id, player)
+            try:
+                await interaction.delete_original_response()
+            except (discord.NotFound, discord.HTTPException):
+                pass
+            return
+
+        if isinstance(track, wavelink.Playlist):
+            track = track.tracks[0] if track.tracks else None
+            if track is None:
+                return
 
         # ---- 第3週更新：有佇列了，不再直接蓋掉正在播放的歌曲 ----
         # player.playing 代表現在有歌在播、player.paused 代表暫停中但還沒播完，
@@ -4878,6 +4990,10 @@ class Music(commands.Cog):
         track = await self._search_one_track(interaction, query)
         if track is None:
             return
+        if isinstance(track, wavelink.Playlist):
+            track = track.tracks[0] if track.tracks else None
+            if track is None:
+                return
 
         if not self._is_player_idle(player):
             # 插播的重點：用 appendleft 塞到 FIFO 佇列的最前面，
@@ -5797,9 +5913,70 @@ class Music(commands.Cog):
             )
             return
 
+        yt_url = parse_youtube_playlist_url(query)
+        if yt_url:
+            rem_cap = PLAYLIST_MAX_TRACKS - len(current_tracks)
+            try:
+                fetch_res = await self._fetch_youtube_playlist(yt_url, rem_cap)
+            except Exception as e:
+                print(f">>> YouTube 歌單批次匯入失敗：{e}")
+                fetch_res = YouTubeFetchResult(tracks=[], truncated=False, skipped=0)
+
+            if not fetch_res.tracks:
+                await self._ephemeral_error(
+                    interaction,
+                    "😕 這份 YouTube 播放清單內沒有可匯入的曲目，或清單為私人／無效。",
+                )
+                return
+
+            track_dicts = []
+            for yt_trk in fetch_res.tracks:
+                if yt_trk.playable and self._is_live_track(yt_trk.playable):
+                    continue
+                if yt_trk.playable:
+                    td = self._playable_to_playlist_dict(yt_trk.playable)
+                else:
+                    td = {
+                        "title": yt_trk.title,
+                        "author": "",
+                        "uri": yt_trk.search_text or "",
+                        "length": 0,
+                        "identifier": "",
+                    }
+                track_dicts.append(td)
+
+            if not track_dicts:
+                await self._ephemeral_error(
+                    interaction,
+                    "❌ 這份 YouTube 歌單的曲目均為直播串流或無效音源，無法加入個人歌單！",
+                )
+                return
+
+            updated_pl, added_count, dup_count, overflow_count = add_tracks_to_user_playlist(
+                interaction.user.id, track_dicts, owner_name=interaction.user.display_name
+            )
+            total_now = len(updated_pl.get("tracks") or []) if updated_pl else 0
+            msg_parts = [
+                f"✅ 已成功將 YouTube 播放清單批次匯入至「**{pl['name']}**」！",
+                f"• 成功新增：**{added_count}** 首",
+            ]
+            if dup_count > 0:
+                msg_parts.append(f"• 自動略過重複：**{dup_count}** 首")
+            if overflow_count > 0:
+                msg_parts.append(f"• 超過 {PLAYLIST_MAX_TRACKS} 首上限略過：**{overflow_count}** 首")
+            if fetch_res.skipped > 0:
+                msg_parts.append(f"• 略過無效／直播串流：**{fetch_res.skipped}** 首")
+            msg_parts.append(f"📊 目前歌單共有 **{total_now} / {PLAYLIST_MAX_TRACKS}** 首歌曲。")
+            await interaction.followup.send("\n".join(msg_parts), ephemeral=True)
+            return
+
         track = await self._search_one_track(interaction, query)
         if track is None:
             return
+        if isinstance(track, wavelink.Playlist):
+            track = track.tracks[0] if track.tracks else None
+            if track is None:
+                return
 
         # 自動攔截直播影片：直播串流不可存入歌單
         if self._is_live_track(track):

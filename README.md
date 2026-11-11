@@ -24,7 +24,7 @@
 - `/reaction_roles_edit`：以選單選擇要編輯的訊息，支援視覺化編輯配對（身分組原生選單＋到訊息上按表符直接捕捉，免複製 ID）、修改訊息文字或切換「僅限有效表符」；需「管理伺服器」權限
 - `/music_join`：加入使用者目前所在的語音頻道
 - `/music_leave`：離開目前所在的語音頻道
-- `/music_play [query] [playlist] [shuffle]`：搜尋並播放音樂、點播個人歌單、伺服器公開歌單或輸入他人 6 碼跨服分享碼點播；若目前已在播放，會自動排入佇列（支援 YouTube／SoundCloud 關鍵字、網址或 YouTube 播放清單網址（`/playlist?list=`）批量匯入；可選開啟 `shuffle`，僅在開啟當下將歌單整份隨機排列，之後新增歌曲一律排在佇列尾端）
+- `/music_play [query] [playlist] [shuffle]`：搜尋並播放音樂、點播個人歌單、伺服器公開歌單或輸入他人 6 碼跨服分享碼點播；若目前已在播放，會自動排入佇列（支援 YouTube／SoundCloud 關鍵字、網址或 YouTube 播放清單網址（`/playlist?list=`、`watch?v=...&list=`、`youtu.be`）批量匯入，具備 yt-dlp 平坦解析備援；可選開啟 `shuffle`，僅在開啟當下將歌單整份隨機排列，之後新增歌曲一律排在佇列尾端）
 - `/music_play_next <query>`：插播，搜尋一首歌曲並插入佇列最前面，下一首就會播放它
 - `/music_queue`：顯示目前伺服器的播放佇列（正在播放中的歌曲＋接下來排隊的清單；支援觸發控制面板自動置底）
 - `/music_queue_clear`：清空目前的播放佇列（不影響正在播放的歌曲）
@@ -38,7 +38,7 @@
 - `/music_node_status`：查看目前 Lavalink 節點的連線狀態（包含節點 URI、連線狀態、Session ID 及目前連線的伺服器數）
 - `/music_playlist [member]`：查看自己或指定成員的個人專屬歌單（分頁檢視，附前往控制面板按鈕）
 - `/music_playlist_create <name> [is_public]`：建立個人專屬音樂歌單（上限 1 個歌單，最多 500 首；自動獲取 6 碼跨服分享碼）
-- `/music_playlist_add <query>`：搜尋歌曲並新增至個人歌單（上限 500 首；自動攔截直播串流，內建 URL 去重判定，重複歌曲自動忽略）
+- `/music_playlist_add <query>`：搜尋歌曲或 YouTube 播放清單並新增至個人歌單（上限 500 首；自動攔截直播串流，內建 URL 去重判定，重複歌曲自動忽略）
 - `/music_playlist_edit [name] [is_public] [move_from] [move_to] [delete_index] [regenerate_share_code]`：編輯個人歌單（改名、公開/私人切換、排序、刪除曲目或重產分享碼）
 - `/music_playlist_remove`：刪除個人專屬音樂歌單（具備確認按鈕防呆）
 - `/music_playlist_sync`：一鍵將當前伺服器的播放佇列同步新增至個人歌單中

@@ -969,6 +969,50 @@ async def test_session_lost_recovery():
     await cog.music_playlist_add.callback(cog, it_live_add, "https://youtube.com/watch?v=live_id")
     check("直播串流（Live Stream）無法加入個人歌單" in str(it_live_add.followup.send.await_args), "/music_playlist_add 自動攔截直播影片加入歌單")
 
+    # 測試 /music_playlist_add 批次匯入 YouTube 歌單
+    it_batch_add = make_interaction()
+    it_batch_add.user = SimpleNamespace(id=int(uid_owner), display_name="歌單主人")
+    mock_batch_tracks = [
+        music_mod.YouTubeTrack(title="Song-Batch-1", playable=fake_track("Song-Batch-1", identifier="b1", uri="https://x/b1")),
+        music_mod.YouTubeTrack(title="Song-Batch-2", playable=fake_track("Song-Batch-2", identifier="b2", uri="https://x/b2")),
+        music_mod.YouTubeTrack(title="Song-1", playable=fake_track("Song-1", identifier="id_1", uri="https://x/Song-1")),  # 重複歌曲
+    ]
+    cog._fetch_youtube_playlist = AsyncMock(return_value=music_mod.YouTubeFetchResult(tracks=mock_batch_tracks, truncated=False, skipped=1))
+    await cog.music_playlist_add.callback(cog, it_batch_add, "https://www.youtube.com/playlist?list=PLtestbatch123")
+    check("已成功將 YouTube 播放清單批次匯入" in str(it_batch_add.followup.send.await_args), "/music_playlist_add 成功批次匯入 YouTube 歌單")
+    check("成功新增：**2** 首" in str(it_batch_add.followup.send.await_args), "/music_playlist_add 批次匯入正確統計成功新增數")
+    check("自動略過重複：**1** 首" in str(it_batch_add.followup.send.await_args), "/music_playlist_add 批次匯入正確統計重複歌曲數")
+
+    # 測試 /music_play 收到多曲 wavelink.Playlist 能夠整批加入佇列
+    player_multi = RecoverablePlayer()
+    cog_multi = make_cog(player_multi)
+    orig_pl_cls = getattr(music_mod.wavelink, "Playlist", None)
+    class FakeWavelinkPlaylist:
+        def __init__(self, name, tracks):
+            self.name = name
+            self.tracks = tracks
+    music_mod.wavelink.Playlist = FakeWavelinkPlaylist
+    fake_wavelink_playlist = FakeWavelinkPlaylist(
+        name="SoundCloud 多曲歌單",
+        tracks=[
+            fake_track("SC-Track-1", uri="https://sc/1"),
+            fake_track("SC-Track-2", uri="https://sc/2"),
+            fake_track("SC-Track-3", uri="https://sc/3"),
+        ]
+    )
+    cog_multi._ensure_player = AsyncMock(return_value=player_multi)
+    cog_multi._check_music_channel = AsyncMock(return_value=True)
+    cog_multi._search_one_track = AsyncMock(return_value=fake_wavelink_playlist)
+    it_play_multi = make_interaction()
+    it_play_multi.guild_id = GID
+    it_play_multi.user = SimpleNamespace(id=1, display_name="聽眾")
+    await cog_multi.play.callback(cog_multi, it_play_multi, query="https://soundcloud.com/test/sets/my-set")
+    check(player_multi.current.title == "SC-Track-1", "/music_play 收到多曲 Playlist 時第一首立即播放")
+    check(len(player_multi.song_queue) == 2, "/music_play 收到多曲 Playlist 時其餘曲目依序加入佇列")
+    check(player_multi.song_queue[0][0].title == "SC-Track-2" and player_multi.song_queue[1][0].title == "SC-Track-3", "多曲 Playlist 佇列順序正確")
+    if orig_pl_cls is not None:
+        music_mod.wavelink.Playlist = orig_pl_cls
+
     # 測試跨伺服器透過 6 碼分享碼解析歌單，並自動為該用戶儲存歌單
     it_play = make_interaction()
     it_play.user = SimpleNamespace(id=uid_listener, display_name="跨服聽眾")
@@ -1088,19 +1132,25 @@ async def test_session_lost_recovery():
 def test_youtube_playlist_helpers():
     pu = music_mod.parse_youtube_playlist_url
     check(pu("https://www.youtube.com/playlist?list=PLabc123") == "https://www.youtube.com/playlist?list=PLabc123", "YouTube /playlist 網址可辨識")
+    check(pu("https://www.youtube.com/watch?v=abc&list=PLabc") == "https://www.youtube.com/playlist?list=PLabc", "watch 網址帶 list 正確正規化為播放清單")
+    check(pu("https://youtu.be/abc?list=PLabc") == "https://www.youtube.com/playlist?list=PLabc", "youtu.be 網址帶 list 正確正規化為播放清單")
+    check(pu("https://music.youtube.com/watch?v=abc&list=PLabc") == "https://www.youtube.com/playlist?list=PLabc", "music.youtube.com 網址帶 list 正確正規化")
+    check(pu("<https://www.youtube.com/watch?v=abc&list=PLabc>") == "https://www.youtube.com/playlist?list=PLabc", "角括號包覆之 YouTube 網址正確解析")
     check(pu("https://www.youtube.com/watch?v=abc&list=RDabc") is None, "list=RD 合輯不視為播放清單")
-    check(pu("https://www.youtube.com/watch?v=abc&list=PLabc") is None, "watch 網址帶 list 只播單曲")
     check(pu("https://www.youtube.com/playlist?list=RDabc") is None, "/playlist?list=RD 合輯不視為播放清單")
+    check(pu("https://www.youtube.com/watch?v=abc") is None, "無 list 參數之單曲網址不視為播放清單")
     check(pu("周杰倫 晴天") is None, "一般關鍵字不是播放清單")
-    mk = lambda title, ident="x": SimpleNamespace(title=title, identifier=ident)
+    mk = lambda title, ident="x", stream=False: SimpleNamespace(title=title, identifier=ident, is_stream=stream)
     res = music_mod.filter_youtube_tracks(
-        [mk("好歌", "a1"), mk("[Deleted video]", "b2"), mk("[Private video]", "c3"), mk("", "d4"), mk("無ID", ""), mk("另一首", "e5")],
+        [mk("好歌", "a1"), mk("[Deleted video]", "b2"), mk("[Private video]", "c3"), mk("", "d4"), mk("無ID", ""), mk("直播串流", "s1", stream=True), mk("另一首", "e5")],
         10,
     )
-    check([t_.title for t_ in res.tracks] == ["好歌", "另一首"] and res.skipped == 4, "過濾已刪除／私人／無效曲目")
+    check([t_.title for t_ in res.tracks] == ["好歌", "另一首"] and res.skipped == 5, "過濾已刪除／私人／直播串流／無效曲目")
     res2 = music_mod.filter_youtube_tracks([mk(f"t{i}", str(i)) for i in range(5)], 3)
     check(len(res2.tracks) == 3 and res2.truncated, "超過上限時截斷")
     check(res.tracks[0].playable.identifier == "a1", "YouTube 曲目攜帶 Lavalink Playable，不需再搜尋")
+    yt_fallback_trk = music_mod.YouTubeTrack(title="測試備援曲", playable=None, search_text="https://www.youtube.com/watch?v=fallback123")
+    check(yt_fallback_trk.search_query() == "https://www.youtube.com/watch?v=fallback123", "YouTubeTrack 支援 search_text 備援搜尋文字")
 
 
 def main():
