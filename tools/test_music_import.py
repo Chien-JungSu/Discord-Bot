@@ -829,6 +829,8 @@ async def test_session_lost_recovery():
         delete_user_playlist,
         get_saved_playlists_for_user,
         are_tracks_duplicate,
+        PLAYLIST_MAX_TRACKS,
+        is_live_track_data,
     )
 
     # 歌曲重複判斷邏輯測試（必須歌曲連結一致才判定為重複）
@@ -928,6 +930,44 @@ async def test_session_lost_recovery():
         removed["title"] == "Song-3" and [t["title"] for t in pl["tracks"]] == ["Song-2", "Song-1", "Song-New"],
         "刪除指定編號歌曲成功",
     )
+
+    # 測試歌單規格上限為 500 首與自動攔截直播串流
+    check(PLAYLIST_MAX_TRACKS == 500, "個人歌單曲目上限為 500 首")
+    live_sample = [
+        {"title": "24/7 Live Stream", "uri": "https://www.youtube.com/watch?v=live1", "is_stream": True, "length": 0},
+        {"title": "Radio Stream", "uri": "https://stream.radio/live", "_is_live_stream": True, "length": 999999999},
+    ]
+    check(all(is_live_track_data(t) for t in live_sample), "is_live_track_data 正確識別直播串流字典")
+    pl_live, added_live, _, _ = add_tracks_to_user_playlist(uid_owner, live_sample, owner_name="歌單主人")
+    check(added_live == 0, "自動攔截直播影片加入歌單（add_tracks_to_user_playlist 忽略直播串流）")
+
+    # 測試 Spotify 輸入攔截與提示
+    check(music_mod.looks_like_spotify("https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT"), "looks_like_spotify 正確識別 Spotify 連結")
+    it_sp = make_interaction()
+    it_sp.user = SimpleNamespace(id=int(uid_owner), display_name="歌單主人")
+    await cog.music_playlist_add.callback(cog, it_sp, "https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT")
+    check(it_sp.response.deferred, "/music_playlist_add 收到 Spotify 網址已 defer")
+    check("目前不支援 Spotify 音源" in str(it_sp.followup.send.await_args), "/music_playlist_add 正確提示目前不支援 Spotify 音源")
+
+    it_play_sp = make_interaction()
+    it_play_sp.guild_id = GID
+    it_play_sp.user = SimpleNamespace(
+        id=int(uid_owner),
+        display_name="歌單主人",
+        voice=SimpleNamespace(channel=SimpleNamespace(id=123)),
+    )
+    cog._ensure_player = AsyncMock(return_value=RecoverablePlayer())
+    await cog.play.callback(cog, it_play_sp, query="https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT")
+    check("目前不支援 Spotify 音源播放" in str(it_play_sp.followup.send.await_args), "/music_play 正確提示目前不支援 Spotify 音源播放")
+
+    # 測試 /music_playlist_add 攔截直播影片
+    it_live_add = make_interaction()
+    it_live_add.user = SimpleNamespace(id=int(uid_owner), display_name="歌單主人")
+    live_fake = fake_track("Live Stream Video", identifier="live_id")
+    live_fake.is_stream = True
+    cog._search_one_track = AsyncMock(return_value=live_fake)
+    await cog.music_playlist_add.callback(cog, it_live_add, "https://youtube.com/watch?v=live_id")
+    check("直播串流（Live Stream）無法加入個人歌單" in str(it_live_add.followup.send.await_args), "/music_playlist_add 自動攔截直播影片加入歌單")
 
     # 測試跨伺服器透過 6 碼分享碼解析歌單，並自動為該用戶儲存歌單
     it_play = make_interaction()
