@@ -197,11 +197,11 @@
         <div class="tag">General</div>
         <h2>一般功能</h2>
         <ul>
-          <li><strong>/ping</strong>：回傳機器人目前的 WebSocket 延遲（ms）。</li>
-          <li><strong>/panel</strong>：發送僅自己可見的私人訊息，附上前往網頁控制面板的連結按鈕。</li>
-          <li><strong>/choice</strong> <em>options:&lt;文字&gt;</em>：輸入以空格分隔的選項，機器人隨機選一個。</li>
-          <li><strong>/quotes</strong>：顯示「名言」或「笑話」按鈕，點擊後取得對應內容。</li>
-          <li><strong>/steal</strong> <em>emoji:&lt;emoji 字串或引用&gt;</em>：從 Discord 表情符號 CDN 下載並新增為本伺服器自訂 emoji；支援多個 emoji 一次處理，超過檔案大小上限會發送文字提示。</li>
+          <li><strong>/ping</strong>：查看延遲。</li>
+          <li><strong>/panel</strong>：取得網頁控制面板連結。</li>
+          <li><strong>/choice</strong> <em>options:&lt;文字&gt;</em>：以空格分隔選項，隨機選一個。</li>
+          <li><strong>/quotes</strong>：隨機名言或笑話。</li>
+          <li><strong>/steal</strong> <em>emoji:&lt;emoji&gt;</em>：複製其他伺服器的表情符號，可一次多個。</li>
         </ul>
       </article>
 
@@ -209,7 +209,7 @@
         <div class="tag">Weather</div>
         <h2>天氣查詢</h2>
         <ul>
-          <li><strong>/weather</strong> <em>city:&lt;縣市&gt;</em>：查詢台澎金馬地區各縣市的即時天氣資訊，資料由中央氣象署提供。</li>
+          <li><strong>/weather</strong> <em>city:&lt;縣市&gt;</em>：查詢台澎金馬即時天氣。</li>
         </ul>
       </article>
 
@@ -217,7 +217,7 @@
         <div class="tag">Bus</div>
         <h2>公車資訊</h2>
         <ul>
-          <li><strong>/bus</strong>：查詢台澎金馬地區各縣市的即時公車到站資訊，資料由交通部 TDX API 提供。</li>
+          <li><strong>/bus</strong>：查詢台澎金馬即時公車到站。</li>
         </ul>
       </article>
 
@@ -225,7 +225,7 @@
         <div class="tag">Server Info</div>
         <h2>伺服器資訊</h2>
         <ul>
-          <li><strong>/server_info</strong>：顯示目前伺服器的名稱、ID、成員數、建立時間、身份組數等詳細資訊。</li>
+          <li><strong>/server_info</strong>：顯示伺服器詳細資訊。</li>
         </ul>
       </article>
 
@@ -233,8 +233,8 @@
         <div class="tag">Welcome</div>
         <h2>歡迎訊息</h2>
         <ul>
-          <li><strong>/welcome_active</strong>：開啟歡迎設定互動面板，透過選單設定歡迎頻道（必填）、規則頻道、身份組領取頻道與新成員自動給予身份組（選填，加入時自動指派）。需「管理伺服器」權限。</li>
-          <li><strong>/welcome_inactive</strong>：停用本伺服器歡迎訊息功能。需「管理伺服器」權限。</li>
+          <li><strong>/welcome_active</strong>：開啟設定面板：歡迎頻道（必填）、規則頻道、身份組頻道、新成員自動身份組。需「管理伺服器」權限。</li>
+          <li><strong>/welcome_inactive</strong>：停用歡迎訊息。需「管理伺服器」權限。</li>
         </ul>
       </article>
 
@@ -242,15 +242,8 @@
         <div class="tag">Reaction Roles</div>
         <h2>表符身份組</h2>
         <ul>
-          <li><strong>/reaction_roles_create</strong> <em>message:&lt;文字&gt; pairs:&lt;表符 身份組 表符 身份組 …&gt; [channel:&lt;頻道&gt;] [strict:&lt;開/關&gt;]</em>：發送「按表符領身份組」訊息。表符＋身份組一對一、以空白分隔，最多 20 組（例如：<code>🎉 @帥 🎮 @打電動</code>）。發送後機器人會自動按下所有表符；成員按表符可獲得對應身份組，取消表符則自動收回。未指定 <em>channel</em> 時，自動使用 <strong>/welcome_active</strong> 設定的身份組領取頻道。每個伺服器可同時保留多則領取訊息（上限 10 則）；同一個表符的發放／收回有 5 秒冷卻，高頻點擊會被靜默忽略。<em>strict</em> 預設開啟，<strong>防止亂按</strong>：成員按了不對應身份組的其他表符時，機器人會自動移除該反應（需機器人在該頻道有「管理訊息」權限，發送時權限不足會直接提示）；想保留其他反應就把 <em>strict</em> 關掉。需「管理伺服器」權限。</li>
-          <li><strong>/reaction_roles_edit</strong>：編輯已發送的表符身份組訊息。從下拉選單選擇要編輯的訊息（選項顯示該訊息的表符配對摘要）後，可操作以下功能：
-            <ul>
-              <li><strong>編輯表符配對</strong>：全新視覺化編輯器！提供<strong>原生身分組搜尋選單</strong>（免複製身分組 ID）、<strong>「👆 到訊息按表符」自動捕捉</strong>（免複製表情符號代碼/ID，在原訊息按一下表情即可自動綁定），並支援單組配對更換身分組、更換表情、獨立刪除，以及暫存預覽確認後「💾 儲存並套用」；同時保留「📝 純文字批次編輯」支援傳統文字輸入。</li>
-              <li><strong>編輯訊息文字</strong>：開啟輸入視窗修改訊息內容。<strong>全去 ID 化</strong>：自動將原始 <code>&lt;@&amp;ID&gt;</code> 與 <code>&lt;:emoji:ID&gt;</code> 轉為人類可讀的 <code>@身分組名稱</code> 與 <code>:表符名稱:</code>，支援直接輸入身分組名稱，送出後自動轉換為標籤，免看或複製任何數字 ID。</li>
-              <li><strong>✨ 依配對同步文字</strong>：一鍵將目前設定好的表符配對自動排版更新至頻道訊息內文，完全免手動排版。</li>
-              <li><strong>🛡️ 僅限有效表符</strong>：按一下即可切換開／關。</li>
-            </ul>
-            修改配對時機器人會同步調整訊息上的反應：移除不再使用的舊表符連同成員的反應（需「管理訊息」權限）、按上新的表符，仍在使用的表符保留原樣、成員不用重按。所有操作都在同一則訊息上就地進行（連續編輯不洗版）；連續 120 秒沒操作按鈕會自動失效。需「管理伺服器」權限。</li>
+          <li><strong>/reaction_roles_create</strong> <em>message:&lt;文字&gt; pairs:&lt;表符 身份組 …&gt; [channel:&lt;頻道&gt;] [strict:&lt;開/關&gt;]</em>：發送領取訊息，表符與身份組一對一，最多 20 組（例如 <code>🎉 @帥 🎮 @打電動</code>）。按表符領取、取消表符收回。<em>channel</em> 預設為 <strong>/welcome_active</strong> 設定的頻道；<em>strict</em> 預設開啟，會移除無對應身份組的表符（需「管理訊息」權限）。每伺服器最多 10 則。需「管理伺服器」權限。</li>
+          <li><strong>/reaction_roles_edit</strong>：從選單選擇訊息後，可編輯表符配對、訊息文字、依配對同步文字，或切換「僅限有效表符」。需「管理伺服器」權限。</li>
         </ul>
       </article>
 
@@ -258,10 +251,10 @@
         <div class="tag">Auto Reply</div>
         <h2>關鍵字自動回覆</h2>
         <ul>
-          <li><strong>/auto_reply_add</strong> <em>keyword:&lt;關鍵字&gt; reply:&lt;回覆內容&gt; [name:&lt;規則名稱&gt;] [channel:&lt;頻道&gt;]</em>：新增自動回覆規則。成員訊息「包含」關鍵字（不分大小寫、忽略多餘空白）時，機器人會引用該訊息自動回覆，且一律不 @ 任何人；未指定 <em>channel</em> 時整個伺服器生效；未指定 <em>name</em> 時以關鍵字作為規則名稱。每個伺服器上限 10 條規則；一則訊息最多觸發第一條命中的規則；同一成員對同一條規則 3 秒內重複觸發不會重複回覆。之後可用 <strong>/auto_reply_edit</strong> 為同一條規則再加更多關鍵字（命中任一即觸發，上限 10 個），也可自行增修回覆內容（超過一則時隨機挑選）。需「管理伺服器」權限。</li>
-          <li><strong>/auto_reply_edit</strong>：編輯自動回覆規則。送出後自動抓取目前所有規則的<strong>規則名稱</strong>製成下拉選單供選取（舊規則退回顯示偵測關鍵字）；選取後有四顆按鈕：<strong>編輯關鍵字</strong>（輸入框自行填寫，上限 10 個）、<strong>編輯回覆內容</strong>、「<strong>⏸️ 暫停規則</strong>」（按下即暫停、設定完整保留，按鈕會變成「▶️ 恢復規則」，再按一次就恢復）與「取消」；只有執行指令的人能按，每次操作都會重新計時、連續 120 秒未操作按鈕就會變灰失效。兩個編輯視窗都是每頁 5 個輸入框（Discord 上限），預先帶入現有內容，<strong>留空＝刪除該項</strong>、往空格補字＝新增一項；第 6–10 項在下一頁（同一則訊息上一律附「編輯第 6-10 個」按鈕，第二頁則是「回到第 1-5 個」），沒編到的其他頁不動（編第 6–10 項時第 1–5 項原樣保留）；<strong>存檔結果直接就地改寫這一則訊息</strong>並把按鈕換成可繼續編輯的那組（連續編輯不會洗版），只有原訊息已不能編輯時才會另外補一則；關鍵字或回覆內容<strong>全部留空</strong>時會跳出「是否要刪除整條規則？」的確認訊息。超過一則回覆時自動切換成<strong>隨機回覆模式</strong>，每次觸發從所有回覆中隨機挑選一則。需「管理伺服器」權限。</li>
-          <li><strong>/auto_reply_list</strong>：列出自動回覆規則，<strong>一頁一條規則</strong>（用「◀️ 上一頁／下一頁 ▶️」兩顆按鈕翻頁），每頁完整顯示規則名稱、狀態、全部關鍵字、回覆內容與生效範圍；單則回覆超過 300 字會截斷，內容塞不下時會標示省略並提示用 <strong>/auto_reply_edit</strong> 看完整內容。沒有規則時會提示先用 <strong>/auto_reply_add</strong> 新增。需「管理伺服器」權限。</li>
-          <li><strong>/auto_reply_remove</strong>：刪除自動回覆規則。送出後自動抓取目前<strong>已生效</strong>的偵測關鍵字製成下拉選單供選取；選取後會先顯示確認訊息（附「確認刪除／取消」按鈕，只有執行指令的人能按，每次操作都會重新計時、連續 120 秒未操作自動失效）。需「管理伺服器」權限。</li>
+          <li><strong>/auto_reply_add</strong> <em>keyword:&lt;關鍵字&gt; reply:&lt;回覆內容&gt; [name:&lt;規則名稱&gt;] [channel:&lt;頻道&gt;]</em>：訊息包含關鍵字時引用回覆。<em>channel</em> 預設全伺服器；每伺服器最多 10 條規則。需「管理伺服器」權限。</li>
+          <li><strong>/auto_reply_edit</strong>：編輯關鍵字（最多 10 個）、回覆內容（多則時隨機挑選），或暫停／恢復規則。需「管理伺服器」權限。</li>
+          <li><strong>/auto_reply_list</strong>：一頁一條規則，按鈕翻頁。需「管理伺服器」權限。</li>
+          <li><strong>/auto_reply_remove</strong>：選擇規則並確認後刪除。需「管理伺服器」權限。</li>
         </ul>
       </article>
 
@@ -269,38 +262,32 @@
         <div class="tag">Music</div>
         <h2>語音功能</h2>
         <ul>
-          <li><strong>/music_join</strong>：加入使用者目前所在的語音頻道。</li>
-          <li><strong>/music_leave</strong>：離開語音頻道並清空播放佇列。</li>
-          <li><strong>/music_play</strong> <em>[query:&lt;關鍵字或網址&gt;] [playlist:&lt;歌單名稱或6碼分享碼&gt;] [shuffle:&lt;True/False&gt;]</em>：搜尋並播放音樂、點播自己的個人歌單、伺服器公開歌單或輸入他人 6 碼跨服分享碼點播；若有歌曲正在播放則排入 FIFO 佇列。支援 YouTube／SoundCloud 關鍵字、網址或 Spotify 外部歌單；可選開啟 <em>shuffle</em> 隨機播放模式（打亂佇列曲目順序，不影響當前播放中的歌曲）。</li>
-          <li><strong>/music_play_next</strong> <em>query:&lt;關鍵字或網址&gt;</em>：插播，插入佇列最前面，下一首優先播放。</li>
-          <li><strong>/music_queue</strong>：顯示正在播放的歌曲與接下來最多 10 首的佇列清單（送出時支援觸發控制面板自動置底）。</li>
-          <li><strong>/music_queue_clear</strong>：清空播放佇列（不影響正在播放的歌曲）。</li>
-          <li><strong>/music_pause</strong>：暫停目前播放的歌曲，回覆會附上操作者戳記。</li>
-          <li><strong>/music_resume</strong>：繼續播放被暫停的歌曲，回覆會附上操作者戳記。</li>
-          <li><strong>/music_seek</strong> <em>time:&lt;時間&gt;</em>：跳轉到指定時間，支援秒數、<code>mm:ss</code>、<code>hh:mm:ss</code>，或以 <code>+10</code>／<code>-15</code> 表示的相對秒數；直播歌曲不支援跳轉。回覆會附上操作者戳記。</li>
-          <li><strong>/music_loop</strong> <em>[mode]</em>：切換循環模式（關閉 → 單曲 → 佇列，可指定模式或留空依序切換）。回覆會附上操作者戳記。</li>
-          <li><strong>/music_skip</strong>：跳過目前歌曲並播放佇列中的下一首。回覆會附上操作者戳記。</li>
-          <li><strong>/music_stop</strong>：停止播放並清空佇列（需全員投票同意，見下方操作鎖說明）。</li>
-          <li><strong>/music_node_status</strong>：查看 Lavalink 節點連線狀態（URI、Session ID、連線伺服器數），僅使用者可見。</li>
-          <li><strong>/music_set_channel</strong> <em>[channel]</em>：設定點歌頻道，設定後音樂指令只在該頻道回應；不帶參數則取消限制，恢復全頻道可用。需「管理伺服器」權限。</li>
-          <li><strong>/music_playlist</strong> <em>[member:&lt;成員&gt;]</em>：查看自己或指定成員的個人專屬音樂歌單（分頁檢視，每頁 10 首，附前往網頁控制面板個人設定專區編輯按鈕）。</li>
-          <li><strong>/music_playlist_create</strong> <em>name:&lt;歌單名稱&gt; [is_public:&lt;公開/私人&gt;]</em>：建立個人專屬音樂歌單（每位使用者上限 1 個歌單，最多 100 首歌曲；系統配發獨一無二的 6 碼跨服分享碼，他人輸入該代碼即可跨服點播並自動加入收藏歌單）。</li>
-          <li><strong>/music_playlist_add</strong> <em>query:&lt;關鍵字或網址&gt;</em>：搜尋歌曲並新增至個人歌單（上限 100 首；具備 URL 去重機制，重複歌曲自動忽略並提示）。</li>
-          <li><strong>/music_playlist_edit</strong> <em>[name] [is_public] [move_from] [move_to] [delete_index] [regenerate_share_code]</em>：編輯個人歌單（修改歌單名稱、切換公開/私人狀態、以序號調整播放順序、刪除指定曲目，或重新產生 6 碼分享碼使其餘舊碼立即失效）。</li>
-          <li><strong>/music_playlist_remove</strong>：刪除個人專屬音樂歌單（彈出確認訊息與防呆按鈕）。</li>
-          <li><strong>/music_playlist_sync</strong>：一鍵將當前伺服器語音播放佇列中的所有曲目同步批次加入至個人歌單中。</li>
-          <li><strong>現代化 Container 控制面板與進階播放特性</strong>：
+          <li><strong>/music_join</strong>：加入你所在的語音頻道。</li>
+          <li><strong>/music_leave</strong>：離開語音頻道並清空佇列。</li>
+          <li><strong>/music_play</strong> <em>[query:&lt;關鍵字或網址&gt;] [playlist:&lt;歌單或6碼分享碼&gt;] [shuffle:&lt;True/False&gt;]</em>：播放歌曲或歌單，播放中則排入佇列。支援 YouTube／SoundCloud、Spotify 歌單與 YouTube 播放清單網址（<code>/playlist?list=</code>，自動剔除已刪除／私人影片）。<em>shuffle</em> 僅在開啟當下將整份歌單（含第一首）隨機排列，之後新增的歌曲排在佇列尾端。</li>
+          <li><strong>/music_play_next</strong> <em>query:&lt;關鍵字或網址&gt;</em>：插播到佇列最前面。</li>
+          <li><strong>/music_queue</strong>：顯示播放中與接下來最多 10 首。</li>
+          <li><strong>/music_queue_clear</strong>：清空佇列，不影響播放中的歌曲。</li>
+          <li><strong>/music_pause</strong>：暫停。</li>
+          <li><strong>/music_resume</strong>：繼續播放。</li>
+          <li><strong>/music_seek</strong> <em>time:&lt;時間&gt;</em>：跳轉，支援秒數、<code>mm:ss</code>、<code>hh:mm:ss</code> 或 <code>+10</code>／<code>-15</code>；直播不支援。</li>
+          <li><strong>/music_loop</strong> <em>[mode]</em>：切換循環模式（關閉、單曲、佇列），留空則依序切換。</li>
+          <li><strong>/music_skip</strong>：跳到下一首。</li>
+          <li><strong>/music_stop</strong>：停止並清空佇列，需全員投票同意。</li>
+          <li><strong>/music_node_status</strong>：查看 Lavalink 節點狀態，僅自己可見。</li>
+          <li><strong>/music_set_channel</strong> <em>[channel]</em>：限定點歌頻道，留空則取消限制。需「管理伺服器」權限。</li>
+          <li><strong>/music_playlist</strong> <em>[member:&lt;成員&gt;]</em>：查看個人歌單，每頁 10 首。</li>
+          <li><strong>/music_playlist_create</strong> <em>name:&lt;歌單名稱&gt; [is_public:&lt;公開/私人&gt;]</em>：建立歌單（每人 1 個、最多 100 首），並配發 6 碼跨服分享碼。</li>
+          <li><strong>/music_playlist_add</strong> <em>query:&lt;關鍵字或網址&gt;</em>：新增歌曲，重複的會自動忽略。</li>
+          <li><strong>/music_playlist_edit</strong> <em>[name] [is_public] [move_from] [move_to] [delete_index] [regenerate_share_code]</em>：改名、切換公開／私人、調整順序、刪除曲目，或重產分享碼（舊碼立即失效）。</li>
+          <li><strong>/music_playlist_remove</strong>：刪除個人歌單，需確認。</li>
+          <li><strong>/music_playlist_sync</strong>：將目前佇列全部加入個人歌單。</li>
+          <li><strong>控制面板</strong>：Container 面板附封面縮圖與即時按鈕（暫停／續播、切歌、停止、音量、循環、隨機）。點歌頻道有人發言時，面板會自動置底；Lavalink 斷線與直播中斷會自動復原。</li>
+          <li><strong>點歌者操作鎖</strong>（<code>/music_pause</code>、<code>/music_resume</code>、<code>/music_skip</code>、<code>/music_stop</code>、<code>/music_seek</code>）：點歌者還在語音頻道時，只有他能直接操作該曲，離開後任何人都能操作。
             <ul>
-              <li><strong>UI Components V2 Container</strong>：採用 Discord 最新 Container 架構，頂部 Section 右上角配備封面縮圖（Thumbnail），提供 6 顆即時操作按鈕（暫停/續播、切歌、停止、音量微調、循環切換、隨機打亂按鈕）。</li>
-              <li><strong>防洗版自動置底（Sticky Panel）</strong>：點歌頻道出現普通成員訊息或 <code>/music_queue</code> 訊息時，觸發防抖定時器安全將控制面板重新發送至最底端並刪除舊面板，杜絕雙重面板與幽靈訊息。</li>
-              <li><strong>自動故障復原（Auto-Recovery）</strong>：自動捕捉 Lavalink 404 Session Lost，自動重連並於中斷秒數恢復播放；直播串流（<code>is_stream=True</code>）長播斷流時自動重抓 URL 續播，防止直播中斷。</li>
-            </ul>
-          </li>
-          <li><strong>點歌者操作鎖（/music_pause、/music_resume、/music_skip、/music_stop、/music_seek）</strong>：每首歌的點歌者若還在機器人所在的語音頻道，僅點歌者能直接操作該曲；點歌者退出語音頻道後，任何人都能操作。
-            <ul>
-              <li><strong>暫停／續播／跳過／跳轉</strong>：非點歌者使用時會被直接拒絕（僅提示可見）。其中<strong>暫停與續播</strong>會另外在原文字頻道公開發送請求，附「✅ 允許／❌ 拒絕」按鈕，只有點歌者能按，按完按鈕即失效（一次性），<strong>30 秒</strong>內未決定視為拒絕。</li>
-              <li><strong>停止</strong>：任何人使用都會發起全員投票，同意／不同意按鈕即時顯示人數，<strong>任何一票不同意即否決</strong>、全員同意才會停止；按鈕同樣 <strong>30 秒</strong>有效且結果出爐後失效。頻道裡只剩自己時不用投票。投票被否決後，同一首歌在下一首開始播放前無法再次發起投票。</li>
-              <li><strong>拒絕鎖</strong>：同一首歌的請求被拒絕或逾時後——含暫停／續播的按鈕請求，以及<strong>被否決（或逾時結算為否決）的停止投票</strong>——在下一首開始播放前<strong>不得再次提出或發起</strong>。</li>
+              <li><strong>暫停／續播／跳過／跳轉</strong>：非點歌者會被拒絕。暫停與續播會公開發送「允許／拒絕」按鈕給點歌者，30 秒未決定視為拒絕。</li>
+              <li><strong>停止</strong>：任何人使用都會發起全員投票，一票不同意即否決，30 秒有效；頻道只剩自己時免投票。</li>
+              <li><strong>拒絕鎖</strong>：同一首歌的請求被拒絕、逾時或投票被否決後，下一首開始前不能再次發起。</li>
             </ul>
           </li>
         </ul>
@@ -310,13 +297,7 @@
         <div class="tag">TTS</div>
         <h2>文字轉語音</h2>
         <ul>
-          <li><strong>/tts</strong> <em>text:&lt;文字&gt; [file_name:&lt;檔案名稱&gt;] [language:&lt;語言代碼&gt;]</em>：將輸入的文字透過 Google 文字轉語音 (gTTS) 轉換成語音，並儲存為 MP3 檔案上傳發送。
-            <ul>
-              <li><strong>text</strong>：欲轉換為語音的文字（必填）。若未提供或全為空白將提示退出。</li>
-              <li><strong>file_name</strong>：輸出檔案名稱（選填）。若未提供則預設以文字前 10 個字命名，檔名不合法字元將自動替換為底線，並儲存為 <code>.mp3</code> 檔案。</li>
-              <li><strong>language</strong>：語言代碼（選填）。若未指定則預設使用英文（<code>en</code>）進行轉換；亦支援 <code>zh-tw</code>（繁體中文）、<code>ja</code>（日文）等標準語言代碼。</li>
-            </ul>
-          </li>
+          <li><strong>/tts</strong> <em>text:&lt;文字&gt; [file_name:&lt;檔名&gt;] [language:&lt;語言代碼&gt;]</em>：以 Google gTTS 產生 MP3。<em>file_name</em> 預設為文字前 10 個字；<em>language</em> 預設 <code>en</code>，也支援 <code>zh-tw</code>、<code>ja</code> 等。</li>
         </ul>
       </article>
 
@@ -324,17 +305,9 @@
         <div class="tag">Shortener</div>
         <h2>短網址產生器</h2>
         <ul>
-          <li><strong>/shorten</strong> <em>url:&lt;網址&gt; [utm_source] [utm_medium] [utm_campaign] [ephemeral]</em>：使用 reurl.cc 將長網址縮短為短網址（完全符合官方 OpenAPI 3.0 規範）。
-            <ul>
-              <li><strong>url</strong>：欲縮短的原始長網址（必填）。未輸入協定時自動補上 <code>https://</code>。</li>
-              <li><strong>utm_source</strong>：GA 流量來源標籤（選填，例如：<code>FB_AD</code>、<code>discord</code> 等）。</li>
-              <li><strong>utm_medium</strong>：GA 行銷媒介（選填，例如：<code>social</code>、<code>cpc</code> 等）。</li>
-              <li><strong>utm_campaign</strong>：GA 行銷活動名稱（選填，例如：<code>summer_sale</code> 等）。</li>
-              <li><strong>ephemeral</strong>：是否僅自己可見（選填，預設為 False，即公開分享）。</li>
-            </ul>
-          </li>
-          <li><strong>/reurl</strong>：同 <code>/shorten</code> 指令別名。</li>
-          <li><strong>應用程式選單（右鍵訊息）</strong>：對任何包含網址的訊息按右鍵 →「應用程式」→「縮短訊息中的網址」，即可快速產生短網址。</li>
+          <li><strong>/shorten</strong> <em>url:&lt;網址&gt; [utm_source] [utm_medium] [utm_campaign] [ephemeral]</em>：以 reurl.cc 縮短網址，未輸入協定時自動補 <code>https://</code>。<em>ephemeral</em> 預設為公開。</li>
+          <li><strong>/reurl</strong>：同 <code>/shorten</code>。</li>
+          <li><strong>右鍵訊息</strong>：「應用程式」→「縮短訊息中的網址」。</li>
         </ul>
       </article>
 
@@ -342,15 +315,15 @@
         <div class="tag">Economy</div>
         <h2>經濟系統</h2>
         <ul>
-          <li><strong>/economy_daily</strong>：領取每日簽到金幣獎勵（固定於每日 <code>00:00 (UTC+8)</code> 刷新，包含隨機基礎獎勵與連續簽到每日加成，首次使用簽到指令時額外獲得 <strong>200</strong> 初始資金；若前一日未簽到則重置連簽天數，已簽到時會顯示距離明日 00:00 刷新的動態倒數）。</li>
-          <li><strong>/economy_hourly</strong>：領取每小時簽到零用錢（固定於每小時整點 <code>XX:00</code> 刷新，首次使用簽到指令時亦會一併發放 <strong>200</strong> 初始資金；已領取時會顯示距離下個整點刷新的動態倒數時間）。</li>
-          <li><strong>/economy_balance</strong> <em>[member:&lt;成員&gt;]</em>：查詢自己或指定成員的目前全域金幣餘額與富豪排名（若查詢對象為機器人擁有者則顯示「機器人擁有者不參與排行」）。</li>
-          <li><strong>/economy_leaderboard</strong>：查看全域金幣富豪排行榜前 10 名（自動忽略機器人擁有者），並於底部顯示執行者自己的目前名次與餘額。</li>
-          <li><strong>/economy_pay</strong> <em>recipient:&lt;成員&gt; amount:&lt;金額&gt;</em>：將自己的金幣轉帳給其他成員（不可轉給自己或機器人），系統會自動依後台設定比例扣除手續費並檢查單筆最低轉帳金額。</li>
-          <li><strong>/economy_slots</strong>：🎰 開啟皇家拉霸機互動投注面板（免填指令參數），可一鍵切換最低、減半、加倍、自訂賭注或 <strong>🔥 All In</strong>（附原訊息二次確認按鈕），點擊啟動後以動態編輯訊息動畫逐輪揭曉三個轉輪圖案（<code>🍒</code>、<code>🍋</code>、<code>🍇</code>、<code>🔔</code>、<code>💎</code>、<code>7️⃣</code>），依頭獎、三連線或雙連線獲得對應倍率獎金。</li>
-          <li><strong>/economy_gamble</strong>：🎲 開啟擲硬幣與骰子互動投注面板（免填指令參數），支援快速調整賭注、自訂金額與 <strong>🔥 All In</strong>（附原訊息二次確認按鈕）；點選硬幣正反面或骰子大小（4~6／1~3）、單雙數即可觀看動態開獎動畫並立即續玩。</li>
-          <li><strong>/economy_blackjack</strong>：🃏 開啟 21 點撲克牌互動投注面板（免填指令參數），支援調整賭注、自訂金額與 <strong>🔥 All In</strong>（附原訊息二次確認按鈕）；發牌後提供「🃏 抽牌 (Hit)」、「🛑 停牌 (Stand)」、「💰 雙倍下注 (Double)」互動按鈕，支援 A 自動 1／11 點切換與天生 Blackjack 高倍率派彩。</li>
-          <li><strong>/economy_scratch</strong>：🎫 花費金幣購買一張 3×3 九宮格互動刮刮樂，可逐格點擊刮開或按「✨ 全部刮開」，湊滿 3 個相同圖案即可贏得頭獎（<code>💎×3</code>）、貳獎（<code>🌟×3</code>）、參獎（<code>🍀×3</code>）或回本獎（<code>🍒×3</code>），刮完後可一鍵「🎫 再買一張」。</li>
+          <li><strong>/economy_daily</strong>：每日簽到，00:00 (UTC+8) 刷新，連續簽到有加成；首次簽到另得 <strong>200</strong> 初始資金。</li>
+          <li><strong>/economy_hourly</strong>：每小時簽到，整點刷新；首次簽到同樣得 <strong>200</strong> 初始資金。</li>
+          <li><strong>/economy_balance</strong> <em>[member:&lt;成員&gt;]</em>：查詢金幣餘額與排名。</li>
+          <li><strong>/economy_leaderboard</strong>：全域富豪前 10 名與自己的名次。</li>
+          <li><strong>/economy_pay</strong> <em>recipient:&lt;成員&gt; amount:&lt;金額&gt;</em>：轉帳給其他成員，依後台設定扣手續費並檢查最低金額。</li>
+          <li><strong>/economy_slots</strong>：🎰 拉霸機。</li>
+          <li><strong>/economy_gamble</strong>：🎲 擲硬幣與骰子。</li>
+          <li><strong>/economy_blackjack</strong>：🃏 21 點。</li>
+          <li><strong>/economy_scratch</strong>：🎫 3×3 刮刮樂，湊滿 3 個相同圖案中獎。</li>
         </ul>
       </article>
 
@@ -358,14 +331,8 @@
         <div class="tag">Temp Message</div>
         <h2>限時訊息</h2>
         <ul>
-          <li><strong>/temp_message</strong> <em>duration:&lt;時效&gt; [text:&lt;文字&gt;] [image:&lt;圖片&gt;]</em>：發送限時訊息，由機器人代為傳送並在指定時間後自動刪除。
-            <ul>
-              <li><strong>duration</strong>：選擇訊息有效時間（必填），提供 <code>1min</code>、<code>30min</code>、<code>1hr</code>、<code>6hr</code>、<code>12hr</code>、<code>24hr</code> 六種選項，有效時間從使用指令的當下開始計算。</li>
-              <li><strong>text</strong>／<strong>image</strong>：欲傳送的文字內容或上傳圖片（兩者至少需填寫一項，亦可同時提供）。</li>
-              <li><strong>底部標註與自動刪除</strong>：訊息底部會自動附上 <code>-# 由 {username} 傳送 • &lt;t:...:R&gt; 自動刪除</code>（顯示傳送者的伺服器顯示名稱與 Discord 即時動態剩餘時間），排程持久化儲存於 SQLite，重啟後仍會準時刪除。</li>
-            </ul>
-          </li>
-          <li><strong>應用程式選單（右鍵訊息「限時訊息」）</strong>：對自己傳送的訊息按右鍵 →「應用程式」→「限時訊息」，機器人會傳送私密訊息讓使用者從下拉選單選擇有效時間（<code>1min</code>、<code>30min</code>、<code>1hr</code>、<code>6hr</code>、<code>12hr</code>、<code>24hr</code>，時效自使用指令當下起算）；選取後機器人會刪除原訊息並代為重發（含文字、圖片附件與底部動態倒數標註），到期後自動刪除。</li>
+          <li><strong>/temp_message</strong> <em>duration:&lt;時效&gt; [text:&lt;文字&gt;] [image:&lt;圖片&gt;]</em>：由機器人代發並在時效後自動刪除。<em>duration</em> 可選 <code>1min</code>、<code>30min</code>、<code>1hr</code>、<code>6hr</code>、<code>12hr</code>、<code>24hr</code>；<em>text</em> 與 <em>image</em> 至少填一項。重啟後仍會準時刪除。</li>
+          <li><strong>右鍵訊息</strong>：對自己的訊息選「應用程式」→「限時訊息」，選擇時效後由機器人刪除原訊息並重發。</li>
         </ul>
       </article>
     </div>

@@ -201,7 +201,6 @@
       {% else %}
       <div class="server-selection-header">
         <h3 class="selection-title">選擇管理伺服器</h3>
-        <p class="selection-desc">請選擇您要進行設定的 Discord 伺服器；若需編輯個人專屬歌單，請點擊右上角頭像選單「個人設定」。</p>
       </div>
 
       <div class="server-cards-grid">
@@ -255,7 +254,6 @@
           <span class="invite-banner-icon">🤖</span>
           <div>
             <h4>機器人尚未加入此伺服器</h4>
-            <p>請先點擊右方按鈕邀請「炙彗JI器人」加入伺服器，以啟用所有自訂控制面板功能。</p>
           </div>
         </div>
         <a id="btn-invite-to-guild" class="btn primary" href="{{ invite_url }}" target="_blank" rel="noreferrer">
@@ -278,13 +276,7 @@
               <span id="active-server-display" class="active-server-name">載入中...</span>
               <span id="active-server-id-display" class="active-server-id">ID: --</span>
             </div>
-            <div class="personal-sidebar-info" id="personal-sidebar-info">
-              <p>目前處於<strong>個人設定</strong>專區。您在此處建立或編輯的歌單會儲存在資料庫中，並可透過 <code>/music_play</code> 的 <code>playlist</code> 參數或 6 碼分享碼跨伺服器播放。</p>
-            </div>
             {% if is_owner %}
-            <div class="owner-sidebar-info" id="owner-sidebar-info">
-              <p>目前處於全域系統管理專區。點擊上方「返回伺服器選擇」即可回到伺服器清單。</p>
-            </div>
             {% endif %}
           </div>
 
@@ -324,9 +316,6 @@
           <div class="pane-header">
             <div class="tag">Welcome Module</div>
             <h2>👋 歡迎訊息與新成員自動身分組</h2>
-            <p class="pane-desc">
-              當新成員加入伺服器時，機器人會自動於歡迎頻道發送內嵌招呼卡片，並可引導閱讀規則或領取身分組。
-            </p>
           </div>
 
           <form id="form-welcome" class="panel-form">
@@ -335,7 +324,6 @@
               <select id="select-welcome-channel" class="form-control">
                 <option value="">-- 未設定（停用發送） --</option>
               </select>
-              <small class="form-hint">機器人發送新進成員歡迎 Embed 訊息的文字頻道。</small>
             </div>
 
             <div class="form-group">
@@ -343,7 +331,6 @@
               <select id="select-rules-channel" class="form-control">
                 <option value="">-- 未指定（略過提及） --</option>
               </select>
-              <small class="form-hint">歡迎卡片內將會標記此頻道，引導新成員前往閱讀規則。</small>
             </div>
 
             <div class="form-group">
@@ -351,7 +338,6 @@
               <select id="select-role-channel" class="form-control">
                 <option value="">-- 未指定（略過提及） --</option>
               </select>
-              <small class="form-hint">歡迎卡片內將標記此頻道，引導新成員領取身分組。</small>
             </div>
 
             <div class="form-group">
@@ -378,9 +364,6 @@
           <div class="pane-header">
             <div class="tag">Music Module</div>
             <h2>🎵 專屬點歌與音樂文字頻道</h2>
-            <p class="pane-desc">
-              限制音樂相關指令（如 <code>/music_play</code>, <code>/music_skip</code>）僅能在特定文字頻道使用，保持其他頻道的整潔。
-            </p>
           </div>
 
           <form id="form-music" class="panel-form">
@@ -389,7 +372,6 @@
               <select id="select-music-channel" class="form-control">
                 <option value="">-- 未綁定（所有文字頻道皆可使用） --</option>
               </select>
-              <small class="form-hint">設定後，若使用者在其他頻道使用點歌指令，機器人將引導至此頻道。</small>
             </div>
 
             <div class="form-actions">
@@ -410,7 +392,6 @@
               <div>
                 <div class="tag">Auto Reply Module</div>
                 <h2>💬 關鍵字自動回覆規則管理</h2>
-                <p class="pane-desc">設定特定關鍵字，當成員訊息提及時機器人自動送出回覆（每伺服器上限 10 條）。</p>
               </div>
               <button id="btn-add-auto-reply" class="btn primary" type="button">
                 <span>＋ 新增回覆規則</span>
@@ -430,9 +411,6 @@
               <div>
                 <div class="tag">Reaction Roles Module</div>
                 <h2>🎭 表符身分組配置管理</h2>
-                <p class="pane-desc">
-                  檢視、新增、編輯或刪除伺服器中的表情符號身分組領取訊息，所有變更將與 Discord 機器人即時同步。
-                </p>
               </div>
               <button id="btn-add-reaction-role" class="btn primary" type="button">
                 <span>＋ 新增身分組訊息</span>
@@ -450,9 +428,6 @@
           <div class="pane-header">
             <div class="tag">AI Module</div>
             <h2>AI 智慧助手與多供應商配置</h2>
-            <p class="pane-desc">
-              整合 Google AI Studio、NVIDIA NIM 與 Mistral AI 等超高免費配額端點，具備動態容錯容災（Failover）與圖文雙模態解析能力。
-            </p>
           </div>
 
           <div id="ai-unauthorized-banner" class="ai-unauth-card" style="display: none;">
@@ -487,7 +462,6 @@
               <div id="ai-custom-model-wrap" style="display: none; margin-top: 8px;">
                 <input type="text" id="ai-custom-model-input" class="form-control" placeholder="輸入自訂模型 ID，例如：gemini-flash-latest" />
               </div>
-              <small class="form-hint">多供應商閘道支援 Google AI Studio、NVIDIA NIM 與 Mistral AI 免費通道。</small>
             </div>
 
             <div class="form-group">
@@ -495,7 +469,6 @@
               <select id="select-ai-channel" class="form-control">
                 <option value="">-- 未綁定（所有文字頻道皆可使用） --</option>
               </select>
-              <small class="form-hint">設定後，成員僅能在該文字頻道使用 <code>/ai</code> 或標註機器人發問，保持其他頻道安靜。</small>
             </div>
 
             <div class="form-group">
@@ -503,25 +476,21 @@
               <select id="select-ai-payer" class="form-control">
                 <option value="">-- 由發問者自行支付各自的 AI 幣（預設） --</option>
               </select>
-              <small class="form-hint">設定後，本伺服器所有成員的 AI 提問消耗將統一由該指定成員支付扣除。若未設定或該成員點數不足，發問將受阻或扣除提問者點數。</small>
             </div>
 
             <div class="form-group">
               <label for="ai-instruction">AI 人設指令 (System Instruction)</label>
               <textarea id="ai-instruction" class="form-control" rows="4" placeholder="設定 AI 的角色設定、說話語氣、知識背景或回答規範..."></textarea>
-              <small class="form-hint">這段指令將作為 System Prompt 注入每次對話中，引導 AI 展現特定的性格與回答風格。</small>
             </div>
 
             <div class="form-row-2">
               <div class="form-group">
                 <label for="ai-temperature">創意度 / 隨機度 (Temperature: 0.0 ~ 1.0)</label>
                 <input type="number" step="0.05" min="0" max="1" id="ai-temperature" class="form-control" value="0.7" />
-                <small class="form-hint">數值愈低回答愈嚴謹穩定，數值愈高回答愈生動豐富。預設 0.7。</small>
               </div>
               <div class="form-group">
                 <label for="ai-max-tokens">最大回覆字數限制 (Max Tokens: 100 ~ 4000)</label>
                 <input type="number" min="100" max="4000" id="ai-max-tokens" class="form-control" value="3000" />
-                <small class="form-hint">限制單次回答的最大生成長度，避免過長超出 Discord 訊息上限。預設 3000。</small>
               </div>
             </div>
 
@@ -541,9 +510,6 @@
           <div class="pane-header">
             <div class="tag">Commands Status</div>
             <h2>📜 機器人在該伺服器啟用的指令清單</h2>
-            <p class="pane-desc">
-              檢視此伺服器中所有已就緒的斜線指令。
-            </p>
           </div>
 
           <div class="commands-search-row">
@@ -561,9 +527,6 @@
           <div class="pane-header">
             <div class="tag">Admin Settings</div>
             <h2>管理員設定</h2>
-            <p class="pane-desc">
-              配置全域經濟系統參數、玩家金幣帳戶、模組線上熱重載以及外部 API 調用配額。
-            </p>
           </div>
 
           <!-- 按照類別劃分的子類別選單容器 -->
@@ -891,7 +854,6 @@
               <div class="reload-header-flex">
                 <div>
                   <h4 class="subpane-group-title">Cog 模組線上熱重載 (免重啟機器人)</h4>
-                  <p class="pane-desc">代碼更新後可點擊重載對應模組，系統會自動在重載後將最新指令樹同步到 Discord 官方伺服器。</p>
                 </div>
                 <div class="cta-row" style="margin-top: 0;">
                   <button id="btn-reload-all-cogs" class="btn primary" type="button">
@@ -912,7 +874,6 @@
               <div class="reload-header-flex">
                 <div>
                   <h4 class="subpane-group-title">指令樹手動同步與運作日誌</h4>
-                  <p class="pane-desc">手動強制向 Discord 官方重新同步斜線指令樹，並檢視即時重載與同步反饋。</p>
                 </div>
                 <div class="cta-row" style="margin-top: 0;">
                   <button id="btn-sync-all-commands" class="btn primary" type="button">
@@ -955,10 +916,6 @@
             <div class="owner-ai-header-row">
               <div>
                 <h4 class="subpane-group-title">伺服器 AI 功能授權管理 (內部封測限定)</h4>
-                <p class="pane-desc" style="margin-top: 4px; font-size: 0.85rem;">
-                  因目前處於初階測試階段且各免費 API 模型具備頻率上限，預設僅開放擁有者伺服器使用。<br>
-                  您可以在此手動授權或撤銷其他伺服器的 AI 使用權限，開通後該伺服器即可在控制面板自訂 AI 人設與使用 <code>/ai</code> 指令。
-                </p>
               </div>
               <button type="button" id="btn-refresh-ai-guilds" class="btn secondary btn-refresh-ai-guilds">
                 <span>重新整理清單</span>
@@ -978,9 +935,6 @@
           <div id="owner-sub-bot-defaults" class="owner-subpane">
             <div class="user-manage-box">
               <h4 class="subpane-group-title">所有伺服器通用預設設定 (Bot Global Defaults)</h4>
-              <p class="form-hint" style="margin-bottom: 20px;">
-                此處設定的值將作為<strong>所有新伺服器或未個別自訂伺服器</strong>的預設基礎。您亦可點擊「一鍵套用至所有伺服器」將目前的預設值強制覆蓋更新至所有已加入的伺服器。
-              </p>
 
               <form id="form-owner-bot-defaults" class="panel-form">
                 <div class="form-group checkbox-group" style="margin-bottom: 20px;">
@@ -988,7 +942,6 @@
                     <input type="checkbox" id="bot-default-ai-enabled" checked />
                     <span>預設啟用 AI 智慧助手模組</span>
                   </label>
-                  <small class="form-hint">未特別設定的伺服器是否預設啟用 /ai 指令與 @機器人 對話。</small>
                 </div>
 
                 <div class="form-group" style="margin-bottom: 18px;">
@@ -999,27 +952,23 @@
                     <option value="nvidia:deepseek-ai/deepseek-v4.1-flash">deepseek-ai/deepseek-v4.1-flash (NVIDIA NIM)</option>
                     <option value="mistral:ministral-8b-latest">ministral-8b-latest (Mistral AI)</option>
                   </select>
-                  <small class="form-hint">未特別自訂 AI 模型的伺服器將優先使用此模型或容錯容災鏈。</small>
                 </div>
 
                 <div class="form-row-2" style="margin-bottom: 18px;">
                   <div class="form-group">
                     <label for="bot-default-ai-temperature">預設溫度 (隨機度 0.0 ~ 2.0)</label>
                     <input type="number" id="bot-default-ai-temperature" class="form-control" min="0.0" max="2.0" step="0.1" value="0.7" required />
-                    <small class="form-hint">數值愈低回答愈嚴謹穩定，數值愈高回答愈生動豐富。預設 0.7。</small>
                   </div>
 
                   <div class="form-group">
                     <label for="bot-default-ai-max-tokens">預設最大 Tokens 上限 (500 ~ 4000)</label>
                     <input type="number" id="bot-default-ai-max-tokens" class="form-control" min="500" max="4000" step="100" value="4000" required />
-                    <small class="form-hint">限制單次回答生成之最大長度上限。預設 4000。</small>
                   </div>
                 </div>
 
                 <div class="form-group" style="margin-top: 16px;">
                   <label>預設系統提示詞 / AI 人設指令 (System Instruction)</label>
                   <textarea id="bot-default-ai-instruction" class="form-control" rows="5" placeholder="輸入預設的系統提示詞..."></textarea>
-                  <small class="form-hint">未自訂人設的伺服器將直接套用此預設人設。</small>
                 </div>
 
                 <div class="form-actions" style="margin-top: 24px; display: flex; gap: 14px; flex-wrap: wrap;">
@@ -1038,9 +987,6 @@
           <div id="owner-sub-profile-auth" class="owner-subpane">
             <div class="user-manage-box">
               <h4 class="subpane-group-title">手動發放個人檔案編輯權限</h4>
-              <p class="form-hint" style="margin-bottom: 16px;">
-                輸入使用者的 <strong>Discord User ID</strong> 即可直接為其開通個人主頁編輯與建立權限。
-              </p>
               <form id="form-grant-profile-permission" class="panel-form" style="margin-bottom: 28px;">
                 <div class="form-row-2">
                   <div class="form-group">
@@ -1082,9 +1028,6 @@
                   重新整理單據
                 </button>
               </div>
-              <p class="form-hint" style="margin-bottom: 16px;">
-                此處即時列出使用者透過服務支援頁面提交的「申請個人檔案」單據。點擊<strong>【快捷授權】</strong>即可一鍵自動發放編輯權限！
-              </p>
               <div class="table-responsive" style="max-height: 380px; overflow-y: auto;">
                 <table class="data-table" id="table-profile-applications">
                   <thead>
@@ -1108,9 +1051,6 @@
           <div id="owner-sub-blocked-users" class="owner-subpane">
             <div class="user-manage-box">
               <h4 class="subpane-group-title">手動封鎖違規使用者</h4>
-              <p class="form-hint" style="margin-bottom: 16px;">
-                輸入濫用機器人、惡意高頻提交問題回報或違反個人檔案服務條款的使用者 <strong>Discord User ID</strong>，將其列入全域黑名單。列入黑名單後，該使用者將無法提交任何支援單據與儲存個人主頁。
-              </p>
               <form id="form-block-user" class="panel-form" style="margin-bottom: 28px;">
                 <div class="form-row-2">
                   <div class="form-group">
@@ -1133,9 +1073,6 @@
                   重新整理黑名單
                 </button>
               </div>
-              <p class="form-hint" style="margin-bottom: 16px;">
-                此處列出所有目前受到封鎖的使用者。點擊<strong>【解除封鎖】</strong>即可立即將該使用者移出黑名單。
-              </p>
               <div class="table-responsive" style="max-height: 380px; overflow-y: auto;">
                 <table class="data-table" id="table-blocked-users">
                   <thead>
@@ -1163,9 +1100,6 @@
           <div class="pane-header">
             <div class="tag">Personal Settings · Music Playlist</div>
             <h2>🎵 個人設定 — 我的音樂歌單管理</h2>
-            <p class="pane-desc">
-              每位用戶可建立 <strong>1 個專屬歌單（上限 100 首歌）</strong>。無論設為公開或私人，系統皆會配發一組獨一無二的 <strong>6 碼英數混合分享碼</strong>，可在任何伺服器的 <code>/music_play</code> 指令中透過 <code>playlist</code> 參數直接選取或輸入分享碼跨服播放！
-            </p>
           </div>
 
           <!-- 狀態 1：尚未建立歌單時顯示的建立表單 -->
@@ -1174,7 +1108,6 @@
               <span class="personal-empty-icon">💿</span>
               <div>
                 <h3>建立你的專屬音樂歌單</h3>
-                <p>建立後即可直接在網頁上新增歌曲、拖曳或按鈕調整順序、切換公開狀態，或使用 Discord 指令 <code>/music_playlist_sync</code> 一鍵匯入播放佇列。</p>
               </div>
             </div>
             <form id="form-create-personal-playlist" class="panel-form" autocomplete="off">
@@ -1235,9 +1168,6 @@
                       </button>
                     </div>
                   </div>
-                  <p class="share-code-hint">
-                    在任何伺服器的 <code>/music_play</code> 指令將此 6 碼填入 <code>playlist</code> 參數，即可跨服播放並自動為對方收藏歌單。重新產生後，舊分享碼與他人先前的收藏將立即失效。
-                  </p>
                 </div>
 
                 <div class="personal-meta-actions">
@@ -1256,7 +1186,6 @@
               <div class="personal-tracks-header">
                 <div>
                   <h3 class="personal-section-title">🎶 歌單曲目列表</h3>
-                  <p class="form-hint" style="margin: 4px 0 0;">可使用上下箭頭、拖曳或輸入編號調整播放順序，修改後即時同步至 SQLite 資料庫。</p>
                 </div>
                 <span id="personal-track-count-badge" class="cmd-badge">0 / 100 首</span>
               </div>
@@ -1303,9 +1232,6 @@
             <div class="personal-tracks-header">
               <div>
                 <h3 class="personal-section-title">🔖 已收藏的分享歌單</h3>
-                <p class="form-hint" style="margin: 4px 0 0;">
-                  當你在 <code>/music_play</code> 輸入他人的 6 碼分享碼播放時，系統會自動為你儲存於此，並直接顯示在 <code>/music_play</code> 的 <code>playlist</code> 選單中。你也可以在下方直接輸入分享碼預先收藏：
-                </p>
               </div>
             </div>
 
@@ -1351,7 +1277,6 @@
           <div class="form-group">
             <label>觸發關鍵字 (多個請用逗號隔開)</label>
             <input type="text" id="modal-rule-keywords" class="form-control" placeholder="例如：你好, 早安, hello" required />
-            <small class="form-hint">訊息內容只要包含上述任一關鍵字即可觸發。</small>
           </div>
           <div class="form-group">
             <div class="reply-blocks-header">
@@ -1426,7 +1351,6 @@
               </button>
             </div>
             <div id="modal-rr-emoji-picker-wrap" class="rr-emoji-picker-wrap" style="display: none;">
-              <small class="form-hint">點選伺服器自訂表情符號快速填入：</small>
               <div id="modal-rr-emoji-picker" class="rr-emoji-picker-list"></div>
             </div>
           </div>
