@@ -114,7 +114,7 @@
   - `economy_users` & `economy_config`：用戶全域金幣帳本、連續簽到紀錄、轉帳手續費與小遊戲賠率。
   - `ai_settings` & `ai_authorized_guilds`：頻道專屬人設、使用模型與伺服器 AI 授權白名單。
   - `user_profiles` & `profile_permissions`：用戶個人主頁自訂背景、自介、社交連結與編輯審核權限。
-  - `user_playlists` & `user_saved_playlists`：每位用戶上限 1 個專屬歌單（最多 100 首）、6 碼跨服分享碼、公開權限與他人收藏清單。
+  - `user_playlists` & `user_saved_playlists`：每位用戶上限 1 個專屬歌單（最多 500 首，自動攔截直播串流）、6 碼跨服分享碼、公開權限與他人收藏清單。
   - `temp_messages`：限時自毀訊息追蹤（伺服器、頻道、訊息 ID 與到期時間）。
 
 ### 3.3 音樂核心系統 (`cogs/music.py`)
@@ -142,7 +142,7 @@
    - 置底執行時，由 `_panel_locks[guild_id]` 加鎖，發送新面板後立即安全刪除舊面板訊息，杜絕雙重面板與幽靈訊息。
    - **嚴格自我排除**：記錄所有已發送面板的 Message ID（`_known_panel_msg_ids`）以及 `/music_queue` 公開佇列訊息，新版 discord.py 嚴格使用 `hasattr(message, "interaction_metadata")` 判定，徹底杜絕無限觸發迴圈與 `DeprecationWarning`。
 6. **用戶個人專屬歌單 (Personal Playlist)**：
-   - 每位用戶可建立 1 個專屬歌單（上限 100 首）。
+   - 每位用戶可建立 1 個專屬歌單（上限 500 首，自動攔截直播串流）。
    - 系統配發一組獨一無二的 6 碼英數跨服分享碼，可在任何伺服器輸入 6 碼播放。
    - 支援歌曲 URL 去重（重複加入直接忽略並提示）。
    - 支援隨機播放模式（Shuffle Mode）：打亂佇列順序但不影響當前播放曲目。

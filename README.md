@@ -24,7 +24,7 @@
 - `/reaction_roles_edit`：以選單選擇要編輯的訊息，支援視覺化編輯配對（身分組原生選單＋到訊息上按表符直接捕捉，免複製 ID）、修改訊息文字或切換「僅限有效表符」；需「管理伺服器」權限
 - `/music_join`：加入使用者目前所在的語音頻道
 - `/music_leave`：離開目前所在的語音頻道
-- `/music_play [query] [playlist] [shuffle]`：搜尋並播放音樂、點播個人歌單、伺服器公開歌單或輸入他人 6 碼跨服分享碼點播；若目前已在播放，會自動排入佇列（支援 YouTube／SoundCloud 關鍵字、網址、Spotify 外部歌單或 YouTube 播放清單網址（`/playlist?list=`）批量匯入；可選開啟 `shuffle`，僅在開啟當下將歌單整份隨機排列，之後新增歌曲一律排在佇列尾端）
+- `/music_play [query] [playlist] [shuffle]`：搜尋並播放音樂、點播個人歌單、伺服器公開歌單或輸入他人 6 碼跨服分享碼點播；若目前已在播放，會自動排入佇列（支援 YouTube／SoundCloud 關鍵字、網址或 YouTube 播放清單網址（`/playlist?list=`）批量匯入；可選開啟 `shuffle`，僅在開啟當下將歌單整份隨機排列，之後新增歌曲一律排在佇列尾端）
 - `/music_play_next <query>`：插播，搜尋一首歌曲並插入佇列最前面，下一首就會播放它
 - `/music_queue`：顯示目前伺服器的播放佇列（正在播放中的歌曲＋接下來排隊的清單；支援觸發控制面板自動置底）
 - `/music_queue_clear`：清空目前的播放佇列（不影響正在播放的歌曲）
@@ -37,8 +37,8 @@
 - `/music_set_channel [channel]`：設定點歌頻道，音樂指令只在該頻道回應；不帶參數則取消限制。需「管理伺服器」權限
 - `/music_node_status`：查看目前 Lavalink 節點的連線狀態（包含節點 URI、連線狀態、Session ID 及目前連線的伺服器數）
 - `/music_playlist [member]`：查看自己或指定成員的個人專屬歌單（分頁檢視，附前往控制面板按鈕）
-- `/music_playlist_create <name> [is_public]`：建立個人專屬音樂歌單（上限 1 個歌單，最多 100 首；自動獲取 6 碼跨服分享碼）
-- `/music_playlist_add <query>`：搜尋歌曲並新增至個人歌單（內建 URL 去重判定，重複歌曲自動忽略）
+- `/music_playlist_create <name> [is_public]`：建立個人專屬音樂歌單（上限 1 個歌單，最多 500 首；自動獲取 6 碼跨服分享碼）
+- `/music_playlist_add <query>`：搜尋歌曲並新增至個人歌單（上限 500 首；自動攔截直播串流，內建 URL 去重判定，重複歌曲自動忽略）
 - `/music_playlist_edit [name] [is_public] [move_from] [move_to] [delete_index] [regenerate_share_code]`：編輯個人歌單（改名、公開/私人切換、排序、刪除曲目或重產分享碼）
 - `/music_playlist_remove`：刪除個人專屬音樂歌單（具備確認按鈕防呆）
 - `/music_playlist_sync`：一鍵將當前伺服器的播放佇列同步新增至個人歌單中
@@ -110,7 +110,7 @@
 
 每位 Discord 用戶皆可在機器人中建立專屬個人的雲端音樂歌單，所有資料持久化儲存於 SQLite 資料庫（`bot_database.db`）：
 
-- **專屬歌單規格**：每位用戶上限建立 1 個個人歌單，單一歌單最多容納 100 首歌曲。
+- **專屬歌單規格**：每位用戶上限建立 1 個個人歌單，單一歌單最多容納 500 首歌曲（系統會自動攔截直播串流，避免無法回放的暫時串流混入歌單）。
 - **6 碼英數跨服分享碼**：歌單建立後系統自動配發一組獨一無二的 6 碼英數分享碼（如 `5Y1V36`）。無論設為公開或私人，在任何伺服器的 `/music_play` 指令將此 6 碼填入 `playlist` 參數，即可跨伺服器播放該歌單，並自動為點播者收藏該歌單。若重新產生分享碼，舊碼與他人先前的收藏立即失效。
 - **URL 智能去重機制**：新增歌曲至歌單時，系統自動比對歌曲連結（包含 YouTube 參數標準化與 ID 解析），重複歌曲自動忽略並提示略過數量，確保歌單不被重複歌曲灌滿。
 - **Web 控制面板個人設定專區**：用戶登入 Web 控制面板後可直接進入「個人設定」，提供全功能視覺化歌單編輯器（即時更名、公開/私人權限切換、拖曳或上下按鈕調整順序、輸入網址搜尋新增、刪除曲目二次確認彈框、重新產生分享碼與管理他人收藏歌單）。
@@ -232,8 +232,8 @@ python main.py
 - `/music_set_channel [channel]`：設定點歌頻道，音樂指令只在該頻道回應；不帶參數則取消限制。需「管理伺服器」權限。
 - `/music_node_status`：查看目前所有已註冊 Lavalink 節點的連線狀態（URI、連線狀態、Session ID、目前連線的伺服器數）；僅使用者可見。
 - `/music_playlist [member:<成員>]`：查看自己或指定成員的個人音樂歌單曲目（分頁檢視，每頁 10 首，附前往控制面板按鈕）。
-- `/music_playlist_create name:<歌單名稱> [is_public:<公開/私人>]`：建立個人專屬音樂歌單（每位使用者上限 1 個歌單，最多 100 首歌曲；自動配發獨一無二的 6 碼跨服分享碼）。
-- `/music_playlist_add query:<關鍵字或網址>`：搜尋歌曲並新增至個人歌單（上限 100 首；內建 URL 去重判定，重複歌曲自動忽略並提示）。
+- `/music_playlist_create name:<歌單名稱> [is_public:<公開/私人>]`：建立個人專屬音樂歌單（每位使用者上限 1 個歌單，最多 500 首歌曲；自動配發獨一無二的 6 碼跨服分享碼）。
+- `/music_playlist_add query:<關鍵字或網址>`：搜尋歌曲並新增至個人歌單（上限 500 首；自動攔截直播串流，內建 URL 去重判定，重複歌曲自動忽略並提示）。
 - `/music_playlist_edit [name] [is_public] [move_from] [move_to] [delete_index] [regenerate_share_code]`：編輯個人歌單（修改歌單名稱、切換公開/私人狀態、以序號調整播放順序、刪除指定曲目，或重新產生 6 碼分享碼）。
 - `/music_playlist_remove`：刪除個人專屬音樂歌單（彈出確認訊息與防呆按鈕）。
 - `/music_playlist_sync`：一鍵將當前伺服器語音播放佇列中的所有曲目同步批次加入至個人歌單中。

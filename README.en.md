@@ -24,7 +24,7 @@ Supported features:
 - `/reaction_roles_edit`: select a message from a dropdown menu to edit it interactively with the new visual pair editor (native Discord role selector + click reactions directly on the message to capture, no copying IDs required), modify message text, or toggle strict mode. Requires **Manage Server** permission
 - `/music_join`: join the voice channel where the user is currently connected
 - `/music_leave`: leave the current voice channel
-- `/music_play [query] [playlist] [shuffle]`: search and play music, personal playlists, server public playlists, or a 6-character cross-server share code; automatically queues the track if something is already playing (accepts YouTube/SoundCloud keywords or URLs, Spotify playlists, or YouTube playlist URLs (`/playlist?list=`) for bulk import; optional `shuffle` randomizes the whole playlist once when enabled, later additions are appended to the end of the queue)
+- `/music_play [query] [playlist] [shuffle]`: search and play music, personal playlists, server public playlists, or a 6-character cross-server share code; automatically queues the track if something is already playing (accepts YouTube/SoundCloud keywords or URLs, or YouTube playlist URLs (`/playlist?list=`) for bulk import; optional `shuffle` randomizes the whole playlist once when enabled, later additions are appended to the end of the queue)
 - `/music_play_next <query>`: play next (jump the queue), search a track and insert it at the front of the queue
 - `/music_queue`: show the current server's playback queue (now playing + upcoming tracks; triggers sticky panel bump)
 - `/music_queue_clear`: clear the current playback queue (does not affect the currently playing track)
@@ -37,8 +37,8 @@ Supported features:
 - `/music_set_channel [channel]`: restrict music commands to a single text channel; run without arguments to lift the restriction. Requires **Manage Server** permission
 - `/music_node_status`: view the connection status of all registered Lavalink nodes (URI, status, Session ID, and connected guild count)
 - `/music_playlist [member]`: view your own or another user's personal playlist (paged view, with a button to open the web panel editor)
-- `/music_playlist_create <name> [is_public]`: create a personal music playlist (up to 1 playlist per user, 100 tracks max; automatically generates a 6-character cross-server share code)
-- `/music_playlist_add <query>`: search and add tracks to your playlist (built-in URL deduplication to ignore duplicates)
+- `/music_playlist_create <name> [is_public]`: create a personal music playlist (up to 1 playlist per user, 500 tracks max; automatically generates a 6-character cross-server share code)
+- `/music_playlist_add <query>`: search and add tracks to your playlist (up to 500 tracks; live streams blocked; built-in URL deduplication to ignore duplicates)
 - `/music_playlist_edit [name] [is_public] [move_from] [move_to] [delete_index] [regenerate_share_code]`: edit your playlist (rename, toggle visibility, reorder songs, delete songs, or regenerate share code)
 - `/music_playlist_remove`: delete your personal music playlist (with confirmation prompt)
 - `/music_playlist_sync`: import all tracks from the server's current voice playback queue directly into your personal playlist
@@ -110,7 +110,7 @@ In alignment with Discord's latest UI specifications, the music control panel ha
 
 Every Discord member can create a personal music playlist stored persistently in the SQLite database (`bot_database.db`):
 
-- **Capacity & Limits**: Each user can create 1 personal playlist holding up to 100 tracks.
+- **Capacity & Limits**: Each user can create 1 personal playlist holding up to 500 tracks (live streams are automatically blocked from being added to playlists).
 - **6-Character Cross-Server Share Code**: Upon creation, the system issues a unique 6-character alphanumeric share code (e.g., `5Y1V36`). Whether set to Public or Private, entering this code in `/music_play playlist:<CODE>` in any Discord server allows cross-server playback and automatically adds the playlist to the caller's saved list. Regenerating the code immediately invalidates previous shares.
 - **Intelligent URL Deduplication**: When adding tracks, URLs are sanitized and compared (including YouTube video ID resolution). Duplicate tracks are automatically skipped with friendly count notifications.
 - **Web Panel Management Suite**: Logged-in users can access "Personal Settings" on the Web Control Panel to manage their playlist with an interactive UI (in-place renaming, drag-and-drop / arrow reordering, URL search, confirm modals for deletion, code regeneration, and saved playlist management).
@@ -232,8 +232,8 @@ When launched, the bot starts the Flask background server from `cogs/web_server.
 - `/music_set_channel [channel]`: restrict music commands to a single text channel; run without arguments to lift the restriction. Requires **Manage Server** permission.
 - `/music_node_status`: view the connection status of all registered Lavalink nodes (URL, connection state, Session ID, connected guild count). Ephemeral (only visible to you).
 - `/music_playlist [member:<user>]`: view your own or another user's personal playlist (paged view, with a button to open the web panel editor).
-- `/music_playlist_create name:<name> [is_public:<public/private>]`: create a personal music playlist (up to 1 playlist per user, 100 tracks max; automatically generates a unique 6-character cross-server share code).
-- `/music_playlist_add query:<keywords or URL>`: search and add tracks to your playlist (up to 100 tracks; built-in URL deduplication to ignore duplicates).
+- `/music_playlist_create name:<name> [is_public:<public/private>]`: create a personal music playlist (up to 1 playlist per user, 500 tracks max; automatically generates a unique 6-character cross-server share code).
+- `/music_playlist_add query:<keywords or URL>`: search and add tracks to your playlist (up to 500 tracks; live streams blocked; built-in URL deduplication to ignore duplicates).
 - `/music_playlist_edit [name] [is_public] [move_from] [move_to] [delete_index] [regenerate_share_code]`: edit your playlist (rename, toggle visibility, reorder songs by index, delete songs, or regenerate share code).
 - `/music_playlist_remove`: delete your personal music playlist (with confirmation prompt).
 - `/music_playlist_sync`: import all tracks from the server's current voice playback queue directly into your personal playlist.
