@@ -471,7 +471,7 @@ class Shortener(commands.Cog):
         view = ShortenerView(result, dest_url)
         await send_response(embed=embed, view=view, is_ephemeral=ephemeral)
 
-    @app_commands.command(name="shorten", description="使用 reurl.cc 將長網址縮短為短網址")
+    @app_commands.command(name="shorten", description="縮短網址")
     @app_commands.describe(
         url="請輸入要縮短的原始網址（例如：https://example.com）",
         utm_source="GA utm_source 流量來源標籤（選填，例如：FB_AD、discord 等）",
@@ -498,7 +498,7 @@ class Shortener(commands.Cog):
             ephemeral=ephemeral,
         )
 
-    @app_commands.command(name="reurl", description="使用 reurl.cc 將長網址縮短為短網址（同 /shorten）")
+    @app_commands.command(name="reurl", description="縮短網址（同 /shorten）")
     @app_commands.describe(
         url="請輸入要縮短的原始網址（例如：https://example.com）",
         utm_source="GA utm_source 流量來源標籤（選填，例如：FB_AD、discord 等）",

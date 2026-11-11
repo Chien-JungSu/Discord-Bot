@@ -184,7 +184,7 @@ class ReactionRoles(commands.Cog):
                 pass
             self._cooldown_flush_task = None
 
-    @app_commands.command(name="reaction_roles_create", description="發送「按表符領身份組」訊息（表符＋身份組一對一，可多組）")
+    @app_commands.command(name="reaction_roles_create", description="發送表符身份組訊息")
     @app_commands.describe(
         message="要發送的訊息文字（建議說明每個表符對應的身份組）",
         pairs="表符＋身份組配對，以空白分隔：`表符 身份組 表符 身份組 …`，例如：`🎉 @帥 🎮 @打電動`（最多 20 組）",
@@ -588,7 +588,7 @@ class ReactionRoles(commands.Cog):
         return True
 
     # ---------- /reaction_roles_edit：選單＋按鈕＋輸入框的互動式編輯 ----------
-    @app_commands.command(name='reaction_roles_edit', description='編輯或刪除已發送的表符身份組訊息：修改文字／表符配對、切換僅限有效表符，或刪除領取訊息')
+    @app_commands.command(name='reaction_roles_edit', description='編輯或刪除表符身份組訊息')
     @app_commands.guild_only()
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.checks.has_permissions(manage_guild=True)  # H3: 執行期檢查，伺服器端覆寫權限也擋得住

@@ -32,7 +32,7 @@ class Weather(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @app_commands.command(name="weather", description="查詢全台各縣市的即時天氣預報")
+    @app_commands.command(name="weather", description="查詢各縣市即時天氣")
     @app_commands.describe(city="請輸入縣市名稱（中英皆可，英文請確保首字母大寫）")
     @app_commands.checks.cooldown(1, 10.0, key=lambda i: i.user.id)
     async def weather(self, interaction: discord.Interaction, city: str):

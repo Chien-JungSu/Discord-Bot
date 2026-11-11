@@ -999,7 +999,7 @@ class AI(commands.Cog):
     # /reset 與 /ai_reset: 清除頻道對話記憶
     # ==========================================================================
 
-    @app_commands.command(name="ai_reset", description="清除當前文字頻道或討論串的最近 15 則對話上下文記憶")
+    @app_commands.command(name="ai_reset", description="清除當前頻道的 AI 對話記憶")
     async def ai_reset_command(self, interaction: discord.Interaction):
         count = memory_manager.clear_channel(interaction.channel_id)
         embed = discord.Embed(
@@ -1017,7 +1017,7 @@ class AI(commands.Cog):
     # /provider 與 /ai_provider: 檢視提供商在線狀態與容災鏈
     # ==========================================================================
 
-    @app_commands.command(name="ai_provider", description="查看多供應商免費 AI 狀態、容錯容災鏈與即時冷卻倒數")
+    @app_commands.command(name="ai_provider", description="查看 AI 供應商狀態")
     async def ai_provider_command(self, interaction: discord.Interaction):
         statuses = router.get_providers_status()
         embed = discord.Embed(
@@ -1048,7 +1048,7 @@ class AI(commands.Cog):
         view = build_panel_link_view(interaction.guild_id, label="前往後台檢視 AI 配置") if interaction.guild_id else None
         await interaction.response.send_message(embed=embed, view=view)
 
-    @app_commands.command(name="provider", description="[快捷] 查看多供應商免費 AI 狀態與冷卻資訊")
+    @app_commands.command(name="provider", description="查看 AI 供應商狀態")
     async def provider_shortcut_command(self, interaction: discord.Interaction):
         await self.ai_provider_command(interaction)
 
@@ -1056,7 +1056,7 @@ class AI(commands.Cog):
     # /persona 與 /ai_persona: 設定或清除頻道自訂人設
     # ==========================================================================
 
-    @app_commands.command(name="ai_persona", description="設定或重設當前頻道的專屬 AI 人設指令 (System Instruction)")
+    @app_commands.command(name="ai_persona", description="設定當前頻道的 AI 人設")
     @app_commands.describe(
         instruction="為當前頻道自訂的人設指令 (留空且 clear=True 則還原為伺服器預設)",
         clear="設為 True 則清除頻道專屬人設，恢復使用本伺服器控制面板預設人設",
@@ -1095,7 +1095,7 @@ class AI(commands.Cog):
     # /ai_config 斜線指令：快速檢視當前伺服器配置
     # ==========================================================================
 
-    @app_commands.command(name="ai_config", description="查看當前伺服器的 AI 智慧助手與多供應商配置狀態")
+    @app_commands.command(name="ai_config", description="查看伺服器的 AI 設定")
     async def ai_config_command(self, interaction: discord.Interaction):
         guild_id = interaction.guild_id
         cfg = self._get_guild_cfg(guild_id)

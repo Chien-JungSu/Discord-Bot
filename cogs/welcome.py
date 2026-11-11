@@ -257,7 +257,7 @@ class Welcome(commands.Cog):
         self.bot = bot
         self.settings: dict = _load_welcome_settings()
 
-    @app_commands.command(name="welcome_active", description="開啟歡迎訊息設定面板（歡迎／規則／身份組頻道與新成員自動身份組）")
+    @app_commands.command(name="welcome_active", description="開啟歡迎訊息設定面板")
     @app_commands.guild_only()
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.checks.has_permissions(manage_guild=True)  # H3: 執行期檢查，伺服器端覆寫權限也擋得住
@@ -271,7 +271,7 @@ class Welcome(commands.Cog):
         except discord.HTTPException:
             pass
 
-    @app_commands.command(name="welcome_inactive", description="取消伺服器的歡迎訊息功能")
+    @app_commands.command(name="welcome_inactive", description="停用歡迎訊息")
     @app_commands.guild_only()
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.checks.has_permissions(manage_guild=True)  # H3: 執行期檢查，伺服器端覆寫權限也擋得住

@@ -306,12 +306,12 @@ class General(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @app_commands.command(name="ping", description="測試機器人的連線延遲")
+    @app_commands.command(name="ping", description="查看延遲")
     @app_commands.checks.cooldown(1, 10.0, key=lambda i: i.user.id)
     async def ping(self, interaction: discord.Interaction):
         await interaction.response.send_message(f'延遲 `{round(self.bot.latency * 1000)}ms`')
 
-    @app_commands.command(name="panel", description="取得網頁控制面板連結（可透過瀏覽器管理伺服器設定）")
+    @app_commands.command(name="panel", description="取得網頁控制面板連結")
     @app_commands.checks.cooldown(1, 5.0, key=lambda i: i.user.id)
     async def panel(self, interaction: discord.Interaction):
         guild_id = interaction.guild.id if interaction.guild else None

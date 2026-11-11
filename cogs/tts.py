@@ -81,7 +81,7 @@ class TTS(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @app_commands.command(name="tts", description="將文字轉換成語音，並儲存為 MP3 檔案傳送")
+    @app_commands.command(name="tts", description="文字轉語音（MP3）")
     # gTTS 每次都要打 Google 的 API，加上 per-user 冷卻避免被連續濫用；
     # 冷卻觸發時的 CommandOnCooldown 由 main.py 的 on_app_command_error 統一回覆。
     @app_commands.checks.cooldown(1, TTS_COOLDOWN_SECONDS, key=lambda i: i.user.id)

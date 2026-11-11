@@ -2584,7 +2584,7 @@ class Economy(commands.Cog):
     # 1. 每日簽到 (/economy_daily) 與 每小時簽到 (/economy_hourly)
     # --------------------------------------------------------------------------
 
-    @app_commands.command(name="economy_daily", description="領取每日簽到金幣獎勵（每日 00:00 UTC+8 刷新，連續簽到享額外加成！）")
+    @app_commands.command(name="economy_daily", description="領取每日簽到獎勵")
     @app_commands.checks.cooldown(1, ECONOMY_CMD_COOLDOWN_SECONDS, key=lambda i: i.user.id)
     async def economy_daily(self, interaction: discord.Interaction):
         now_ts = time.time()
@@ -2677,7 +2677,7 @@ class Economy(commands.Cog):
         embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
         await interaction.response.send_message(embed=embed)
 
-    @app_commands.command(name="economy_hourly", description="領取每小時簽到零用錢（每小時整點 XX:00 刷新）")
+    @app_commands.command(name="economy_hourly", description="領取每小時簽到獎勵")
     @app_commands.checks.cooldown(1, ECONOMY_CMD_COOLDOWN_SECONDS, key=lambda i: i.user.id)
     async def economy_hourly(self, interaction: discord.Interaction):
         now_ts = time.time()
@@ -2734,7 +2734,7 @@ class Economy(commands.Cog):
     # 2. 餘額查詢 (/economy_balance)、富豪排行榜 (/economy_leaderboard) 與 轉帳 (/economy_pay)
     # --------------------------------------------------------------------------
 
-    @app_commands.command(name="economy_balance", description="查詢自己或指定成員的金幣與 AI 貨幣餘額與全域富豪排名")
+    @app_commands.command(name="economy_balance", description="查詢金幣餘額與排名")
     @app_commands.checks.cooldown(1, ECONOMY_CMD_COOLDOWN_SECONDS, key=lambda i: i.user.id)
     @app_commands.describe(member="要查詢的對象（選填，不填則查詢自己）")
     async def economy_balance(self, interaction: discord.Interaction, member: Optional[discord.User] = None):
@@ -2764,7 +2764,7 @@ class Economy(commands.Cog):
         embed.add_field(name="🏆 全域富豪排名", value=rank_str, inline=True)
         await interaction.response.send_message(embed=embed)
 
-    @app_commands.command(name="economy_leaderboard", description="查看全域金幣富豪排行榜前 10 名")
+    @app_commands.command(name="economy_leaderboard", description="查看富豪排行榜")
     @app_commands.checks.cooldown(1, ECONOMY_LEADERBOARD_COOLDOWN_SECONDS, key=lambda i: i.user.id)
     async def economy_leaderboard(self, interaction: discord.Interaction):
         await interaction.response.defer()
@@ -3022,7 +3022,7 @@ class Economy(commands.Cog):
         finally:
             self._animating_users.discard(uid)
 
-    @app_commands.command(name="economy_slots", description="🎰 開啟皇家拉霸機互動面板（可自由調整賭注、All In 全押並觀看轉輪動畫）")
+    @app_commands.command(name="economy_slots", description="🎰 拉霸機")
     @app_commands.checks.cooldown(1, ECONOMY_GAME_COOLDOWN_SECONDS, key=lambda i: i.user.id)
     async def economy_slots(self, interaction: discord.Interaction):
         view = SlotsPanelView(self, interaction.user)
@@ -3203,7 +3203,7 @@ class Economy(commands.Cog):
         finally:
             self._animating_users.discard(uid)
 
-    @app_commands.command(name="economy_gamble", description="🎲 開啟擲硬幣與骰子比大小互動面板（可自由調整賭注、All In 全押並觀看開獎動畫）")
+    @app_commands.command(name="economy_gamble", description="🎲 擲硬幣與骰子")
     @app_commands.checks.cooldown(1, ECONOMY_GAME_COOLDOWN_SECONDS, key=lambda i: i.user.id)
     async def economy_gamble(self, interaction: discord.Interaction):
         view = GamblePanelView(self, interaction.user)
@@ -3291,7 +3291,7 @@ class Economy(commands.Cog):
         await interaction.response.edit_message(embed=embed, view=view)
         view.message = interaction.message
 
-    @app_commands.command(name="economy_blackjack", description="🃏 開啟 21 點撲克牌對決互動面板（可自由調整賭注或 All In 全押發牌）")
+    @app_commands.command(name="economy_blackjack", description="🃏 21 點")
     @app_commands.checks.cooldown(1, ECONOMY_GAME_COOLDOWN_SECONDS, key=lambda i: i.user.id)
     async def economy_blackjack(self, interaction: discord.Interaction):
         view = BlackjackLobbyView(self, interaction.user)
@@ -3339,7 +3339,7 @@ class Economy(commands.Cog):
             except discord.HTTPException:
                 pass
 
-    @app_commands.command(name="economy_scratch", description="🎫 花費金幣購買一張九宮格刮刮樂，湊滿 3 個相同圖案贏大獎！")
+    @app_commands.command(name="economy_scratch", description="🎫 刮刮樂")
     @app_commands.checks.cooldown(1, ECONOMY_GAME_COOLDOWN_SECONDS, key=lambda i: i.user.id)
     async def economy_scratch(self, interaction: discord.Interaction):
         await self._start_scratch(interaction, edit_existing=False)

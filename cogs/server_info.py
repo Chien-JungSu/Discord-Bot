@@ -28,7 +28,7 @@ class ServerInfo(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @app_commands.command(name="server_info", description="顯示此伺服器的詳細資訊")
+    @app_commands.command(name="server_info", description="顯示伺服器資訊")
     @app_commands.guild_only()
     async def server_info(self, interaction: discord.Interaction):
         info_embed = generate_server_info_embed(interaction.guild)

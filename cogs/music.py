@@ -4628,11 +4628,11 @@ class Music(commands.Cog):
             except (discord.NotFound, discord.HTTPException):
                 pass
 
-    @app_commands.command(name="music_play", description="搜尋並播放音樂或用戶歌單（query 與 playlist 請擇一填入）")
+    @app_commands.command(name="music_play", description="播放音樂或歌單（query 與 playlist 擇一）")
     @app_commands.describe(
-        query="歌曲名稱 / 關鍵字，或是 YouTube、SoundCloud、Spotify 網址（與 playlist 擇一填入）",
-        playlist="選擇你的歌單、伺服器公開歌單，或直接輸入 6 碼分享碼跨伺服器播放（與 query 擇一填入）",
-        shuffle="是否開啟隨機播放模式（開啟時自動打亂待播佇列順序，預設關閉）",
+        query="歌曲名稱、關鍵字或網址",
+        playlist="選擇歌單或輸入 6 碼分享碼",
+        shuffle="隨機排列歌單",
     )
     @app_commands.guild_only()
     async def play(
@@ -4828,7 +4828,7 @@ class Music(commands.Cog):
 
         return choices[:25]
 
-    @app_commands.command(name="music_play_next", description="（插播）搜尋一首歌曲並插入佇列最前面，下一首就會播放它")
+    @app_commands.command(name="music_play_next", description="插播歌曲到佇列最前面")
     @app_commands.describe(query="歌曲名稱 / 關鍵字，或是 YouTube、SoundCloud 網址")
     @app_commands.guild_only()
     async def play_next(self, interaction: discord.Interaction, query: str):
@@ -4956,7 +4956,7 @@ class Music(commands.Cog):
         except Exception:
             pass
 
-    @app_commands.command(name="music_queue_clear", description="清空目前的播放佇列（不影響正在播放的歌曲）")
+    @app_commands.command(name="music_queue_clear", description="清空播放佇列")
     @app_commands.guild_only()
     async def queue_clear(self, interaction: discord.Interaction):
         if not await self._check_music_channel(interaction):
@@ -5287,7 +5287,7 @@ class Music(commands.Cog):
         )
         return False
 
-    @app_commands.command(name="music_set_channel", description="設定點歌頻道：音樂指令只在該頻道生效（不帶參數則取消限制）")
+    @app_commands.command(name="music_set_channel", description="設定點歌頻道（留空取消限制）")
     @app_commands.describe(channel="點歌專用頻道；留空則取消限制，音樂指令恢復全頻道可用")
     @app_commands.guild_only()
     @app_commands.default_permissions(manage_guild=True)
@@ -5527,7 +5527,7 @@ class Music(commands.Cog):
                 await self.bot.notify_owner_error(e, interaction, extra_info="/music_stop 失敗")
                 await interaction.followup.send("❌ 停止播放時發生錯誤，已回報開發者。", ephemeral=True)
 
-    @app_commands.command(name="music_stop", description="停止播放並清空佇列（需全員投票同意）")
+    @app_commands.command(name="music_stop", description="停止播放並清空佇列")
     @app_commands.guild_only()
     async def stop_(self, interaction: discord.Interaction):
         if not await self._check_music_channel(interaction):
@@ -5578,7 +5578,7 @@ class Music(commands.Cog):
         )
         view.message = await interaction.original_response()
 
-    @app_commands.command(name="music_loop", description="切換循環模式（不選則依 關閉→單曲→佇列 順序切換）")
+    @app_commands.command(name="music_loop", description="切換循環模式")
     @app_commands.describe(mode="指定循環模式；不填則自動切換到下一個模式")
     @app_commands.choices(mode=[
         app_commands.Choice(name="關閉", value="off"),
@@ -5597,7 +5597,7 @@ class Music(commands.Cog):
         player.loop_mode = new_mode
         await self._announce(interaction, f"{LOOP_LABELS[new_mode]}{self._operator_stamp(interaction)}")
 
-    @app_commands.command(name="music_seek", description="跳轉到指定時間，例如 90、1:30、+10、-15")
+    @app_commands.command(name="music_seek", description="跳轉到指定時間")
     @app_commands.describe(time="絕對時間（秒 / mm:ss / hh:mm:ss），或以 +/- 開頭的相對秒數")
     @app_commands.guild_only()
     async def seek(self, interaction: discord.Interaction, time: str):
@@ -5691,7 +5691,7 @@ class Music(commands.Cog):
     # ==========================================================
     # 用戶歌單管理指令（每個用戶上限 1 個歌單、最多 100 首歌）
     # ==========================================================
-    @app_commands.command(name="music_playlist_create", description="建立個人音樂歌單並命名（每位用戶上限 1 個歌單，最多 100 首歌）")
+    @app_commands.command(name="music_playlist_create", description="建立個人歌單")
     @app_commands.describe(
         name="歌單名稱（最多 50 字）",
         is_public="是否設為公開歌單（公開後同伺服器成員可在 /music_play 選單中直接看到）",
@@ -5740,7 +5740,7 @@ class Music(commands.Cog):
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @app_commands.command(name="music_playlist_add", description="搜尋歌曲並新增至你的個人歌單（上限 100 首）")
+    @app_commands.command(name="music_playlist_add", description="新增歌曲到個人歌單")
     @app_commands.describe(query="歌曲名稱 / 關鍵字，或是 YouTube、SoundCloud、Spotify 網址")
     async def music_playlist_add(self, interaction: discord.Interaction, query: str):
         pl = get_user_playlist(interaction.user.id)
@@ -5849,7 +5849,7 @@ class Music(commands.Cog):
             ephemeral=True,
         )
 
-    @app_commands.command(name="music_playlist_edit", description="編輯個人歌單（刪除歌曲、重新排序、切換公開/私人、重新命名或重產分享碼）")
+    @app_commands.command(name="music_playlist_edit", description="編輯個人歌單")
     @app_commands.describe(
         delete_index="要刪除的歌曲編號（1 ~ 100）",
         move_from="重新排序：要移動的歌曲原編號（1 ~ 100）",
@@ -5936,7 +5936,7 @@ class Music(commands.Cog):
         except (discord.NotFound, discord.HTTPException):
             pass
 
-    @app_commands.command(name="music_playlist_remove", description="刪除你的個人歌單（會跳出確認訊息）")
+    @app_commands.command(name="music_playlist_remove", description="刪除個人歌單")
     async def music_playlist_remove(self, interaction: discord.Interaction):
         pl = get_user_playlist(interaction.user.id)
         if pl is None:
@@ -5960,7 +5960,7 @@ class Music(commands.Cog):
         view = PlaylistRemoveConfirmView(interaction.user.id, pl["name"])
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-    @app_commands.command(name="music_playlist_sync", description="將目前伺服器的播放佇列直接新增至你的個人歌單內")
+    @app_commands.command(name="music_playlist_sync", description="將播放佇列加入個人歌單")
     async def music_playlist_sync(self, interaction: discord.Interaction):
         pl = get_user_playlist(interaction.user.id)
         if pl is None:
@@ -6024,7 +6024,7 @@ class Music(commands.Cog):
             ephemeral=True,
         )
 
-    @app_commands.command(name="music_playlist", description="查看你的個人歌單（分頁顯示，一頁顯示 10 首）")
+    @app_commands.command(name="music_playlist", description="查看個人歌單")
     async def music_playlist_view(self, interaction: discord.Interaction):
         pl = get_user_playlist(interaction.user.id)
         if pl is None:

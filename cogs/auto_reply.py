@@ -1155,7 +1155,7 @@ class AutoReply(commands.Cog):
 
     # ---------- 指令 ----------
 
-    @app_commands.command(name='auto_reply_add', description='新增自動回覆規則：規則名稱、偵測關鍵字→機器人回覆內容→生效範圍（每伺服器上限 10 條，之後可再新增其他關鍵字）')
+    @app_commands.command(name='auto_reply_add', description='新增自動回覆規則')
     @app_commands.describe(
         keyword='要偵測的關鍵字（訊息內容「包含」此關鍵字就會觸發，不分大小寫，最多 60 字；之後可用 /auto_reply_edit 再加最多 10 個關鍵字）',
         reply='機器人偵測到關鍵字時要自動回覆的內容',
@@ -1267,7 +1267,7 @@ class AutoReply(commands.Cog):
         embed.set_footer(text='訊息內容「包含」關鍵字即觸發（不分大小寫、忽略多餘空白）；同一人對同一條規則 3 秒內不重複回覆。之後可用 /auto_reply_edit 增修關鍵字與回覆內容，或暫停／恢復這條規則。')
         await interaction.followup.send(embed=embed, view=build_panel_link_view(guild.id), ephemeral=True)
 
-    @app_commands.command(name='auto_reply_edit', description='編輯自動回覆規則：編輯關鍵字／回覆內容／生效範圍，也能暫停或恢復整條規則（設定保留）')
+    @app_commands.command(name='auto_reply_edit', description='編輯自動回覆規則')
     @app_commands.guild_only()
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.checks.has_permissions(manage_guild=True)  # H3: 執行期檢查，伺服器端覆寫權限也擋得住
@@ -1303,7 +1303,7 @@ class AutoReply(commands.Cog):
         )
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
-    @app_commands.command(name='auto_reply_list', description='列出所有自動回覆規則（一頁一條，可翻頁：規則名稱、狀態、關鍵字、回覆內容、生效範圍）')
+    @app_commands.command(name='auto_reply_list', description='列出自動回覆規則')
     @app_commands.guild_only()
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.checks.has_permissions(manage_guild=True)  # H3: 執行期檢查，伺服器端覆寫權限也擋得住
@@ -1333,7 +1333,7 @@ class AutoReply(commands.Cog):
         )
         view.message = msg
 
-    @app_commands.command(name='auto_reply_remove', description='刪除自動回覆規則（從目前「已生效」的規則中選取，刪除前需確認）')
+    @app_commands.command(name='auto_reply_remove', description='刪除自動回覆規則')
     @app_commands.guild_only()
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.checks.has_permissions(manage_guild=True)  # H3: 執行期檢查，伺服器端覆寫權限也擋得住
