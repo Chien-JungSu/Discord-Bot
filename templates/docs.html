@@ -174,17 +174,8 @@
 
   <main>
     <header class="page-header">
-      <!-- 頂部同行：左側返回首頁按鈕 + 置中「指令文檔」標題 + 右側對稱平衡佔位 -->
       <div class="header-top-row">
-        <a class="back-link" href="/" id="back-link">
-          <!-- Material Symbols Rounded: arrow_back 圖標 -->
-          <svg class="back-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-            <path d="M19 11H7.83l4.88-4.88c.39-.39.39-1.03 0-1.42a.9959.9959 0 0 0-1.41 0l-6.59 6.59c-.39.39-.39 1.02 0 1.41l6.59 6.59c.39.39 1.02.39 1.41 0 .39-.39.39-1.02 0-1.41L7.83 13H19c.55 0 1-.45 1-1s-.45-1-1-1z"/>
-          </svg>
-          <span>返回首頁</span>
-        </a>
         <h1 class="page-title">指令文檔</h1>
-        <div class="header-side-placeholder" aria-hidden="true"></div>
       </div>
 
       <!-- 上部分割線（1dp，左右留邊距） -->
@@ -354,7 +345,6 @@
   <script>
     (function () {
       const backToTopBtn = document.getElementById('back-to-top');
-      const backLink = document.getElementById('back-link');
 
       // 互動式游標液態光澤追蹤（Apple Liquid Glass 光斑追蹤：快取幾何 + requestAnimationFrame 節流）
       function setupSpecularHighlight(el) {
@@ -388,24 +378,8 @@
         }, { passive: true });
       }
 
-      setupSpecularHighlight(backLink);
       setupSpecularHighlight(backToTopBtn);
       document.querySelectorAll('.docs-stack > .card').forEach((card) => setupSpecularHighlight(card));
-
-      // “返回首頁”按鈕：平滑退出過渡動效並導回首頁頂端
-      if (backLink) {
-        backLink.addEventListener('click', (e) => {
-          if (e.metaKey || e.ctrlKey || e.shiftKey) return;
-          e.preventDefault();
-          sessionStorage.setItem('scroll_to_top', 'true');
-          document.body.style.transition = 'opacity 0.2s cubic-bezier(0.2, 0, 0, 1), transform 0.2s cubic-bezier(0.2, 0, 0, 1)';
-          document.body.style.opacity = '0';
-          document.body.style.transform = 'scale(0.98)';
-          setTimeout(() => {
-            window.location.href = '/';
-          }, 180);
-        });
-      }
 
       // arrow_upward 圖標按鈕：回到最頂端
       if (backToTopBtn) {
