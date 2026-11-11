@@ -203,6 +203,7 @@
    - 頂部導航下拉選單中的「按鈕」與「超連結」必須擁有完全相同的內距、字體、圓角與 Hover 樣式，禁止出現預設瀏覽器邊框或灰色突兀區塊。
 2. **輸入框防干擾**：所有新增、編輯、搜尋表單的文字輸入框，必須加入 `autocomplete="off"`，避免瀏覽器歷史紀錄下拉框遮擋操作介面。
 3. **危險操作警戒樣式**：所有具備破壞性（刪除歌單、刪除規則、清空設定）的按鈕，必須具備 `.danger` 紅色警戒樣式，且點擊時必須彈出自訂二次確認彈框（Confirm Modal），禁止未確認直接刪除。
+4. **精簡文案原則**：Avoid unnecessary secondary labels and descriptions. Let the layout do the explaining.（避免不必要的次要標籤與說明文字，讓版面配置本身說話。）
 
 ### 原則五：Discord API 相容性與版本棄用防護
 1. **Message Interaction 判定**：
