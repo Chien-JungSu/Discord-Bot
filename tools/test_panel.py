@@ -24,7 +24,7 @@ def test_docs_page():
     html = res.data.decode('utf-8')
     assert 'page-title' in html
     assert '指令文檔' in html
-    assert 'back-link' in html
+    assert 'back-link' not in html
     assert '登入' in html
     assert 'header-top-right' not in html
     assert 'top-right-nav' not in html
