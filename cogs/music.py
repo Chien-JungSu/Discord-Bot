@@ -383,7 +383,8 @@ def build_now_playing_container(
             next_track = first_item[0] if isinstance(first_item, tuple) else first_item
             next_title = getattr(next_track, "title", None) or "未知曲目"
             next_uri = getattr(next_track, "uri", None)
-            next_preview = f"[{next_title}]({next_uri})" if next_uri else next_title
+            title_display = f"[{next_title}]({next_uri})" if next_uri else next_title
+            next_preview = f"{title_display}（佇列共 {len(song_queue)} 首）"
 
         requester_name = getattr(player, "current_requester", None) or "未知"
         source_raw = getattr(track, "source", None) or ""
@@ -4300,8 +4301,13 @@ class Music(commands.Cog):
                 pass
 
         def alive() -> bool:
-            guild = self.bot.get_guild(guild_id)
-            return guild is not None and guild.voice_client is player and getattr(player, "connected", True)
+            guild = interaction.guild or self.bot.get_guild(guild_id)
+            if guild is None:
+                return False
+            if getattr(player, "channel", None) is not None:
+                return True
+            vc = getattr(guild, "voice_client", None)
+            return (vc is player or vc is None) and bool(getattr(player, "connected", True))
 
         try:
             # ---- 1. 取得曲目清單（只保留曲名／歌手／時長）----
@@ -4329,63 +4335,82 @@ class Music(commands.Cog):
                 await self._ephemeral_error(interaction, f"😕 這份 {label} 內容裡沒有可以匯入的曲目。")
                 return
 
-            sem = asyncio.Semaphore(IMPORT_CONCURRENCY)
-            index = 0
-            queued_position = 0   # 單曲被排進佇列時的位置（0 代表直接開始播放）
-
-            # ---- 2. 第一首：逐首嘗試到成功為止，立刻開始播放，使用者不必等整批 ----
-            while index < total and ok == 0:
-                st = tracks[index]
-                index += 1
-                done += 1
-                playable = await self._search_spotify_track(sem, st)
-                if playable is None:
-                    fail += 1
-                    continue
-                if not alive():
-                    return
-
-                was_idle = self._is_player_idle(player)
-                player.song_queue.append((playable, requester_name, requester_id))
-                ok += 1
-                if not was_idle:
-                    queued_position = len(player.song_queue)
-                await self._start_if_idle(player)
-                await clear_thinking()
-
-            if ok == 0 and fail >= total:
-                await self._ephemeral_error(interaction, f"😕 這份 {label} 內容的曲目都找不到對應的音源，請稍後再試。")
-                return
-
-            # ---- 3. 其餘曲目：分批解析後依序加入佇列 ----
-            trunc_hint = f"（已截斷至前 {IMPORT_MAX_TRACKS} 首）" if result.truncated else ""
-            last_progress = 0.0
-            while index < total:
-                batch = tracks[index:index + IMPORT_BATCH_SIZE]
-                index += len(batch)
-                results = await asyncio.gather(*(self._search_spotify_track(sem, st) for st in batch))
-                if not alive():
-                    return  # 已離開語音頻道：解析好的曲目直接丟棄
-                # 這一段沒有 await：整批「全進或全不進」，被取消時不會留下半批
-                for playable in results:
+            # 若為 YouTube 歌單且 Lavalink 已全數解析為 Playable，直接全量加入佇列以獲取最佳效能與穩定度
+            if yt_url and all(getattr(t, "playable", None) is not None for t in tracks):
+                for st in tracks:
                     done += 1
+                    player.song_queue.append((st.playable, requester_name, requester_id))
+                    ok += 1
+                try:
+                    await self._start_if_idle(player)
+                except Exception as exc:
+                    print(f">>> 啟動播放第一首失敗：{exc}")
+                await clear_thinking()
+                index = total
+            else:
+                sem = asyncio.Semaphore(IMPORT_CONCURRENCY)
+                index = 0
+                queued_position = 0   # 單曲被排進佇列時的位置（0 代表直接開始播放）
+
+                # ---- 2. 第一首：逐首嘗試到成功為止，立刻開始播放，使用者不必等整批 ----
+                while index < total and ok == 0:
+                    st = tracks[index]
+                    index += 1
+                    done += 1
+                    playable = await self._search_spotify_track(sem, st)
                     if playable is None:
                         fail += 1
                         continue
+                    if not alive():
+                        return
+
+                    was_idle = self._is_player_idle(player)
                     player.song_queue.append((playable, requester_name, requester_id))
                     ok += 1
-                await self._start_if_idle(player)
+                    if not was_idle:
+                        queued_position = len(player.song_queue)
+                    try:
+                        await self._start_if_idle(player)
+                    except Exception as exc:
+                        print(f">>> 啟動播放第一首失敗：{exc}")
+                    await clear_thinking()
 
-                # 進度更新節流：沿用第 6 週的間隔與 429 退避記錄，避免頻繁 edit 觸發 rate limit
-                now = time.monotonic()
-                if now - last_progress >= IMPORT_PROGRESS_INTERVAL and now >= self._rate_limit_until.get(guild_id, 0.0):
-                    last_progress = now
-                    self._set_panel_notice(
-                        guild_id,
-                        f"📥 **{label} 匯入中**：已處理 {done}/{total}（成功 {ok}／失敗 {fail}）{trunc_hint}",
-                        duration=None,
-                    )
-                    await self._sync_panel(guild_id, player)
+                if ok == 0 and fail >= total:
+                    await self._ephemeral_error(interaction, f"😕 這份 {label} 內容的曲目都找不到對應的音源，請稍後再試。")
+                    return
+
+                # ---- 3. 其餘曲目：分批解析後依序加入佇列 ----
+                trunc_hint = f"（已截斷至前 {IMPORT_MAX_TRACKS} 首）" if result.truncated else ""
+                last_progress = 0.0
+                while index < total:
+                    batch = tracks[index:index + IMPORT_BATCH_SIZE]
+                    index += len(batch)
+                    results = await asyncio.gather(*(self._search_spotify_track(sem, st) for st in batch))
+                    if not alive():
+                        return  # 已離開語音頻道：解析好的曲目直接丟棄
+                    # 這一段沒有 await：整批「全進或全不進」，被取消時不會留下半批
+                    for playable in results:
+                        done += 1
+                        if playable is None:
+                            fail += 1
+                            continue
+                        player.song_queue.append((playable, requester_name, requester_id))
+                        ok += 1
+                    try:
+                        await self._start_if_idle(player)
+                    except Exception as exc:
+                        print(f">>> 啟動後續播放失敗：{exc}")
+
+                    # 進度更新節流：沿用第 6 週的間隔與 429 退避記錄，避免頻繁 edit 觸發 rate limit
+                    now = time.monotonic()
+                    if now - last_progress >= IMPORT_PROGRESS_INTERVAL and now >= self._rate_limit_until.get(guild_id, 0.0):
+                        last_progress = now
+                        self._set_panel_notice(
+                            guild_id,
+                            f"📥 **{label} 匯入中**：已處理 {done}/{total}（成功 {ok}／失敗 {fail}）{trunc_hint}",
+                            duration=None,
+                        )
+                        await self._sync_panel(guild_id, player)
 
             # ---- 4. 結果回報（寫在面板底部，一段時間後自動消失）----
             if total == 1:

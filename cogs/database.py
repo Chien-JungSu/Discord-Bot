@@ -3023,7 +3023,7 @@ def is_live_track_data(t: Any) -> bool:
     if length is not None:
         try:
             val = int(length)
-            if val <= 0 or val >= 86_400_000:
+            if val >= 86_400_000:  # 超過 24 小時視為長直播串流
                 return True
         except (ValueError, TypeError):
             pass

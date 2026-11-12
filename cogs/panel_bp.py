@@ -2044,6 +2044,57 @@ def user_playlist_add_track_api():
             'message': '目前不支援 Spotify 音源，請改用 YouTube 或 SoundCloud 連結／關鍵字。',
         }), 400
 
+    from cogs.music import parse_youtube_playlist_url
+    yt_url = parse_youtube_playlist_url(query)
+    if yt_url:
+        rem_cap = PLAYLIST_MAX_TRACKS - len(current_tracks)
+        track_dicts = []
+        bot = get_bot()
+        if bot and getattr(bot, 'loop', None) and bot.loop.is_running():
+            music_cog = bot.get_cog('Music')
+            if music_cog is not None:
+                async def _resolve_yt_playlist():
+                    return await music_cog._fetch_youtube_playlist(yt_url, rem_cap)
+                try:
+                    fetch_res = run_coroutine_threadsafe(_resolve_yt_playlist(), timeout=20)
+                    for yt_trk in (fetch_res.tracks if fetch_res else []):
+                        if yt_trk.playable and music_cog._is_live_track(yt_trk.playable):
+                            continue
+                        if yt_trk.playable:
+                            td = music_cog._playable_to_playlist_dict(yt_trk.playable)
+                        else:
+                            td = {
+                                "title": yt_trk.title,
+                                "author": "",
+                                "uri": yt_trk.search_text or "",
+                                "length": 0,
+                                "identifier": "",
+                            }
+                        track_dicts.append(td)
+                except Exception as exc:
+                    print(f"⚠️ 網頁面板透過 Lavalink 解析 YouTube 歌單失敗 ({query}): {exc}")
+
+        if not track_dicts:
+            return jsonify({
+                'status': 'error',
+                'message': '無法解析此 YouTube 播放清單，或清單內曲目均為直播串流／私人影片。',
+            }), 400
+
+        updated_pl, added_count, dup_count, overflow_count = add_tracks_to_user_playlist(
+            user_id, track_dicts, owner_name=_user_display_name(user)
+        )
+        msg_parts = [f"已成功匯入 {added_count} 首歌曲！"]
+        if dup_count > 0:
+            msg_parts.append(f"忽略 {dup_count} 首重複")
+        if overflow_count > 0:
+            msg_parts.append(f"超過 {PLAYLIST_MAX_TRACKS} 首上限略過 {overflow_count} 首")
+        return jsonify({
+            'status': 'ok',
+            'message': "，".join(msg_parts),
+            'playlist': updated_pl,
+            'added_count': added_count,
+        })
+
     track_dict = None
     bot = get_bot()
     if bot and getattr(bot, 'loop', None) and bot.loop.is_running():

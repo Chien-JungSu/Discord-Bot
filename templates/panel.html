@@ -179,7 +179,7 @@
     <!-- 已登入：控制面板核心（含伺服器選擇、伺服器設定、以及所有登入用戶皆可使用的「個人設定」） -->
 
     <!-- 1. 伺服器選擇畫面 (初始僅顯示此畫面) -->
-    <section id="view-server-selection" class="server-selector-section server-selection-view">
+    <section id="view-server-selection" class="server-selection-view{% if guilds %} server-selector-section{% endif %}">
       {% if not guilds %}
       <!-- 已登入但無可管理伺服器：顯示提示與前往個人設定按鈕 -->
       <div class="no-guilds-card">
@@ -246,6 +246,7 @@
       {% endif %}
     </section>
 
+    {% if guilds or is_owner %}
     <!-- 2. 伺服器詳細設定畫面 (點選伺服器或個人設定後顯示，初始隱藏) -->
     <div id="view-server-settings" class="server-settings-view" style="display: none;">
       <!-- 伺服器未加入機器人提示卡 -->
@@ -1437,6 +1438,7 @@
     </div>
 
     </div> <!-- /#view-server-settings -->
+    {% endif %}
     {% endif %}
   </main>
 
