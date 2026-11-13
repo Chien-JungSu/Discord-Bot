@@ -101,15 +101,48 @@ DEPRECATED_MODEL_MAPPING = {
     "meta/llama-3.3-70b-instruct": "deepseek-ai/deepseek-v4.1-flash",
     "meta/llama-3.2-11b-vision-instruct": "deepseek-ai/deepseek-v4.1-flash",
     "nvidia:meta/llama-3.2-11b-vision-instruct": "nvidia:deepseek-ai/deepseek-v4.1-flash",
-    "gemini-2.5-flash-lite": "gemini-flash-latest",
-    "gemini-2.0-flash": "gemini-flash-latest",
-    "gemini-2.0-flash-exp:free": "gemini-flash-latest",
+    "gemini-2.5-flash-lite": "gemini-3.5-flash-lite",
+    "gemini:gemini-2.5-flash-lite": "gemini:gemini-3.5-flash-lite",
+    "gemini-2.0-flash": "gemini-3.5-flash-lite",
+    "gemini:gemini-2.0-flash": "gemini:gemini-3.5-flash-lite",
+    "gemini-2.0-flash-exp:free": "gemini-3.5-flash-lite",
+    "gemini:gemini-2.0-flash-exp:free": "gemini:gemini-3.5-flash-lite",
+    "gemini-3.0-flash": "gemini-3-flash-preview",
+    "gemini:gemini-3.0-flash": "gemini:gemini-3-flash-preview",
     "mistral-small-latest": "ministral-8b-latest",
-    "gemma-4-31b-it": "gemini-flash-latest",
-    "gemini:gemma-4-31b-it": "gemini-flash-latest",
-    "kilo-auto/free": "gemini-flash-latest",
+    "gemma-4-31b-it": "gemini-3.5-flash-lite",
+    "gemini:gemma-4-31b-it": "gemini:gemini-3.5-flash-lite",
+    "kilo-auto/free": "gemini-3.5-flash-lite",
     "openrouter/auto": "auto",
 }
+
+
+def _infer_provider_from_model(model: Optional[str]) -> Optional[str]:
+    """依模型名稱前綴推斷所屬供應商 ID，方便使用者僅指定模型名稱時自動路由。"""
+    if not model:
+        return None
+    lower = model.strip().lower()
+    if lower.startswith(("gemini-", "gemma-")):
+        return "gemini"
+    if lower.startswith(("deepseek-ai/", "z-ai/", "meta/", "nvidia/", "qwen/")):
+        return "nvidia"
+    if lower.startswith(("mistral", "ministral", "codestral", "pixtral")):
+        return "mistral"
+    return None
+
+
+def _gemini_reasoning_effort(model: str) -> Optional[str]:
+    """依 Gemini 模型回傳適合的 OpenAI 相容 reasoning_effort，避免無效的 thinking_budget 400 重試。"""
+    lower = (model or "").strip().lower()
+    if not lower:
+        return None
+    if lower.startswith("gemini-2.5-flash") and "lite" not in lower:
+        return "none"
+    if "flash-lite" in lower or lower.startswith("gemini-3-flash"):
+        return "minimal"
+    if lower.startswith(("gemini-4-", "gemini-3.", "gemini-flash-latest")):
+        return "low"
+    return "low"
 
 
 @dataclass
@@ -192,8 +225,20 @@ class MultiProviderLLMRouter:
                 base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
                 env_keys=["GEMINI_API_KEY", "GOOGLE_API_KEY"],
                 default_text_model="gemini-3.5-flash-lite",
-                default_vision_model="gemini-flash-latest",
-                fallback_models=["gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-3.0-flash", "gemini-3.6-flash", "gemini-3.7-flash"],
+                default_vision_model="gemini-3.5-flash-lite",
+                fallback_models=[
+                    "gemini-3.5-flash-lite",
+                    "gemini-flash-lite-latest",
+                    "gemini-3.1-flash-lite",
+                    "gemini-2.5-flash",
+                    "gemini-3-flash-preview",
+                    "gemini-3.5-flash",
+                    "gemini-3.6-flash",
+                    "gemini-3.7-flash",
+                    "gemini-3.8-flash",
+                    "gemini-4-hydrogen",
+                    "gemini-flash-latest",
+                ],
                 supports_vision=True,
                 rpm_limit_desc="5 ~ 15 RPM",
                 quota_desc="1,500 RPD (百萬超長 Context & 視覺分析)",
@@ -397,19 +442,26 @@ class MultiProviderLLMRouter:
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
-        # 若為 Gemini 且支援思考預算，嘗試禁用 thinking_budget 以免浪費 token 預算導致回覆被切斷
+        # 若為 Gemini，改用 OpenAI 相容的 reasoning_effort 控制思考量，避免帶無效 thinking_budget 觸發 400 重試
         if prov.id == "gemini":
-            call_kwargs["extra_body"] = {"thinking_budget": 0}
+            effort = _gemini_reasoning_effort(model)
+            if effort:
+                call_kwargs["reasoning_effort"] = effort
 
         try:
             async with asyncio.timeout(timeout_seconds):
                 response = await client.chat.completions.create(**call_kwargs)
         except Exception as call_exc:
-            # 若帶 extra_body 被 API 拒絕 (400 Bad Request)，去除 extra_body 自動降級重試
-            if "extra_body" in call_kwargs and (
-                "400" in str(call_exc) or "extra_body" in str(call_exc) or "thinking" in str(call_exc)
+            # 若參數不被特定模型/端點接受 (400 Bad Request)，移除進階參數後自動降級重試
+            err_lower = str(call_exc).lower()
+            if ("reasoning_effort" in call_kwargs or "extra_body" in call_kwargs) and (
+                "400" in err_lower
+                or "extra_body" in err_lower
+                or "thinking" in err_lower
+                or "reasoning" in err_lower
             ):
                 retry_kwargs = dict(call_kwargs)
+                retry_kwargs.pop("reasoning_effort", None)
                 retry_kwargs.pop("extra_body", None)
                 async with asyncio.timeout(timeout_seconds):
                     response = await client.chat.completions.create(**retry_kwargs)
@@ -480,9 +532,24 @@ class MultiProviderLLMRouter:
         start_time = time.perf_counter()
         is_vision = bool(image_url)
 
-        # 0. 自動對照轉發過期或停用模型 (如舊設定或資料庫殘留)
-        if preferred_model and preferred_model in DEPRECATED_MODEL_MAPPING:
-            preferred_model = DEPRECATED_MODEL_MAPPING[preferred_model]
+        # 0. 自動解析 provider:model 前綴、轉發過期模型並推斷對應供應商
+        if preferred_model:
+            preferred_model = preferred_model.strip()
+            if preferred_model in DEPRECATED_MODEL_MAPPING:
+                preferred_model = DEPRECATED_MODEL_MAPPING[preferred_model]
+            if ":" in preferred_model:
+                prefix, rest = preferred_model.split(":", 1)
+                if prefix in self.providers:
+                    if not preferred_provider_id:
+                        preferred_provider_id = prefix
+                    if preferred_provider_id == prefix:
+                        preferred_model = rest
+            if preferred_model in DEPRECATED_MODEL_MAPPING:
+                preferred_model = DEPRECATED_MODEL_MAPPING[preferred_model]
+            if not preferred_provider_id:
+                inferred_provider = _infer_provider_from_model(preferred_model)
+                if inferred_provider and inferred_provider in self.providers:
+                    preferred_provider_id = inferred_provider
 
         # 1. 圖片處理：嘗試將 Discord URL 轉為 Base64 Data URI
         final_image_data_uri: Optional[str] = None

@@ -10,6 +10,13 @@ from typing import List, Tuple, Optional, Set, Any, Union
 import discord
 from PIL import Image, ImageDraw, ImageFont
 
+from cogs.latex_formatter import (
+    format_latex_in_text,
+    _find_inline_dollar_end,
+    _find_unescaped,
+    _looks_like_inline_latex,
+)
+
 DELIM_PATTERN = re.compile(r'^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$')
 
 
@@ -261,6 +268,67 @@ def wrap_cell_text(text: str, font: FontRenderer | ImageFont.ImageFont, max_widt
     return lines or ['']
 
 
+def _split_table_pipes(s: str) -> List[str]:
+    r"""依未進入行內程式/公式且非 `\|` 跳脫之直線 `|` 切割表格欄位。"""
+    cells: List[str] = []
+    cur: List[str] = []
+    i = 0
+    n = len(s)
+
+    while i < n:
+        ch = s[i]
+        # 反斜線跳脫管道符號：\| 保留為字面 |
+        if ch == "\\" and i + 1 < n and s[i + 1] == "|":
+            cur.append("|")
+            i += 2
+            continue
+        # 行內程式碼 `...` 不切欄
+        if ch == "`":
+            end_bt = s.find("`", i + 1)
+            if end_bt != -1:
+                cur.append(s[i : end_bt + 1])
+                i = end_bt + 1
+                continue
+        # \(...\) 與 \[...\] 數學式內部之 |（如絕對值 $|x|$ 或條件機率 $P(A|B)$）不切欄
+        if s.startswith("\\(", i) and (i == 0 or s[i - 1] != "\\"):
+            end_m = _find_unescaped(s, "\\)", i + 2)
+            if end_m != -1:
+                cur.append(s[i : end_m + 2])
+                i = end_m + 2
+                continue
+        if s.startswith("\\[", i) and (i == 0 or s[i - 1] != "\\"):
+            end_m = _find_unescaped(s, "\\]", i + 2)
+            if end_m != -1:
+                cur.append(s[i : end_m + 2])
+                i = end_m + 2
+                continue
+        # $$...$$ 與已確認為合法 LaTeX 的 $...$ 不切欄，但保留「$100 | $200」金額欄切分
+        if s.startswith("$$", i) and (i == 0 or s[i - 1] != "\\"):
+            end_dd = _find_unescaped(s, "$$", i + 2)
+            if end_dd != -1:
+                cur.append(s[i : end_dd + 2])
+                i = end_dd + 2
+                continue
+        if ch == "$" and (i == 0 or s[i - 1] != "\\"):
+            end_d = _find_inline_dollar_end(s, i + 1)
+            if end_d != -1:
+                after_char = s[end_d + 1] if end_d + 1 < n else ""
+                if _looks_like_inline_latex(s[i + 1 : end_d], after_char):
+                    cur.append(s[i : end_d + 1])
+                    i = end_d + 1
+                    continue
+        if ch == "|":
+            cells.append("".join(cur))
+            cur = []
+            i += 1
+            continue
+        cur.append(ch)
+        i += 1
+
+    cells.append("".join(cur))
+    return cells
+
+
 def strip_cell_markdown(s: str) -> str:
     """移除單元格內的粗體、斜體與代碼反引號。"""
     s = re.sub(r'\*\*(.*?)\*\*', r'\1', s)
@@ -429,9 +497,15 @@ def extract_and_render_markdown_tables(text: str) -> Tuple[str, List[discord.Fil
                 s = l.strip()
                 if s.startswith('|'):
                     s = s[1:]
-                if s.endswith('|'):
+                if s.endswith('|') and not s.endswith('\\|'):
                     s = s[:-1]
-                return [strip_cell_markdown(c) for c in s.split('|')]
+                raw_cells = _split_table_pipes(s)
+                return [
+                    strip_cell_markdown(
+                        format_latex_in_text(c, escape_markdown=False, allow_multiline_block=False)
+                    )
+                    for c in raw_cells
+                ]
 
             headers = split_row(header_line)
             delims = split_row(delim_line)

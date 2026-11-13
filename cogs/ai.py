@@ -7,7 +7,7 @@ import re
 import time
 import traceback
 import unicodedata
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import discord
 from discord import app_commands, ui
@@ -31,9 +31,67 @@ from cogs.database import (
     set_user_ai_points,
     update_user_ai_points,
 )
+from cogs.latex_formatter import format_latex_in_text
+from cogs.latex_renderer import extract_and_render_latex_formulas
 from cogs.llm_router import router, strip_thinking_tags, strip_roleplay_prefix
 from cogs.memory import memory_manager
 from cogs.table_renderer import extract_and_render_markdown_tables
+
+
+def _build_ai_model_choices() -> List[app_commands.Choice[str]]:
+    """依 `AI_PROVIDER_MODELS` 產生 Discord 斜線指令的模型選單項目（上限 25 項）。"""
+    choices: List[app_commands.Choice[str]] = []
+    for item in AI_PROVIDER_MODELS[:25]:
+        model_id = str(item.get("id") or "auto")
+        base_name = str(item.get("name") or model_id)
+        if model_id == "gemini:gemini-3.5-flash-lite":
+            label = "gemini-3.5-flash-lite (預設 · text, vision)"
+        elif model_id == "gemini:gemini-4-hydrogen":
+            label = "gemini-4-hydrogen (高階 · text, vision)"
+        else:
+            label = base_name
+        choices.append(app_commands.Choice(name=label[:100], value=model_id))
+    return choices
+
+
+def _resolve_provider_and_model(
+    selected_spec: Optional[str],
+    guild_model: Optional[str],
+) -> Tuple[Optional[str], Optional[str]]:
+    """解析單次指令指定值或伺服器設定值，回傳 `(preferred_provider_id, preferred_model)`。"""
+    spec = (selected_spec or "").strip()
+    configured = (guild_model or "auto").strip()
+
+    if spec and spec != "auto":
+        if ":" in spec:
+            prov, model = spec.split(":", 1)
+            return (prov or None), (model or None)
+        if spec in router.providers:
+            if configured and configured != "auto" and ":" in configured:
+                g_prov, g_model = configured.split(":", 1)
+                if g_prov == spec:
+                    return spec, (g_model or None)
+            return spec, None
+        return None, spec
+
+    if not configured or configured == "auto":
+        return None, None
+    if ":" in configured:
+        g_prov, g_model = configured.split(":", 1)
+        return (g_prov or None), (g_model or None)
+    return None, configured
+
+
+def _prepare_ai_output(raw_text: str) -> Tuple[str, List[discord.File]]:
+    """清理推理標籤與角色前綴、轉繪表格與 2D 數學公式為圖片，並格式化行內 LaTeX。"""
+    raw_clean = strip_roleplay_prefix(strip_thinking_tags(raw_text or ""))
+    clean_response, table_files = extract_and_render_markdown_tables(raw_clean)
+    clean_response, math_files = extract_and_render_latex_formulas(
+        clean_response,
+        max_images=max(0, 9 - len(table_files)),
+    )
+    clean_response = format_latex_in_text(clean_response, escape_markdown=True)
+    return clean_response, (table_files + math_files)
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(BASE_DIR, '.env'))
@@ -172,8 +230,11 @@ AI_FOOTER_PATTERN = re.compile(
 TEMP_MESSAGE_FOOTER_PATTERN = re.compile(
     r'(?:^|\n)-#\s*由\s+.+\s+傳送\s*•\s*<t:\d+:R>\s*自動刪除\s*$'
 )
-# AI 渲染之表格附件檔名特徵：`table_1.png`
+# AI 渲染之表格與數學公式附件檔名特徵與佔位標記正則
 RENDERED_TABLE_FILENAME_PATTERN = re.compile(r'^table_\d+\.png$', re.IGNORECASE)
+RENDERED_MEDIA_FILENAME_PATTERN = re.compile(r'^(?:table|math)_\d+\.png$', re.IGNORECASE)
+MEDIA_IMAGE_SPLIT_RE = re.compile(r'(\[\[(?:TABLE|MATH)_IMAGE:[\w\.\-]+\]\])')
+MEDIA_IMAGE_TOKEN_RE = re.compile(r'\[\[(?:TABLE|MATH)_IMAGE:([\w\.\-]+)\]\]')
 
 
 def split_text_by_markdown_separators(text: str) -> List[str]:
@@ -603,10 +664,10 @@ class AI(commands.Cog):
         thumbnail_added = False
 
         for idx, seg in enumerate(segments):
-            # 切分 segment 內的表格標記 [[TABLE_IMAGE:filename]]
-            sub_parts = re.split(r'(\[\[TABLE_IMAGE:[\w\.\-]+\]\])', seg)
+            # 切分 segment 內的表格與公式圖片標記 [[TABLE_IMAGE:...]] / [[MATH_IMAGE:...]]
+            sub_parts = MEDIA_IMAGE_SPLIT_RE.split(seg)
             for part in sub_parts:
-                m = re.match(r'\[\[TABLE_IMAGE:([\w\.\-]+)\]\]', part)
+                m = MEDIA_IMAGE_TOKEN_RE.fullmatch(part)
                 if m:
                     filename = m.group(1)
                     gallery_item = discord.MediaGalleryItem(f"attachment://{filename}")
@@ -642,6 +703,42 @@ class AI(commands.Cog):
                 container_children.append(ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small))
             container_children.append(ui.TextDisplay(f"-# {footer_text.strip()}"))
 
+        # 確保不超過 Discord Components V2 單則訊息 40 個元件之上限
+        has_footer = bool(footer_text and footer_text.strip())
+
+        def _component_count(items: List[discord.ui.Item]) -> int:
+            total = 1  # Container 本體
+            for it in items:
+                if isinstance(it, ui.Section):
+                    total += 3
+                elif isinstance(it, ui.MediaGallery):
+                    total += 1 + len(it.items)
+                else:
+                    total += 1
+            return total
+
+        if _component_count(container_children) > 38:
+            footer_sep_idx = len(container_children) - 2 if (has_footer and len(container_children) >= 2) else -1
+            container_children = [
+                it for i, it in enumerate(container_children)
+                if not isinstance(it, ui.Separator) or i == footer_sep_idx
+            ]
+        if _component_count(container_children) > 38:
+            merged: List[discord.ui.Item] = []
+            for it in container_children:
+                if (
+                    merged
+                    and isinstance(it, ui.TextDisplay)
+                    and isinstance(merged[-1], ui.TextDisplay)
+                    and not (has_footer and it is container_children[-1])
+                ):
+                    combined = f"{merged[-1].content}\n\n{it.content}"
+                    if len(combined) <= 3850:
+                        merged[-1] = ui.TextDisplay(combined)
+                        continue
+                merged.append(it)
+            container_children = merged
+
         if not container_children:
             container_children.append(ui.TextDisplay("（無回覆內容）"))
 
@@ -658,7 +755,7 @@ class AI(commands.Cog):
         color: int = 0x5865F2,
     ) -> discord.Embed:
         """傳統 Embed 降級回退方法（若 Components V2 渲染例外時使用）。"""
-        clean_response = re.sub(r'\[\[TABLE_IMAGE:[\w\.\-]+\]\]', '', response_text).rstrip()
+        clean_response = MEDIA_IMAGE_TOKEN_RE.sub('', response_text).rstrip()
         if not clean_response:
             clean_response = "（無回覆內容）"
 
@@ -708,8 +805,8 @@ class AI(commands.Cog):
             cur_footer = footer_text if is_last else None
             cur_image = image_url if is_first else None
 
-            # 找出此 chunk 內引用的所有 table image 檔名
-            needed_filenames = re.findall(r'\[\[TABLE_IMAGE:([\w\.\-]+)\]\]', chunk)
+            # 找出此 chunk 內引用的所有 table / math image 檔名
+            needed_filenames = MEDIA_IMAGE_TOKEN_RE.findall(chunk)
             chunk_files: List[discord.File] = []
             for fname in needed_filenames:
                 if fname in file_map and fname not in allocated_files:
@@ -803,17 +900,10 @@ class AI(commands.Cog):
     @app_commands.describe(
         prompt="你想詢問 AI 的問題或對話內容",
         image="可選附帶圖片（支援 PNG/JPG/WebP/GIF，自動啟用視覺多模態分析）",
-        provider="臨時指定優先使用的 AI 提供商 (預設 auto 自動容錯容災鏈)",
+        provider="臨時指定優先使用的 AI 模型或供應商 (預設 auto 自動容錯容災鏈)",
         system_prompt="臨時覆蓋本次回答的 AI 人設指令 (留空則使用伺服器預設)",
     )
-    @app_commands.choices(
-        provider=[
-            app_commands.Choice(name="auto (text, vision)", value="auto"),
-            app_commands.Choice(name="gemini-flash-latest (text, vision)", value="gemini"),
-            app_commands.Choice(name="deepseek-ai/deepseek-v4.1-flash (text, vision)", value="nvidia"),
-            app_commands.Choice(name="ministral-8b-latest (text, vision)", value="mistral"),
-        ]
-    )
+    @app_commands.choices(provider=_build_ai_model_choices())
     async def ai_command(
         self,
         interaction: discord.Interaction,
@@ -918,21 +1008,10 @@ class AI(commands.Cog):
         context_messages.append({"role": "user", "content": f"[{user_name}]: {prompt_text}"})
 
         # 7. 呼叫 Multi-Provider Router 執行生成
-        preferred_p = provider if (provider and provider != "auto") else None
-        configured_model = str(cfg.get("model") or "auto")
-        preferred_m = None
-        if not preferred_p and configured_model != "auto":
-            if ":" in configured_model:
-                parts = configured_model.split(":", 1)
-                preferred_p = parts[0]
-                preferred_m = parts[1]
-            else:
-                preferred_m = configured_model
-        elif preferred_p and configured_model != "auto":
-            if ":" in configured_model:
-                parts = configured_model.split(":", 1)
-                if parts[0] == preferred_p:
-                    preferred_m = parts[1]
+        preferred_p, preferred_m = _resolve_provider_and_model(
+            provider,
+            str(cfg.get("model") or "auto"),
+        )
 
         response_text, error_msg, stats = await router.generate_chat_completion(
             context_messages,
@@ -981,9 +1060,8 @@ class AI(commands.Cog):
         payer_member = interaction.guild.get_member(payer_id) if interaction.guild else None
         payer_name = payer_member.display_name if payer_member else (interaction.user.display_name or interaction.user.name)
 
-        # 10. 抓取表格轉換為圖片、清理格式並發送多 Container 回覆 (超過上限自動切割，footer 永遠在末端)
-        raw_clean = strip_roleplay_prefix(strip_thinking_tags(response_text or ""))
-        clean_response, table_files = extract_and_render_markdown_tables(raw_clean)
+        # 10. 抓取表格轉換為圖片、格式化 LaTeX 並發送多 Container 回覆 (超過上限自動切割，footer 永遠在末端)
+        clean_response, table_files = _prepare_ai_output(response_text or "")
         footer_text = self._format_ai_footer(stats=stats, cost=cost, payer_name=payer_name)
 
         await self._send_ai_response_chunks(
@@ -1158,14 +1236,7 @@ class AI(commands.Cog):
         enabled="是否啟用本伺服器的 AI 智慧問答功能",
     )
     @app_commands.default_permissions(manage_guild=True)
-    @app_commands.choices(
-        model=[
-            app_commands.Choice(name="auto (text, vision)", value="auto"),
-            app_commands.Choice(name="gemini-flash-latest (text, vision)", value="gemini:gemini-flash-latest"),
-            app_commands.Choice(name="deepseek-ai/deepseek-v4.1-flash (text, vision)", value="nvidia:deepseek-ai/deepseek-v4.1-flash"),
-            app_commands.Choice(name="ministral-8b-latest (text, vision)", value="mistral:ministral-8b-latest"),
-        ]
-    )
+    @app_commands.choices(model=_build_ai_model_choices())
     async def ai_settings_command(
         self,
         interaction: discord.Interaction,
@@ -1339,11 +1410,11 @@ class AI(commands.Cog):
 
         # 若當前訊息未附帶圖片，但用戶正在回覆某一則訊息，自動抓取被回覆訊息中帶有的圖片
         if not img_url and ref_msg:
-            # 1. 優先檢查被回覆訊息的附件（略過 AI 自身渲染產生的 table_*.png 表格圖片）
+            # 1. 優先檢查被回覆訊息的附件（略過 AI 自身渲染產生的 table_*.png / math_*.png 圖片）
             for att in ref_msg.attachments:
                 ct = att.content_type or ""
                 fn = att.filename.lower()
-                if ref_msg.author.id == bot_user.id and RENDERED_TABLE_FILENAME_PATTERN.match(fn):
+                if ref_msg.author.id == bot_user.id and RENDERED_MEDIA_FILENAME_PATTERN.match(fn):
                     continue
                 if ct.startswith("image/") or any(fn.endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp", ".gif"]):
                     img_url = att.url
@@ -1422,16 +1493,10 @@ class AI(commands.Cog):
         context_messages.append({"role": "user", "content": f"[{user_name}]: {prompt_text}"})
 
         # 解析伺服器預設模型與提供商
-        configured_model = str(cfg.get("model") or "auto")
-        configured_p = None
-        configured_m = None
-        if configured_model != "auto":
-            if ":" in configured_model:
-                parts = configured_model.split(":", 1)
-                configured_p = parts[0]
-                configured_m = parts[1]
-            else:
-                configured_m = configured_model
+        configured_p, configured_m = _resolve_provider_and_model(
+            None,
+            str(cfg.get("model") or "auto"),
+        )
 
         # 打字動態與調用 Router
         try:
@@ -1483,9 +1548,8 @@ class AI(commands.Cog):
                 payer_member = message.guild.get_member(payer_id) if message.guild else None
                 payer_name = payer_member.display_name if payer_member else (message.author.display_name or message.author.name)
 
-                # 抓取表格轉換為圖片、清理格式並發送多 Container 回覆 (超過上限自動切割，footer 永遠在末端)
-                raw_clean = strip_roleplay_prefix(strip_thinking_tags(response_text or ""))
-                clean_response, table_files = extract_and_render_markdown_tables(raw_clean)
+                # 抓取表格轉換為圖片、格式化 LaTeX 並發送多 Container 回覆 (超過上限自動切割，footer 永遠在末端)
+                clean_response, table_files = _prepare_ai_output(response_text or "")
                 footer_text = self._format_ai_footer(stats=stats, cost=cost, payer_name=payer_name)
 
                 await self._send_ai_response_chunks(
