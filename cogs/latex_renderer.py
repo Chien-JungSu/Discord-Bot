@@ -17,7 +17,12 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import discord
-from PIL import Image, ImageDraw, ImageFont
+try:
+    from PIL import Image, ImageDraw, ImageFilter, ImageFont  # type: ignore[import-not-found]
+except ImportError as exc:
+    raise RuntimeError(
+        "Pillow is required for LaTeX rendering. Install it with: pip install pillow"
+    ) from exc
 
 from cogs.latex_formatter import (
     _BLACKBOARD_BOLD,
@@ -37,7 +42,13 @@ from cogs.latex_formatter import (
     _split_top_level_over,
     format_latex_expression,
 )
-from cogs.table_renderer import BUNDLED_FONT, UNIFONT_PATH
+from cogs.table_renderer import BUNDLED_FONT, PROJECT_FONTS_DIR, UNIFONT_PATH
+
+# 專案內建 STIX Two 數學字型（SIL Open Font License 1.1），跨平台一致呈現 TeX 出版級質感
+STIX_TEXT_REGULAR = os.path.join(PROJECT_FONTS_DIR, "STIX2Text-Regular.otf")
+STIX_TEXT_ITALIC = os.path.join(PROJECT_FONTS_DIR, "STIX2Text-Italic.otf")
+STIX_TEXT_BOLD = os.path.join(PROJECT_FONTS_DIR, "STIX2Text-Bold.otf")
+STIX_MATH = os.path.join(PROJECT_FONTS_DIR, "STIX2Math.otf")
 
 
 # ==============================================================================
@@ -219,7 +230,16 @@ class _MathFontRunSet:
 
 
 def _build_font_candidates(style: str) -> List[Tuple[str, int]]:
-    """依數學樣式傳回跨平台 (Windows / Linux) 優先字型路徑列表。"""
+    """依數學樣式傳回跨平台 (Windows / Linux) 優先字型路徑列表。
+
+    一律優先採用專案內建之 STIX Two（TeX 出版級數學襯線字型），
+    確保 Windows 本機與 Linux 容器（無 Cambria / DejaVu）渲染外觀完全一致，
+    避免退回無襯線中文字型造成公式失去數學排版質感。
+    """
+    stix_regular = [(STIX_TEXT_REGULAR, 0)]
+    stix_italic = [(STIX_TEXT_ITALIC, 0)]
+    stix_bold = [(STIX_TEXT_BOLD, 0)]
+    stix_math = [(STIX_MATH, 0)]
     cjk_paths = [
         ("C:/Windows/Fonts/msjh.ttc", 0),
         (BUNDLED_FONT, 0),
@@ -236,27 +256,20 @@ def _build_font_candidates(style: str) -> List[Tuple[str, int]]:
         ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 0),
     ]
     if style == "italic":
-        primary = [
+        primary = stix_italic + [
             ("C:/Windows/Fonts/cambriai.ttf", 0),
-            ("C:/Windows/Fonts/timesi.ttf", 0),
             ("/usr/share/fonts/truetype/dejavu/DejaVuSerif-Italic.ttf", 0),
-            ("/usr/share/fonts/truetype/freefont/FreeSerifItalic.ttf", 0),
-        ] + math_paths + cjk_paths
+        ] + stix_math + math_paths + cjk_paths
     elif style == "bold":
-        primary = [
+        primary = stix_bold + [
             ("C:/Windows/Fonts/cambriab.ttf", 0),
-            ("C:/Windows/Fonts/timesbd.ttf", 0),
             ("C:/Windows/Fonts/msjhbd.ttc", 0),
             ("/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf", 0),
-            ("/usr/share/fonts/truetype/freefont/FreeSerifBold.ttf", 0),
-        ] + math_paths + cjk_paths
+        ] + stix_math + math_paths + cjk_paths
     elif style == "text":
-        primary = [
-            ("C:/Windows/Fonts/cambria.ttc", 0),
-            ("C:/Windows/Fonts/segoeui.ttf", 0),
-        ] + cjk_paths + math_paths
+        primary = stix_regular + cjk_paths + stix_math + math_paths
     else:  # upright / math symbol
-        primary = math_paths + cjk_paths
+        primary = stix_regular + stix_math + math_paths + cjk_paths
     return primary
 
 
@@ -277,7 +290,7 @@ def _get_math_font_set(size: int, style: str = "math") -> _MathFontRunSet:
         if cmap:
             entries.append((font_obj, cmap))
             seen.add(key)
-        if len(entries) >= 4:
+        if len(entries) >= 6:
             break
 
     if not entries:
@@ -1169,8 +1182,9 @@ class _MathBoxLayout:
         descent = base_box.descent
 
         if sup_box:
-            # 普通字母上標約提升 0.42*size；若主體特別高（如括號或分數）則往上對齊頂緣
-            target_sup_top = -max(0.45 * size + sup_box.descent, base_box.ascent * 0.72)
+            # 依 TeX 上標規則：至少提升約 0.38*size；若主體較高（字母 b、括號、分數）則以「主體頂緣 − 角標下沉量」對齊，
+            # 避免上標懸浮過高與主體脫節
+            target_sup_top = -max(0.38 * size, base_box.ascent - 0.28 * size)
             sup_rel_baseline = target_sup_top
             ascent = max(ascent, -sup_rel_baseline + sup_box.ascent)
 
@@ -1558,9 +1572,9 @@ def render_latex_to_image(expr: str) -> io.BytesIO:
     ast_root = parser.parse(expr)
     layout_engine = _MathBoxLayout()
 
-    # 於 2x 超取樣畫布繪製再縮小，確保分數線、根號與括號曲線平滑銳利
-    ssaa_scale = 2
-    base_font_px = 34 * ssaa_scale
+    # 於 3x 超取樣畫布繪製再縮小，確保分數線、根號與括號曲線平滑銳利
+    ssaa_scale = 3
+    base_font_px = 38 * ssaa_scale
     max_content_px = 1320 * ssaa_scale
 
     box = layout_engine.layout(ast_root, float(base_font_px))
@@ -1568,49 +1582,96 @@ def render_latex_to_image(expr: str) -> io.BytesIO:
         shrink = max(0.50, max_content_px / box.width)
         box = layout_engine.layout(ast_root, float(base_font_px) * shrink)
 
-    margin_x = 14 * ssaa_scale
-    margin_y = 10 * ssaa_scale
-    pad_x = 28 * ssaa_scale
-    pad_y = 20 * ssaa_scale
-    accent_w = 4 * ssaa_scale
+    # 外圍留白容納柔和陰影；背景全透明，無論 Discord 深色／淺色主題或 Embed 內皆自然融合
+    margin_x = 12 * ssaa_scale
+    margin_top = 8 * ssaa_scale
+    margin_bottom = 14 * ssaa_scale
+    pad_x = 34 * ssaa_scale
+    pad_y = 24 * ssaa_scale
 
-    min_card_w = 280 * ssaa_scale
-    card_w = max(min_card_w, int(math.ceil(box.width)) + pad_x * 2 + accent_w)
-    card_h = max(62 * ssaa_scale, int(math.ceil(box.height)) + pad_y * 2)
+    min_card_w = 240 * ssaa_scale
+    card_w = max(min_card_w, int(math.ceil(box.width)) + pad_x * 2)
+    card_h = max(72 * ssaa_scale, int(math.ceil(box.height)) + pad_y * 2)
 
     canvas_w = card_w + margin_x * 2
-    canvas_h = card_h + margin_y * 2
+    canvas_h = card_h + margin_top + margin_bottom
 
-    # Discord 深色卡片配色（與 table_renderer.py 風格一致）
-    img = Image.new("RGB", (canvas_w, canvas_h), color=(30, 31, 35))
-    draw = ImageDraw.Draw(img)
+    x0, y0 = margin_x, margin_top
+    x1, y1 = margin_x + card_w, margin_top + card_h
+    radius = 14 * ssaa_scale
 
-    x0, y0 = margin_x, margin_y
-    x1, y1 = margin_x + card_w, margin_y + card_h
-    radius = 10 * ssaa_scale
-    draw.rounded_rectangle([x0, y0, x1, y1], radius=radius, fill=(43, 45, 49), outline=(62, 65, 71), width=ssaa_scale)
+    img = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
 
-    # 左側 Discord Blurple 裝飾引線條
+    # 1. 柔和投影（高斯模糊，向下偏移營造浮起層次）
+    shadow = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
+    ImageDraw.Draw(shadow).rounded_rectangle(
+        [x0 + 2 * ssaa_scale, y0 + 4 * ssaa_scale, x1 - 2 * ssaa_scale, y1 + 3 * ssaa_scale],
+        radius=radius,
+        fill=(0, 0, 0, 120),
+    )
+    shadow = shadow.filter(ImageFilter.GaussianBlur(5 * ssaa_scale))
+    img.alpha_composite(shadow)
+
+    # 2. 卡片本體：深夜藍微漸層（與專案 Glassmorphism 深色設計系統一致）
+    card_mask = Image.new("L", (canvas_w, canvas_h), 0)
+    ImageDraw.Draw(card_mask).rounded_rectangle([x0, y0, x1, y1], radius=radius, fill=255)
+    top_rgb = (34, 38, 52)
+    bot_rgb = (22, 24, 33)
+    gradient = Image.new("RGBA", (1, card_h))
+    for gy in range(card_h):
+        t = gy / max(1, card_h - 1)
+        gradient.putpixel(
+            (0, gy),
+            tuple(int(round(a + (b - a) * t)) for a, b in zip(top_rgb, bot_rgb)) + (255,),
+        )
+    card_layer = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
+    card_layer.paste(gradient.resize((card_w + 1, card_h + 1)), (x0, y0))
+    img.paste(card_layer, (0, 0), card_mask)
+
+    # 以 RGBA 混色模式繪製，半透明描邊與抗鋸齒文字會與底層卡片正確疊合
+    draw = ImageDraw.Draw(img, "RGBA")
+
+    # 3. 細緻半透明描邊
     draw.rounded_rectangle(
-        [x0 + 3 * ssaa_scale, y0 + 8 * ssaa_scale, x0 + 3 * ssaa_scale + accent_w, y1 - 8 * ssaa_scale],
-        radius=2 * ssaa_scale,
-        fill=(88, 101, 242),
+        [x0, y0, x1, y1],
+        radius=radius,
+        outline=(255, 255, 255, 26),
+        width=max(1, ssaa_scale),
     )
 
-    inner_left = x0 + accent_w + pad_x
-    inner_avail_w = (x1 - pad_x) - inner_left
-    draw_x = inner_left + max(0.0, (inner_avail_w - box.width) / 2.0)
-    baseline_y = y0 + (card_h - box.height) / 2.0 + box.ascent
+    # 4. 頂部 Blurple → Sky 漸層強調線（呼應專案主色 #38bdf8）
+    accent_h = 3 * ssaa_scale
+    accent_inset = radius
+    accent_w = max(1, (x1 - accent_inset) - (x0 + accent_inset))
+    accent = Image.new("RGBA", (accent_w, 1))
+    left_rgb, right_rgb = (88, 101, 242), (56, 189, 248)
+    for ax in range(accent_w):
+        t = ax / max(1, accent_w - 1)
+        # 兩端淡出，中段飽和
+        fade = min(1.0, 4.0 * min(t, 1.0 - t) + 0.15)
+        rgb = tuple(int(round(a + (b - a) * t)) for a, b in zip(left_rgb, right_rgb))
+        accent.putpixel((ax, 0), rgb + (int(235 * fade),))
+    accent = accent.resize((accent_w, accent_h))
+    accent_mask = Image.new("L", (accent_w, accent_h), 0)
+    ImageDraw.Draw(accent_mask).rounded_rectangle(
+        [0, 0, accent_w - 1, accent_h - 1], radius=accent_h // 2, fill=255
+    )
+    accent_alpha = Image.composite(accent.getchannel("A"), Image.new("L", accent.size, 0), accent_mask)
+    accent.putalpha(accent_alpha)
+    img.alpha_composite(accent, (x0 + accent_inset, y0 + max(1, ssaa_scale)))
 
-    box.draw_fn(draw, draw_x, baseline_y, (245, 247, 252))
+    # 5. 公式本體置中繪製（柔白主色，避免純白刺眼）
+    draw_x = x0 + (card_w - box.width) / 2.0
+    baseline_y = y0 + (card_h - box.height) / 2.0 + box.ascent + 1 * ssaa_scale
+    box.draw_fn(draw, draw_x, baseline_y, (236, 241, 250))
 
-    # 降採樣至 1x 高清銳利輸出
+    # 降採樣至 1x 高清銳利輸出（預乘 Alpha 避免透明邊緣產生暗色鋸齒）
     out_w = max(1, canvas_w // ssaa_scale)
     out_h = max(1, canvas_h // ssaa_scale)
-    final_img = img.resize((out_w, out_h), Image.Resampling.LANCZOS)
+    final_img = img.convert("RGBa").resize((out_w, out_h), Image.Resampling.LANCZOS).convert("RGBA")
 
     buf = io.BytesIO()
-    final_img.save(buf, format="PNG")
+    final_img.save(buf, format="PNG", optimize=True)
     buf.seek(0)
     return buf
 
