@@ -18,7 +18,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import discord
 try:
-    from PIL import Image, ImageDraw, ImageFilter, ImageFont  # type: ignore[import-not-found]
+    from PIL import Image, ImageDraw, ImageFont  # type: ignore[import-not-found]
 except ImportError as exc:
     raise RuntimeError(
         "Pillow is required for LaTeX rendering. Install it with: pip install pillow"
@@ -1572,97 +1572,43 @@ def render_latex_to_image(expr: str) -> io.BytesIO:
     ast_root = parser.parse(expr)
     layout_engine = _MathBoxLayout()
 
-    # 於 3x 超取樣畫布繪製再縮小，確保分數線、根號與括號曲線平滑銳利
-    ssaa_scale = 3
-    base_font_px = 38 * ssaa_scale
-    max_content_px = 1320 * ssaa_scale
+    # 於 4x 超取樣畫布繪製再縮小，確保分數線、根號與括號曲線平滑銳利
+    ssaa_scale = 4
+    base_font_px = 22 * ssaa_scale
+    max_content_px = 760 * ssaa_scale
 
     box = layout_engine.layout(ast_root, float(base_font_px))
     if box.width > max_content_px and box.width > 0:
         shrink = max(0.50, max_content_px / box.width)
         box = layout_engine.layout(ast_root, float(base_font_px) * shrink)
 
-    # 外圍留白容納柔和陰影；背景全透明，無論 Discord 深色／淺色主題或 Embed 內皆自然融合
-    margin_x = 12 * ssaa_scale
-    margin_top = 8 * ssaa_scale
-    margin_bottom = 14 * ssaa_scale
-    pad_x = 34 * ssaa_scale
-    pad_y = 24 * ssaa_scale
+    # 卡片外圍保留少量透明留白，圓角外側在 Discord 深色／淺色主題或 Embed 內皆自然融合
+    margin = 2 * ssaa_scale
+    pad_x = 16 * ssaa_scale
+    pad_y = 10 * ssaa_scale
 
-    min_card_w = 240 * ssaa_scale
+    min_card_w = 60 * ssaa_scale
     card_w = max(min_card_w, int(math.ceil(box.width)) + pad_x * 2)
-    card_h = max(72 * ssaa_scale, int(math.ceil(box.height)) + pad_y * 2)
+    card_h = max(36 * ssaa_scale, int(math.ceil(box.height)) + pad_y * 2)
 
-    canvas_w = card_w + margin_x * 2
-    canvas_h = card_h + margin_top + margin_bottom
+    canvas_w = card_w + margin * 2
+    canvas_h = card_h + margin * 2
 
-    x0, y0 = margin_x, margin_top
-    x1, y1 = margin_x + card_w, margin_top + card_h
-    radius = 14 * ssaa_scale
+    x0, y0 = margin, margin
+    x1, y1 = margin + card_w, margin + card_h
+    radius = 8 * ssaa_scale
 
     img = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
 
-    # 1. 柔和投影（高斯模糊，向下偏移營造浮起層次）
-    shadow = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
-    ImageDraw.Draw(shadow).rounded_rectangle(
-        [x0 + 2 * ssaa_scale, y0 + 4 * ssaa_scale, x1 - 2 * ssaa_scale, y1 + 3 * ssaa_scale],
-        radius=radius,
-        fill=(0, 0, 0, 120),
-    )
-    shadow = shadow.filter(ImageFilter.GaussianBlur(5 * ssaa_scale))
-    img.alpha_composite(shadow)
-
-    # 2. 卡片本體：深夜藍微漸層（與專案 Glassmorphism 深色設計系統一致）
-    card_mask = Image.new("L", (canvas_w, canvas_h), 0)
-    ImageDraw.Draw(card_mask).rounded_rectangle([x0, y0, x1, y1], radius=radius, fill=255)
-    top_rgb = (34, 38, 52)
-    bot_rgb = (22, 24, 33)
-    gradient = Image.new("RGBA", (1, card_h))
-    for gy in range(card_h):
-        t = gy / max(1, card_h - 1)
-        gradient.putpixel(
-            (0, gy),
-            tuple(int(round(a + (b - a) * t)) for a, b in zip(top_rgb, bot_rgb)) + (255,),
-        )
-    card_layer = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
-    card_layer.paste(gradient.resize((card_w + 1, card_h + 1)), (x0, y0))
-    img.paste(card_layer, (0, 0), card_mask)
-
-    # 以 RGBA 混色模式繪製，半透明描邊與抗鋸齒文字會與底層卡片正確疊合
+    # 以 RGBA 混色模式繪製，抗鋸齒文字會與底層卡片正確疊合
     draw = ImageDraw.Draw(img, "RGBA")
 
-    # 3. 細緻半透明描邊
-    draw.rounded_rectangle(
-        [x0, y0, x1, y1],
-        radius=radius,
-        outline=(255, 255, 255, 26),
-        width=max(1, ssaa_scale),
-    )
+    # 純黑圓角卡片（不加漸層、描邊或光效）
+    draw.rounded_rectangle([x0, y0, x1, y1], radius=radius, fill=(0, 0, 0, 255))
 
-    # 4. 頂部 Blurple → Sky 漸層強調線（呼應專案主色 #38bdf8）
-    accent_h = 3 * ssaa_scale
-    accent_inset = radius
-    accent_w = max(1, (x1 - accent_inset) - (x0 + accent_inset))
-    accent = Image.new("RGBA", (accent_w, 1))
-    left_rgb, right_rgb = (88, 101, 242), (56, 189, 248)
-    for ax in range(accent_w):
-        t = ax / max(1, accent_w - 1)
-        # 兩端淡出，中段飽和
-        fade = min(1.0, 4.0 * min(t, 1.0 - t) + 0.15)
-        rgb = tuple(int(round(a + (b - a) * t)) for a, b in zip(left_rgb, right_rgb))
-        accent.putpixel((ax, 0), rgb + (int(235 * fade),))
-    accent = accent.resize((accent_w, accent_h))
-    accent_mask = Image.new("L", (accent_w, accent_h), 0)
-    ImageDraw.Draw(accent_mask).rounded_rectangle(
-        [0, 0, accent_w - 1, accent_h - 1], radius=accent_h // 2, fill=255
-    )
-    accent_alpha = Image.composite(accent.getchannel("A"), Image.new("L", accent.size, 0), accent_mask)
-    accent.putalpha(accent_alpha)
-    img.alpha_composite(accent, (x0 + accent_inset, y0 + max(1, ssaa_scale)))
-
-    # 5. 公式本體置中繪製（柔白主色，避免純白刺眼）
+    # 公式本體置中繪製（柔白主色，避免純白刺眼）
     draw_x = x0 + (card_w - box.width) / 2.0
-    baseline_y = y0 + (card_h - box.height) / 2.0 + box.ascent + 1 * ssaa_scale
+    baseline_y = y0 + (card_h - box.height) / 2.0 + box.ascent
     box.draw_fn(draw, draw_x, baseline_y, (236, 241, 250))
 
     # 降採樣至 1x 高清銳利輸出（預乘 Alpha 避免透明邊緣產生暗色鋸齒）
