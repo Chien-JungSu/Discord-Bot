@@ -608,6 +608,7 @@ async def main_async():
     await test_loop_button_and_no_autoskip()
     await test_sticky_panel_auto_bump()
     await test_session_lost_recovery()
+    await test_bug_fixes()
 
 
 # ---------- 測試 10：Lavalink Session 失效（404）自動復原 ----------
@@ -1127,6 +1128,260 @@ async def test_session_lost_recovery():
     delete_user_playlist(uid_owner)
     delete_user_playlist(uid_listener)
     check(get_user_playlist(uid_owner) is None, "刪除歌單成功清除 SQLite 紀錄")
+
+
+# ---------- 測試 11：潛藏漏洞與邊界條件回歸測試 ----------
+async def test_bug_fixes():
+    print("\n--- 測試 11: 潛藏漏洞與邊界條件回歸測試 ---")
+
+    # 1. _is_live_track 區分未解析 length=0 曲目與真實直播串流
+    check(
+        Music._is_live_track({"title": "Unresolved", "length": 0, "is_stream": False, "is_seekable": True}) is False,
+        "_is_live_track: length=0 且 is_stream=False 之歌單曲目不誤判為直播 (dict)",
+    )
+    check(
+        Music._is_live_track(SimpleNamespace(title="Unresolved", length=0, is_stream=False, is_seekable=True)) is False,
+        "_is_live_track: length=0 且 is_stream=False 之歌單曲目不誤判為直播 (obj)",
+    )
+    check(
+        Music._is_live_track({"title": "RealLive", "length": 0, "is_stream": True, "is_seekable": True}) is True
+        and Music._is_live_track(SimpleNamespace(title="NoSeek", length=0, is_stream=False, is_seekable=False)) is True
+        and Music._is_live_track({"title": "24h+", "length": 86_400_000, "is_stream": False, "is_seekable": True}) is True,
+        "_is_live_track: 真正直播串流／不可跳轉／>=24h 曲目仍正確判定為直播",
+    )
+
+    # 2. _run_spotify_import 單曲 YouTube 歌單在播放中匯入不會噴 UnboundLocalError
+    player_yt1 = RecoverablePlayer()
+    player_yt1.current = fake_track("PlayingNow")
+    cog_yt1 = make_cog(player_yt1)
+    cog_yt1._notify_panel = AsyncMock(return_value=True)
+    it_yt1 = make_interaction()
+    single_yt = music_mod.YouTubeTrack(
+        title="Single YT Playlist Track",
+        playable=fake_track("Single YT Playlist Track", identifier="yt1"),
+    )
+    cog_yt1._fetch_youtube_playlist = AsyncMock(
+        return_value=music_mod.YouTubeFetchResult(tracks=[single_yt], truncated=False, skipped=0)
+    )
+    cog_yt1._import_tasks[GID] = asyncio.current_task()
+    await cog_yt1._run_spotify_import(
+        it_yt1,
+        player_yt1,
+        "youtube",
+        "PL1track",
+        yt_url="https://www.youtube.com/playlist?list=PL1track",
+    )
+    cog_yt1._import_tasks.pop(GID, None)
+    check(
+        len(player_yt1.song_queue) == 1 and cog_yt1._notify_panel.await_count >= 1
+        and "第 1 位" in str(cog_yt1._notify_panel.await_args),
+        "_run_spotify_import: 單曲 YouTube 歌單在播放中匯入正確記錄佇列位置（無 UnboundLocalError）",
+    )
+
+    # 3. 歌單未編碼 SimpleNamespace 曲目解析失敗時安全略過，不拋 AttributeError: extras
+    player_res = RecoverablePlayer()
+    cog_res = make_cog(player_res)
+    cog_res._notify_panel = AsyncMock(return_value=True)
+    cog_res._update_panel_ended = AsyncMock(return_value=True)
+    ended_ok = fake_track("PrevSong", identifier="prev1")
+    dead_ns = SimpleNamespace(
+        title="DeadPlaylistTrack",
+        author="Artist",
+        uri="https://www.youtube.com/watch?v=dead000",
+        identifier="dead000",
+        length=0,
+        is_stream=False,
+        is_seekable=True,
+        source="youtube",
+        artwork=None,
+        encoded=None,
+        _from_playlist_dict=True,
+        _playlist_query="https://www.youtube.com/watch?v=dead000",
+    )
+    next_valid = fake_track("ValidNext", identifier="valid2", encoded="encoded_valid2")
+    player_res.current = ended_ok
+    player_res._active_track = ended_ok
+    player_res._play_seq = 1
+    player_res.song_queue.append((dead_ns, "A", 1))
+    player_res.song_queue.append((next_valid, "A", 1))
+    cog_res._resolve_playlist_track_obj = AsyncMock(return_value=None)
+    await cog_res.on_wavelink_track_end(SimpleNamespace(player=player_res, reason="finished", track=ended_ok))
+    check(
+        player_res.current is next_valid and player_res.advancing is False,
+        "on_wavelink_track_end: 無法解析之未編碼歌單曲目自動略過並接續下一首",
+    )
+    check(
+        cog_res.bot.notify_owner_error.await_count == 0
+        and any("無法載入" in str(call) for call in cog_res._notify_panel.await_args_list),
+        "on_wavelink_track_end: 歌單曲目無法解析時只在面板提示略過、不驚動開發者錯誤通報",
+    )
+
+    # 佇列只剩無法解析的曲目時應收尾面板並清乾淨狀態
+    player_res.song_queue.clear()
+    dead_only = SimpleNamespace(**dead_ns.__dict__)
+    player_res.song_queue.append((dead_only, "A", 1))
+    await cog_res.on_wavelink_track_end(SimpleNamespace(player=player_res, reason="finished", track=next_valid))
+    check(
+        player_res.current is None and player_res.advancing is False and cog_res._update_panel_ended.await_count == 1,
+        "on_wavelink_track_end: 剩餘佇列皆無法解析時正確收尾面板並釋放 advancing 狀態",
+    )
+
+    # 4. player.channel 為 None 時的安全防護（interaction_check / leave / _ensure_player）
+    player_none_ch = RecoverablePlayer()
+    player_none_ch.channel = None
+    player_none_ch.current = fake_track("Playing")
+    player_none_ch.disconnect = AsyncMock()
+    cog_none_ch = make_cog(player_none_ch)
+    view_none_ch = music_mod.MusicControlView(cog_none_ch, player=player_none_ch)
+    it_panel_none = make_interaction()
+    it_panel_none.guild = SimpleNamespace(id=GID, voice_client=player_none_ch)
+    it_panel_none.message = MagicMock()
+    it_panel_none.message.edit = AsyncMock()
+    allowed = await view_none_ch.interaction_check(it_panel_none)
+    check(
+        allowed is False and it_panel_none.response.send_message.await_count == 1,
+        "MusicControlView.interaction_check: player.channel 為 None 時安全回傳 False 不崩潰",
+    )
+
+    it_leave_none = make_interaction()
+    it_leave_none.guild = SimpleNamespace(id=GID, voice_client=player_none_ch)
+    cog_none_ch._check_music_channel = AsyncMock(return_value=True)
+    cog_none_ch._update_panel_ended = AsyncMock(return_value=True)
+    await cog_none_ch.leave.callback(cog_none_ch, it_leave_none)
+    check(
+        player_none_ch.disconnect.await_count == 1 and it_leave_none.response.send_message.await_count == 1,
+        "/music_leave: voice_client.channel 為 None 時仍能正常離開語音",
+    )
+
+    # 5. /music_play 拒絕 Spotify 連結時不先加入語音房且清掉公開 thinking 訊息
+    player_sp = RecoverablePlayer()
+    cog_sp = make_cog(player_sp)
+    cog_sp._check_music_channel = AsyncMock(return_value=True)
+    cog_sp._ensure_player = AsyncMock(return_value=player_sp)
+    it_sp_play = make_interaction()
+    it_sp_play.guild_id = GID
+    await cog_sp.play.callback(cog_sp, it_sp_play, query="https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT")
+    check(
+        cog_sp._ensure_player.await_count == 0
+        and it_sp_play.delete_original_response.await_count == 1
+        and it_sp_play.followup.send.await_args.kwargs.get("ephemeral") is True,
+        "/music_play 阻擋 Spotify 連結前不建立語音連線，並以 ephemeral 清除公開思考訊息",
+    )
+
+    # 6. RequesterApprovalView / StopVoteView timeout(message=None) 與多伺服器狀態隔離
+    cog_iso = make_cog(RecoverablePlayer())
+    shared_track_g1 = fake_track("SharedTrack", identifier="shared_123")
+    shared_track_g2 = fake_track("SharedTrack", identifier="shared_123")
+    p_g1 = RecoverablePlayer()
+    p_g1.guild = SimpleNamespace(id=101)
+    p_g1.current = shared_track_g1
+    p_g2 = RecoverablePlayer()
+    p_g2.guild = SimpleNamespace(id=202)
+    p_g2.current = shared_track_g2
+
+    req_view_g1 = music_mod.RequesterApprovalView(cog_iso, requester_id=50, requester_name="U50", track=shared_track_g1, guild_id=101)
+    cog_iso._register_control_request(50, "暫停", req_view_g1, guild_id=101)
+    check(
+        cog_iso._control_request_key(202, 50) not in cog_iso._pending_requests,
+        "不同伺服器同一點歌者之暫停請求鎖彼此隔離",
+    )
+    await req_view_g1.on_timeout()  # message=None 時也應清除待決定狀態並標記拒絕鎖
+    check(
+        req_view_g1.decided is True
+        and cog_iso._control_request_key(101, 50) not in cog_iso._pending_requests
+        and cog_iso._is_track_rejected(p_g1) is True
+        and cog_iso._is_track_rejected(p_g2) is False,
+        "RequesterApprovalView.on_timeout: message=None 時仍清理請求鎖，且拒絕鎖按 guild_id 隔離",
+    )
+
+    vote_executed = False
+    stop_view_g1 = music_mod.StopVoteView(cog_iso, 101, 1, "Initiator", {1, 2}, track=shared_track_g1)
+    async def on_stop_ok():
+        nonlocal vote_executed
+        vote_executed = True
+    stop_view_g1.on_approved = on_stop_ok
+    cog_iso._register_stop_vote(101, stop_view_g1)
+    await stop_view_g1.on_timeout()  # message=None 時也應釋放 _stop_votes 並執行回呼
+    check(
+        stop_view_g1.finished is True and 101 not in cog_iso._stop_votes and vote_executed is True,
+        "StopVoteView.on_timeout: message=None 時仍完成結算並釋放 _stop_votes",
+    )
+
+    # 7. _bump_panel 非 429 失敗停止重試 + progress_update_loop 不覆寫已結束面板
+    player_bump_err = RecoverablePlayer()
+    player_bump_err.current = fake_track("Playing")
+    cog_bump_err = make_cog(player_bump_err)
+    bad_ch = MagicMock()
+    bad_ch.id = 10
+    bad_ch.last_message_id = 50
+    http_403 = music_mod.discord.HTTPException(SimpleNamespace(status=403, reason="Forbidden"), "Missing Access")
+    bad_ch.send = AsyncMock(side_effect=http_403)
+    cog_bump_err.bot.get_channel = lambda cid: bad_ch if cid == 10 else None
+    cog_bump_err.panel_messages[GID] = (10, 20)
+    cog_bump_err._bump_trigger_msgs[GID] = {50}
+    cog_bump_err._bump_due_at[GID] = 1.0
+    await cog_bump_err._bump_panel(GID)
+    check(
+        GID not in cog_bump_err._bump_trigger_msgs and GID not in cog_bump_err._bump_due_at,
+        "_bump_panel: 遇到非 429 HTTP 錯誤 (403) 會停止重複置底排程，避免無限重試洗版",
+    )
+
+    # 驗證 MusicControlView.skip 在 advancing=True 時防連點重複 skip
+    player_dbl = RecoverablePlayer()
+    player_dbl.advancing = True
+    player_dbl.skip = AsyncMock()
+    cog_dbl = make_cog(player_dbl)
+    view_dbl = music_mod.MusicControlView(cog_dbl, player=player_dbl)
+    it_dbl = make_interaction()
+    it_dbl.guild = SimpleNamespace(id=GID, voice_client=player_dbl)
+    await view_dbl.skip(it_dbl)
+    check(
+        player_dbl.skip.await_count == 0 and it_dbl.response.send_message.await_count == 1,
+        "MusicControlView.skip: advancing 換歌期間阻擋連點重複跳過",
+    )
+
+    # 驗證 progress_update_loop 與 _update_panel_ended 受 _panel_locks 同步保護
+    player_lock = RecoverablePlayer()
+    player_lock.current = fake_track("LockTrack", length=120000)
+    player_lock.position = 10000
+    cog_lock = Music(MagicMock())
+    panel_msg = MagicMock()
+    panel_msg.id = 20
+    edit_called = 0
+    async def tracked_edit(**kw):
+        nonlocal edit_called
+        edit_called += 1
+    panel_msg.edit = tracked_edit
+    partial_msg = MagicMock()
+    partial_msg.edit = AsyncMock()
+    lock_ch = MagicMock()
+    lock_ch.id = 10
+    lock_ch.fetch_message = AsyncMock(return_value=panel_msg)
+    lock_ch.get_partial_message = MagicMock(return_value=partial_msg)
+    lock_guild = SimpleNamespace(id=GID, voice_client=player_lock)
+    cog_lock.bot.get_guild = lambda cid: lock_guild if cid == GID else None
+    cog_lock.bot.get_channel = lambda cid: None
+    fetch_started = asyncio.Event()
+    allow_fetch_finish = asyncio.Event()
+    async def slow_fetch_channel(cid):
+        fetch_started.set()
+        await allow_fetch_finish.wait()
+        return lock_ch
+    cog_lock.bot.fetch_channel = slow_fetch_channel
+    cog_lock.panel_messages[GID] = (10, 20)
+
+    # 模擬 fetch_channel 等待期間另一個協程執行 _update_panel_ended 清空 panel_messages，
+    # progress_update_loop 進入面板鎖二次檢查後必須放棄 edit，不得覆寫已結束面板
+    loop_task = asyncio.create_task(cog_lock.progress_update_loop.coro(cog_lock))
+    await asyncio.wait_for(fetch_started.wait(), timeout=2.0)
+    cog_lock.panel_messages.pop(GID, None)
+    cog_lock._clear_player_playback_state(player_lock)
+    allow_fetch_finish.set()
+    await loop_task
+    check(
+        partial_msg.edit.await_count == 0,
+        "progress_update_loop 與 _update_panel_ended 受面板鎖保護，結束後不會被舊進度條覆寫",
+    )
 
 
 def test_youtube_playlist_helpers():

@@ -84,6 +84,10 @@ IMPORT_BATCH_SIZE = max(IMPORT_CONCURRENCY, int(os.getenv('IMPORT_BATCH_SIZE', '
 IMPORT_PROGRESS_INTERVAL = max(5.0, PROGRESS_UPDATE_INTERVAL)
 
 
+class _TrackResolveError(RuntimeError):
+    """從歌單載入之未編碼曲目在即時向 Lavalink 解析時失敗的內部例外。"""
+
+
 # ---------- YouTube 播放清單批量匯入 ----------
 # 已刪除／私人影片在 extract_flat 清單中的標題（皆為小寫比對）。
 YT_INVALID_TITLES = frozenset({"[deleted video]", "[private video]", "deleted video", "private video"})
@@ -623,9 +627,17 @@ class RequesterApprovalView(ui.View):
     timeout 到期自動視為拒絕，避免佔著按鈕讓指令結果懸而未決。
     """
 
-    def __init__(self, cog: "Music", requester_id: int, requester_name: str, track=None):
+    def __init__(
+        self,
+        cog: "Music",
+        requester_id: int,
+        requester_name: str,
+        track=None,
+        guild_id: int | None = None,
+    ):
         super().__init__(timeout=CONTROL_REQUEST_TIMEOUT)
         self.cog = cog
+        self.guild_id = guild_id
         self.requester_id = requester_id
         self.requester_name = requester_name
         self.track = track  # 被拒絕時用來鎖住「同一首歌不得再提請求」
@@ -637,20 +649,26 @@ class RequesterApprovalView(ui.View):
     def _finish(self, allowed: bool, interaction: discord.Interaction):
         self.decided = True
         self.result = allowed
+        self.stop()
         for item in self.children:
             item.disabled = True  # 一次性：決定後整組按鈕失效
         label = "✅ 允許" if allowed else "❌ 拒絕"
         return f"{label} — 由 {self.requester_name} 決定"
 
     async def on_timeout(self):
-        # 超時視為拒絕；把畫面上的按鈕停用，讓使用者知道已經失效
-        if self.decided or self.message is None:
+        # 超時視為拒絕；先釋放請求鎖並停用 View，再更新訊息（即使 message 尚未綁定也能完成清理）
+        if self.decided:
             return
         self.decided = True
         self.result = False
-        self.cog._resolve_control_request(self.requester_id, allowed=False, view=self)
+        self.stop()
+        self.cog._resolve_control_request(
+            self.requester_id, allowed=False, view=self, guild_id=self.guild_id
+        )
         for item in self.children:
             item.disabled = True
+        if self.message is None:
+            return
         try:
             await self.message.edit(
                 content=f"⌛ 操作請求已逾時（{CONTROL_REQUEST_TIMEOUT} 秒），視為拒絕。",
@@ -667,7 +685,9 @@ class RequesterApprovalView(ui.View):
         if self.decided:
             await interaction.response.send_message("ℹ️ 這個請求已經被決定過了。", ephemeral=True)
             return
-        self.cog._resolve_control_request(self.requester_id, allowed=True, view=self)
+        self.cog._resolve_control_request(
+            self.requester_id, allowed=True, view=self, guild_id=self.guild_id
+        )
         text = self._finish(True, interaction)
         await interaction.response.edit_message(content=text, view=self)
         if self.after_decision is not None:
@@ -681,7 +701,9 @@ class RequesterApprovalView(ui.View):
         if self.decided:
             await interaction.response.send_message("ℹ️ 這個請求已經被決定過了。", ephemeral=True)
             return
-        self.cog._resolve_control_request(self.requester_id, allowed=False, view=self)
+        self.cog._resolve_control_request(
+            self.requester_id, allowed=False, view=self, guild_id=self.guild_id
+        )
         text = self._finish(False, interaction)
         await interaction.response.edit_message(content=text, view=self)
         if self.after_decision is not None:
@@ -722,6 +744,7 @@ class StopVoteView(ui.View):
     def _finish(self, approved: bool, footer: str) -> str:
         self.finished = True
         self.approved = approved
+        self.stop()
         self.cog._resolve_stop_vote(self.guild_id, approved=approved, view=self)
         for item in self.children:
             item.disabled = True  # 結果出爐，按鈕全部失效
@@ -737,15 +760,16 @@ class StopVoteView(ui.View):
         return all(uid in self.votes for uid in self.voter_ids)
 
     async def on_timeout(self):
-        if self.finished or self.message is None:
+        if self.finished:
             return
         # 逾時結算：已有任何人投不同意 -> 否決；否則視為同意
         approved = all(self.votes.get(uid, True) for uid in self.voter_ids)
         text = self._finish(approved, "⌛ 投票逾時，自動結算。")
-        try:
-            await self.message.edit(content=text, view=self)
-        except discord.HTTPException:
-            pass
+        if self.message is not None:
+            try:
+                await self.message.edit(content=text, view=self)
+            except discord.HTTPException:
+                pass
         await self._maybe_execute(approved)
 
     async def _vote(self, interaction: discord.Interaction, choice: bool):
@@ -1030,8 +1054,14 @@ class MusicControlView(ui.LayoutView):
 
         player = interaction.guild.voice_client
 
-        # 情況 A：機器人不在語音頻道，或沒有正在播放的曲目（例如 Bot 重開機後按舊面板）
-        if player is None or (wavelink is not None and not isinstance(player, wavelink.Player)) or getattr(player, "current", None) is None:
+        # 情況 A：機器人不在語音頻道、channel 遺失，或沒有正在播放的曲目（例如 Bot 重開機後按舊面板）
+        player_channel = getattr(player, "channel", None) if player is not None else None
+        if (
+            player is None
+            or (wavelink is not None and not isinstance(player, wavelink.Player))
+            or getattr(player, "current", None) is None
+            or player_channel is None
+        ):
             disabled_view = MusicControlView(self.cog, player=None)
             disabled_view.refresh_buttons(None)
 
@@ -1046,10 +1076,9 @@ class MusicControlView(ui.LayoutView):
 
         # 情況 B：操作者與機器人是否在同一個語音頻道
         user_voice = getattr(interaction.user, "voice", None)
-        if user_voice is None or user_voice.channel is None or user_voice.channel.id != player.channel.id:
-            channel_mention = player.channel.mention if player.channel else "語音頻道"
+        if user_voice is None or user_voice.channel is None or user_voice.channel.id != player_channel.id:
             await interaction.response.send_message(
-                f"❌ 你必須跟我在同一個語音頻道（{channel_mention}）才能操作控制面板！",
+                f"❌ 你必須跟我在同一個語音頻道（{player_channel.mention}）才能操作控制面板！",
                 ephemeral=True,
             )
             return False
@@ -1102,6 +1131,8 @@ class MusicControlView(ui.LayoutView):
         await player.pause(not is_paused)
         if cog:
             await cog._sync_panel(interaction.guild.id, player, interaction=interaction)
+        elif not interaction.response.is_done():
+            await interaction.response.defer()
 
     async def rewind_10(self, interaction: discord.Interaction, button: ui.Button | None = None):
         player: "wavelink_module.Player" = interaction.guild.voice_client
@@ -1125,6 +1156,8 @@ class MusicControlView(ui.LayoutView):
         await player.seek(target)
         if cog:
             await cog._sync_panel(interaction.guild.id, player, interaction=interaction)
+        elif not interaction.response.is_done():
+            await interaction.response.defer()
 
     async def forward_10(self, interaction: discord.Interaction, button: ui.Button | None = None):
         player: "wavelink_module.Player" = interaction.guild.voice_client
@@ -1149,10 +1182,17 @@ class MusicControlView(ui.LayoutView):
         await player.seek(target)
         if cog:
             await cog._sync_panel(interaction.guild.id, player, interaction=interaction)
+        elif not interaction.response.is_done():
+            await interaction.response.defer()
 
     async def skip(self, interaction: discord.Interaction, button: ui.Button | None = None):
         player: "wavelink_module.Player" = interaction.guild.voice_client
         cog: "Music" = self.cog or interaction.client.get_cog("Music")
+
+        if getattr(player, "advancing", False) or getattr(player, "end_intent", None) is not None:
+            if not interaction.response.is_done():
+                await interaction.response.send_message("ℹ️ 正在切換曲目或停止播放中，請稍候。", ephemeral=True)
+            return
 
         await interaction.response.defer()
         if cog:
@@ -1181,11 +1221,12 @@ class MusicControlView(ui.LayoutView):
         player: "wavelink_module.Player" = interaction.guild.voice_client
         cog: "Music" = self.cog or interaction.client.get_cog("Music")
 
-        # 停止時立即同步取消置底任務、背景匯入並清空播放曲目狀態（在任何 await 之前），
+        # 停止時立即同步取消置底任務、背景匯入、投票/請求視圖並清空播放曲目狀態（在任何 await 之前），
         # 防止停止期間或停止後仍觸發置底或被誤判為播放中。
         if cog:
             cog._cancel_panel_bump(interaction.guild.id, force=True)
             cog._cancel_import(interaction.guild.id)
+            cog._cancel_guild_control_views(interaction.guild.id)
         song_queue = getattr(player, "song_queue", None)
         if song_queue:
             song_queue.clear()
@@ -1193,7 +1234,7 @@ class MusicControlView(ui.LayoutView):
         player.shuffle = False
         current_track = getattr(player, "current", None) or getattr(player, "_active_track", None)
         if cog:
-            cog._clear_rejection(current_track)
+            cog._clear_rejection(current_track, guild_id=interaction.guild.id)
             cog._clear_player_playback_state(player)
         await interaction.response.defer()
         if current_track:
@@ -1203,10 +1244,10 @@ class MusicControlView(ui.LayoutView):
                     await player.pause(False)
                 await player.skip(force=True)
             except Exception as exc:
+                player.end_intent = None
                 # Session 已失效時 Lavalink 端本來就沒在播了，停止仍應完成（收尾面板），並在背景重建 Session
                 if not (cog and cog._is_session_lost_error(exc)):
                     raise
-                player.end_intent = None
                 await cog._handle_session_lost(player, exc)
         if cog:
             await cog._update_panel_ended(
@@ -1224,6 +1265,8 @@ class MusicControlView(ui.LayoutView):
         await player.set_volume(new_vol)
         if cog:
             await cog._sync_panel(interaction.guild.id, player, interaction=interaction)
+        elif not interaction.response.is_done():
+            await interaction.response.defer()
 
     async def volume_up(self, interaction: discord.Interaction, button: ui.Button | None = None):
         player: "wavelink_module.Player" = interaction.guild.voice_client
@@ -1234,6 +1277,8 @@ class MusicControlView(ui.LayoutView):
         await player.set_volume(new_vol)
         if cog:
             await cog._sync_panel(interaction.guild.id, player, interaction=interaction)
+        elif not interaction.response.is_done():
+            await interaction.response.defer()
 
     async def toggle_loop(self, interaction: discord.Interaction, button: ui.Button | None = None):
         """在音樂控制面板直接循環切換 loop_mode（關閉 -> 單曲循環 -> 佇列循環 -> 關閉）。
@@ -1252,6 +1297,8 @@ class MusicControlView(ui.LayoutView):
                 duration=8.0,
             )
             await cog._sync_panel(interaction.guild.id, player, interaction=interaction)
+        elif not interaction.response.is_done():
+            await interaction.response.defer()
 
     async def toggle_shuffle(self, interaction: discord.Interaction, button: ui.Button | None = None):
         """在音樂控制面板直接切換隨機播放模式（開啟 / 關閉）。
@@ -1275,6 +1322,8 @@ class MusicControlView(ui.LayoutView):
                 notice = f"➡️ **已關閉隨機播放模式**：佇列將依照目前順序依序播放。（操作者：{interaction.user.display_name}）"
             cog._set_panel_notice(interaction.guild.id, notice, duration=8.0)
             await cog._sync_panel(interaction.guild.id, player, interaction=interaction)
+        elif not interaction.response.is_done():
+            await interaction.response.defer()
 
 
 # ==============================================================================
@@ -1855,11 +1904,11 @@ class Music(commands.Cog):
         # key: guild_id 字串，value: 點歌頻道 ID。
         # 只載入一次，之後修改時同步更新記憶體 + 檔案。
         self.music_channel_settings: dict = _load_music_settings()
-        # 進行中的點歌者操作請求：key=點歌者 ID，value={locked, action, view}
-        self._pending_requests: dict[int, dict] = {}
+        # 進行中的點歌者操作請求：key=(guild_id, 點歌者 ID)（相容無 guild 時為點歌者 ID），value={action, view}
+        self._pending_requests: dict = {}
         # 進行中的停止投票：key=guild ID，value=StopVoteView
         self._stop_votes: dict[int, StopVoteView] = {}
-        # 被拒絕過的曲目（同一首歌被拒後不得再提請求）：key=track identifier
+        # 被拒絕過的曲目（同一首歌被拒後不得再提請求）：key=(guild_id, track identifier)
         self._rejected_track_keys: dict = {}
         # 第 6 週新增：進度條渲染節流與 429 退避記錄
         # key: guild_id, value: 上次成功更新的進度條字串，進度字串沒變時跳過 edit
@@ -2288,7 +2337,7 @@ class Music(commands.Cog):
 
     @staticmethod
     def _is_live_track(track: Any) -> bool:
-        """判斷曲目是否為直播串流（is_stream=True、不可跳轉、或時長 >= 24 小時 86,400,000 ms，支援曲目物件與字典結構）。"""
+        """判斷曲目是否為直播串流（is_stream=True、不可跳轉、或時長 < 0 / >= 24 小時 86,400,000 ms，支援曲目物件與字典結構）。"""
         if track is None:
             return False
         if isinstance(track, dict):
@@ -2302,7 +2351,7 @@ class Music(commands.Cog):
             if length is not None:
                 try:
                     val = int(length)
-                    if val <= 0 or val >= 86_400_000:
+                    if val < 0 or val >= 86_400_000:
                         return True
                 except (ValueError, TypeError):
                     pass
@@ -2317,7 +2366,7 @@ class Music(commands.Cog):
         if length is not None:
             try:
                 val = int(length)
-                if val <= 0 or val >= 86_400_000:
+                if val < 0 or val >= 86_400_000:
                     return True
             except (ValueError, TypeError):
                 pass
@@ -2621,20 +2670,21 @@ class Music(commands.Cog):
                 if channel is None:
                     continue
 
-                if not self._is_playback_active(player) or self.panel_messages.get(guild_id) != (channel_id, message_id):
-                    continue
+                async with self._get_panel_lock(guild_id):
+                    if not self._is_playback_active(player) or self.panel_messages.get(guild_id) != (channel_id, message_id):
+                        continue
 
-                view = MusicControlView(
-                    self,
-                    player=player,
-                    notice=self._panel_notices.get(guild_id),
-                )
-                view.refresh_buttons(player)
+                    view = MusicControlView(
+                        self,
+                        player=player,
+                        notice=self._panel_notices.get(guild_id),
+                    )
+                    view.refresh_buttons(player)
 
-                # 6. 使用 partial_message 編輯，直接發送 PATCH 請求，省去 fetch_message 的 GET 請求
-                msg = channel.get_partial_message(message_id)
-                await msg.edit(content=None, embed=None, view=view)
-                self._last_progress_str[guild_id] = current_progress_str
+                    # 6. 使用 partial_message 編輯，直接發送 PATCH 請求，省去 fetch_message 的 GET 請求
+                    msg = channel.get_partial_message(message_id)
+                    await msg.edit(content=None, embed=None, view=view)
+                    self._last_progress_str[guild_id] = current_progress_str
 
             except discord.NotFound:
                 # 只有當記錄中的面板 ID 仍然是剛剛編輯失敗的那則 message_id，且仍在播放中時，才視為面板被刪除並重發
@@ -2969,15 +3019,18 @@ class Music(commands.Cog):
             ended_track = None
             replay_track = None
 
+        guild_obj = getattr(player, "guild", None)
+        guild_id_for_ctrl = guild_obj.id if guild_obj is not None else None
+
         # 曲目結束（換歌／被跳過／停止）：解除這首歌的操作請求鎖與拒絕鎖
-        self._cleanup_control_state(ended_track)
+        self._cleanup_control_state(ended_track, guild_id=guild_id_for_ctrl)
 
         if intent == "stop":
             # /music_stop 已清空佇列並回覆使用者，這裡確保清除播放狀態與置底任務，不需要再發「播完了」通知
             self._clear_player_playback_state(player)
-            guild_obj = getattr(player, "guild", None)
             if guild_obj is not None:
                 self._cancel_panel_bump(guild_obj.id, force=True)
+                self._cancel_guild_control_views(guild_obj.id)
             return
 
         next_item = None
@@ -2996,7 +3049,6 @@ class Music(commands.Cog):
             # 第 7 週：背景匯入還在跑時，佇列暫時是空的只是因為「下一批還沒解析完」，
             # 不能當成播放結束（否則面板會被拋棄，匯入完成後也沒人接著播）。
             # 匯入任務每批加入佇列後會呼叫 _start_if_idle 接手播放。
-            guild_obj = getattr(player, "guild", None)
             if guild_obj is not None and guild_obj.id in self._import_tasks:
                 return
             self._clear_player_playback_state(player)
@@ -3014,37 +3066,69 @@ class Music(commands.Cog):
                         pass
             return
 
-        next_track, next_requester, next_requester_id = self._split_queue_item(next_item)
         player.advancing = True  # 告知匯入任務「我正在接下一首」，避免兩邊同時 play 造成互相覆蓋
+        started_next = False
         try:
-            await self._play_track(player, next_track, next_requester, next_requester_id)
-        except Exception as e:
-            print(f">>> 自動播放下一首時發生錯誤：{e}")
-            guild_obj = getattr(player, "guild", None)
-            if self._is_session_lost_error(e):
-                # Session 失效：_play_track 已把 _active_track 設為下一首，重連後 _recover_player_after_session_reset 會從頭播放它
-                await self._handle_session_lost(player, e)
-                if guild_obj is not None:
-                    await self._notify_panel(
-                        guild_obj.id,
-                        f"🔄 音訊節點連線中斷，正在自動重新連線，恢復後會接著播放「{getattr(next_track, 'title', '下一首')}」。",
-                        duration=15.0,
-                    )
-                return
-            await self.bot.notify_owner_error(
-                e, extra_info=f"on_wavelink_track_end 自動播放失敗 track={getattr(next_track, 'title', '?')}"
-            )
-            # 第 7 週：錯誤通知改顯示在面板內；沒有面板時才退回頻道訊息
-            err_text = f"⚠️ 自動播放「{getattr(next_track, 'title', '未知曲目')}」時發生錯誤，已回報開發者。"
-            shown = guild_obj is not None and await self._notify_panel(guild_obj.id, err_text, duration=15.0)
-            if not shown and channel is not None:
+            while next_item is not None:
+                next_track, next_requester, next_requester_id = self._split_queue_item(next_item)
                 try:
-                    await channel.send(err_text)
-                except discord.HTTPException:
-                    pass
-            return
+                    await self._play_track(player, next_track, next_requester, next_requester_id)
+                    started_next = True
+                    break
+                except _TrackResolveError as e:
+                    print(f">>> 無法解析下一首曲目，自動略過：{e}")
+                    if guild_obj is not None:
+                        await self._notify_panel(
+                            guild_obj.id,
+                            f"⚠️ 無法載入「{getattr(next_track, 'title', '未知曲目')}」，已自動略過。",
+                            duration=10.0,
+                        )
+                    if loop_mode == "single" or not song_queue:
+                        next_item = None
+                    else:
+                        next_item = song_queue.popleft()
+                except Exception as e:
+                    print(f">>> 自動播放下一首時發生錯誤：{e}")
+                    if self._is_session_lost_error(e):
+                        # Session 失效：_play_track 已把 _active_track 設為下一首，重連後 _recover_player_after_session_reset 會從頭播放它
+                        await self._handle_session_lost(player, e)
+                        if guild_obj is not None:
+                            await self._notify_panel(
+                                guild_obj.id,
+                                f"🔄 音訊節點連線中斷，正在自動重新連線，恢復後會接著播放「{getattr(next_track, 'title', '下一首')}」。",
+                                duration=15.0,
+                            )
+                        return
+                    await self.bot.notify_owner_error(
+                        e, extra_info=f"on_wavelink_track_end 自動播放失敗 track={getattr(next_track, 'title', '?')}"
+                    )
+                    # 第 7 週：錯誤通知改顯示在面板內；沒有面板時才退回頻道訊息
+                    err_text = f"⚠️ 自動播放「{getattr(next_track, 'title', '未知曲目')}」時發生錯誤，已回報開發者。"
+                    shown = guild_obj is not None and await self._notify_panel(guild_obj.id, err_text, duration=15.0)
+                    if not shown and channel is not None:
+                        try:
+                            await channel.send(err_text)
+                        except discord.HTTPException:
+                            pass
+                    return
         finally:
             player.advancing = False
+
+        if not started_next:
+            player.current_requester = None
+            player.current_requester_id = None
+            if guild_obj is not None and guild_obj.id in self._import_tasks:
+                return
+            self._clear_player_playback_state(player)
+            if guild_obj is not None:
+                self._cancel_panel_bump(guild_obj.id, force=True)
+                end_reason = "📭 播放佇列中的剩餘曲目皆無法載入，輸入 `/music_play` 重新點歌吧！"
+                shown = await self._update_panel_ended(guild_obj.id, reason=end_reason)
+                if not shown and channel is not None:
+                    try:
+                        await channel.send(end_reason)
+                    except discord.HTTPException:
+                        pass
 
         # 第 6 週更新：播放下一首時不再單獨發送通知 Embed，統一由 on_wavelink_track_start
         # 觸發 _sync_panel 即時編輯並刷新主面板 Container，避免洗版與刷掉控制面板。
@@ -3081,6 +3165,7 @@ class Music(commands.Cog):
             if guild.id in self._import_tasks:
                 self._cancel_import(guild.id)
             if member.id == self.bot.user.id:
+                self._cancel_guild_control_views(guild.id)
                 await self._cleanup_guild_voice_and_player(guild)
                 if guild.id in self.panel_messages:
                     await self._update_panel_ended(guild.id, reason="👋 我已離開語音頻道，想聽歌再 `/music_play` 一次就可以！")
@@ -3160,8 +3245,9 @@ class Music(commands.Cog):
             song_queue.clear()
 
         home_channel = getattr(player, "home_channel", None)
-        # 第 7 週：空房離開時一併取消背景匯入，並把原因寫進面板最終狀態（不另外發訊息）
+        # 第 7 週：空房離開時一併取消背景匯入與等待中的投票／請求視圖，並把原因寫進面板最終狀態（不另外發訊息）
         self._cancel_import(guild_id)
+        self._cancel_guild_control_views(guild_id)
         leave_text = (
             f"📤 語音頻道已經空了超過 {EMPTY_VOICE_CHANNEL_TIMEOUT:.0f} 秒，"
             "我先自動離開並清空佇列了，想聽歌再 `/music_play` 一次就可以！"
@@ -3245,8 +3331,8 @@ class Music(commands.Cog):
         user_channel = interaction.user.voice.channel
         player: "wavelink_module.Player | None" = interaction.guild.voice_client
 
-        # 清理可能殘留的幽靈/失效連線
-        if player is not None and not getattr(player, "connected", True):
+        # 清理可能殘留的幽靈/失效連線（包含 channel 遺失的孤兒 VoiceClient）
+        if player is not None and (not getattr(player, "connected", True) or getattr(player, "channel", None) is None):
             await self._cleanup_guild_voice_and_player(interaction.guild)
             player = None
 
@@ -3394,7 +3480,8 @@ class Music(commands.Cog):
             await interaction.response.send_message("ℹ️ 我目前不在任何語音頻道中。", ephemeral=True)
             return
 
-        channel_mention = voice_client.channel.mention
+        vc_channel = getattr(voice_client, "channel", None)
+        channel_mention = vc_channel.mention if vc_channel is not None else "語音頻道"
         # 手動 /leave 了，不需要（也不該）再讓背景計時器之後又觸發一次自動離開。
         self._cancel_empty_channel_timer(interaction.guild.id)
         # 第3週新增：離開語音頻道時順便清空這個伺服器的佇列，
@@ -3404,6 +3491,7 @@ class Music(commands.Cog):
             song_queue.clear()
         # 第 7 週：離開時取消背景匯入（已解析但未加入的曲目直接丟棄），原因寫進面板最終狀態
         self._cancel_import(interaction.guild.id)
+        self._cancel_guild_control_views(interaction.guild.id)
         await self._update_panel_ended(
             interaction.guild.id,
             reason=f"👋 已離開 {channel_mention}（操作者：{interaction.user.display_name}）",
@@ -3671,6 +3759,11 @@ class Music(commands.Cog):
 
             # 非最終收尾模式下，若播放器已經停止／結束且無匯入進行中，絕不更新或重發面板
             if not final and not self._is_playback_active(player) and guild_id not in self._import_tasks:
+                if interaction is not None and not interaction.response.is_done():
+                    try:
+                        await interaction.response.send_message("目前沒有播放中的內容", ephemeral=True)
+                    except discord.HTTPException:
+                        pass
                 return
 
             # 檢查是否有切歌等操作掛起的 deferred interaction
@@ -3696,7 +3789,7 @@ class Music(commands.Cog):
                     if player is not None and getattr(player, "current", None) is not None:
                         pos = getattr(player, "position", 0)
                         length = getattr(player.current, "length", 0)
-                        is_stream = bool(getattr(player.current, "is_stream", False))
+                        is_stream = self._is_live_track(player.current)
                         self._last_progress_str[guild_id] = build_progress_bar(pos, length, is_stream=is_stream)
                     # final 模式：只有「被按的那則就是記錄中的面板」才算處理完，否則繼續編輯記錄中的面板
                     msg_id = getattr(getattr(interaction, "message", None), "id", None)
@@ -3725,7 +3818,7 @@ class Music(commands.Cog):
                         if player is not None and getattr(player, "current", None) is not None:
                             pos = getattr(player, "position", 0)
                             length = getattr(player.current, "length", 0)
-                            is_stream = bool(getattr(player.current, "is_stream", False))
+                            is_stream = self._is_live_track(player.current)
                             self._last_progress_str[guild_id] = build_progress_bar(pos, length, is_stream=is_stream)
                         return
                     except discord.NotFound:
@@ -3748,7 +3841,7 @@ class Music(commands.Cog):
                     self._cancel_panel_bump(guild_id)
                     pos = getattr(player, "position", 0)
                     length = getattr(player.current, "length", 0)
-                    is_stream = bool(getattr(player.current, "is_stream", False))
+                    is_stream = self._is_live_track(player.current)
                     self._last_progress_str[guild_id] = build_progress_bar(pos, length, is_stream=is_stream)
                     await self._cleanup_old_panels(
                         guild_id, keep_message_id=new_msg.id, default_channel=target_channel
@@ -3927,11 +4020,12 @@ class Music(commands.Cog):
             task.cancel()
 
     def _schedule_panel_bump(self, guild_id: int) -> None:
-        """排程（或順延防抖到期時間）將控制面板自動置底，同時遵守兩次置底間的最短冷卻間隔。"""
+        """排程（或順延防抖到期時間）將控制面板自動置底，同時遵守兩次置底間的最短冷卻間隔與 429 退避時間。"""
         now = time.monotonic()
         last_bump = self._last_bump_at.get(guild_id, 0.0)
         cooldown_due = (last_bump + PANEL_BUMP_COOLDOWN) if last_bump > 0.0 else 0.0
-        self._bump_due_at[guild_id] = max(now + PANEL_BUMP_DELAY, cooldown_due)
+        rate_limit_due = self._rate_limit_until.get(guild_id, 0.0)
+        self._bump_due_at[guild_id] = max(now + PANEL_BUMP_DELAY, cooldown_due, rate_limit_due)
         existing = self._panel_bump_tasks.get(guild_id)
         if existing is not None and not existing.done():
             return
@@ -3977,6 +4071,8 @@ class Music(commands.Cog):
 
             guild = self.bot.get_guild(guild_id)
             if guild is None:
+                self._bump_trigger_msgs.pop(guild_id, None)
+                self._bump_due_at.pop(guild_id, None)
                 return
             player = getattr(guild, "voice_client", None)
             if not self._is_playback_active(player):
@@ -3994,26 +4090,22 @@ class Music(commands.Cog):
                 self._bump_due_at.pop(guild_id, None)
                 return
 
-            # 遵守 429 Rate Limit 退避冷卻
+            # 遵守 429 Rate Limit 退避冷卻：絕不在持有面板鎖期間 sleep，直接延後排程讓 _delayed_bump 的 finally 接手等待
             cooldown_until = self._rate_limit_until.get(guild_id, 0.0)
             now = time.monotonic()
             if now < cooldown_until:
-                await asyncio.sleep(cooldown_until - now)
-                panel_info = self.panel_messages.get(guild_id)
-                if not panel_info or not self._is_playback_active(player):
-                    self._bump_trigger_msgs.pop(guild_id, None)
-                    self._bump_due_at.pop(guild_id, None)
-                    return
-                channel_id, old_message_id = panel_info
-                self._guild_panel_history.setdefault(guild_id, set()).add((channel_id, old_message_id))
+                self._bump_due_at[guild_id] = max(self._bump_due_at.get(guild_id, 0.0), cooldown_until)
+                return
 
             channel = self.bot.get_channel(channel_id)
             if channel is None:
                 try:
                     channel = await self.bot.fetch_channel(channel_id)
                 except Exception:
-                    return
+                    channel = None
             if channel is None:
+                self._bump_trigger_msgs.pop(guild_id, None)
+                self._bump_due_at.pop(guild_id, None)
                 return
 
             # 若頻道最後一則訊息本來就是目前的控制面板，無須重發
@@ -4054,12 +4146,16 @@ class Music(commands.Cog):
                     self._bump_due_at.pop(guild_id, None)
                 pos = getattr(player, "position", 0)
                 length = getattr(player.current, "length", 0)
-                is_stream = bool(getattr(player.current, "is_stream", False))
+                is_stream = self._is_live_track(player.current)
                 self._last_progress_str[guild_id] = build_progress_bar(pos, length, is_stream=is_stream)
             except discord.HTTPException as exc:
                 if getattr(exc, "status", None) == 429:
                     retry_after = float(getattr(exc, "retry_after", 5.0) or 5.0)
                     self._rate_limit_until[guild_id] = time.monotonic() + retry_after
+                else:
+                    # 非 429（如權限不足 403 / 頻道不存在 404）應停止重試，避免每 6 秒無限迴圈失敗
+                    self._bump_trigger_msgs.pop(guild_id, None)
+                    self._bump_due_at.pop(guild_id, None)
                 print(f"⚠️ [面板自動置底] 發送新面板失敗 (guild_id={guild_id})：{exc}")
                 return
             finally:
@@ -4167,11 +4263,15 @@ class Music(commands.Cog):
         )
 
     async def _start_if_idle(self, player) -> None:
-        """播放器閒置且佇列有歌時，取出第一首開始播放（匯入的第一批曲目、或播完後才到的下一批）。"""
-        if not self._is_player_idle(player) or not player.song_queue:
-            return
-        track, requester_name, requester_id = self._split_queue_item(player.song_queue.popleft())
-        await self._play_track(player, track, requester_name, requester_id)
+        """播放器閒置且佇列有歌時，依序嘗試取出第一首可播放的曲目開始播放（匯入的第一批曲目、或播完後才到的下一批）。"""
+        while self._is_player_idle(player) and player.song_queue:
+            track, requester_name, requester_id = self._split_queue_item(player.song_queue.popleft())
+            try:
+                await self._play_track(player, track, requester_name, requester_id)
+                return
+            except _TrackResolveError as exc:
+                print(f">>> 無法解析佇列曲目，自動略過：{exc}")
+                continue
 
     def _cancel_import(self, guild_id: int) -> bool:
         """取消指定伺服器的背景匯入任務並清理狀態；回傳是否真的有任務被取消。
@@ -4335,22 +4435,29 @@ class Music(commands.Cog):
                 await self._ephemeral_error(interaction, f"😕 這份 {label} 內容裡沒有可以匯入的曲目。")
                 return
 
+            queued_position = 0   # 單曲被排進佇列時的位置（0 代表直接開始播放）
+
             # 若為 YouTube 歌單且 Lavalink 已全數解析為 Playable，直接全量加入佇列以獲取最佳效能與穩定度
             if yt_url and all(getattr(t, "playable", None) is not None for t in tracks):
+                was_idle = self._is_player_idle(player)
                 for st in tracks:
                     done += 1
                     player.song_queue.append((st.playable, requester_name, requester_id))
                     ok += 1
+                if not was_idle and total == 1:
+                    queued_position = len(player.song_queue)
                 try:
                     await self._start_if_idle(player)
                 except Exception as exc:
-                    print(f">>> 啟動播放第一首失敗：{exc}")
+                    if self._is_session_lost_error(exc):
+                        await self._handle_session_lost(player, exc)
+                    else:
+                        print(f">>> 啟動播放第一首失敗：{exc}")
                 await clear_thinking()
                 index = total
             else:
                 sem = asyncio.Semaphore(IMPORT_CONCURRENCY)
                 index = 0
-                queued_position = 0   # 單曲被排進佇列時的位置（0 代表直接開始播放）
 
                 # ---- 2. 第一首：逐首嘗試到成功為止，立刻開始播放，使用者不必等整批 ----
                 while index < total and ok == 0:
@@ -4362,6 +4469,7 @@ class Music(commands.Cog):
                         fail += 1
                         continue
                     if not alive():
+                        await clear_thinking()
                         return
 
                     was_idle = self._is_player_idle(player)
@@ -4372,7 +4480,10 @@ class Music(commands.Cog):
                     try:
                         await self._start_if_idle(player)
                     except Exception as exc:
-                        print(f">>> 啟動播放第一首失敗：{exc}")
+                        if self._is_session_lost_error(exc):
+                            await self._handle_session_lost(player, exc)
+                        else:
+                            print(f">>> 啟動播放第一首失敗：{exc}")
                     await clear_thinking()
 
                 if ok == 0 and fail >= total:
@@ -4399,7 +4510,10 @@ class Music(commands.Cog):
                     try:
                         await self._start_if_idle(player)
                     except Exception as exc:
-                        print(f">>> 啟動後續播放失敗：{exc}")
+                        if self._is_session_lost_error(exc):
+                            await self._handle_session_lost(player, exc)
+                        else:
+                            print(f">>> 啟動後續播放失敗：{exc}")
 
                     # 進度更新節流：沿用第 6 週的間隔與 429 退避記錄，避免頻繁 edit 觸發 rate limit
                     now = time.monotonic()
@@ -4807,20 +4921,21 @@ class Music(commands.Cog):
             )
             return
 
+        # 依指示：在具備 Premium 應用程式前，輸入 Spotify 連結一律提示不支援（底層 SpotifyClient 服務程式完整保留）
+        # 提早在加入語音房之前擋下，並使用 _ephemeral_error 清除公開「思考中」訊息
+        if looks_like_spotify(query):
+            await self._ephemeral_error(
+                interaction,
+                "❌ 目前不支援 Spotify 音源播放，請改用 YouTube 或 SoundCloud 連結／關鍵字點歌。",
+            )
+            return
+
         player = await self._ensure_player(interaction)
         if player is None:
             return  # 錯誤訊息已經在 _ensure_player 內送出
 
         if shuffle:
             player.shuffle = True
-
-        # 依指示：在具備 Premium 應用程式前，輸入 Spotify 連結一律提示不支援（底層 SpotifyClient 服務程式完整保留）
-        if looks_like_spotify(query):
-            await interaction.followup.send(
-                "❌ 目前不支援 Spotify 音源播放，請改用 YouTube 或 SoundCloud 連結／關鍵字點歌。",
-                ephemeral=True,
-            )
-            return
 
         yt_url = parse_youtube_playlist_url(query)
         if yt_url:
@@ -4838,6 +4953,7 @@ class Music(commands.Cog):
                 random.shuffle(plist_tracks)
             if self._is_player_idle(player):
                 first_trk = plist_tracks[0]
+                queue_len_before = len(player.song_queue)
                 for pl_t in plist_tracks[1:]:
                     player.song_queue.append((pl_t, interaction.user.display_name, interaction.user.id))
                 try:
@@ -4850,7 +4966,14 @@ class Music(commands.Cog):
                             f"🔄 音訊節點連線剛重置，正在自動重新連線，完成後將立即播放「{getattr(first_trk, 'title', '此曲目')}」。",
                         )
                         return
-                    raise
+                    while len(player.song_queue) > queue_len_before:
+                        player.song_queue.pop()
+                    print(f">>> 播放清單首曲時發生錯誤：{e}")
+                    await self.bot.notify_owner_error(
+                        e, interaction, extra_info=f"/play 播放清單失敗 track={getattr(first_trk, 'title', '?')}"
+                    )
+                    await self._ephemeral_error(interaction, "❌ 播放音樂時發生錯誤，已回報開發者。")
+                    return
             else:
                 for pl_t in plist_tracks:
                     player.song_queue.append((pl_t, interaction.user.display_name, interaction.user.id))
@@ -5141,18 +5264,54 @@ class Music(commands.Cog):
             f"🗑️ 已清空佇列，移除了 {removed_count} 首歌曲（正在播放的歌曲不受影響）。", ephemeral=True
         )
 
-    def _cleanup_control_state(self, track) -> None:
-        """曲目結束（換歌／被跳過／停止）時，清掉該曲的拒絕鎖與還在等的操作請求。
+    def _cleanup_control_state(self, track, guild_id: int | None = None) -> None:
+        """曲目結束（換歌／被跳過／停止）時，清掉該曲在該伺服器的拒絕鎖與還在等的操作請求。
 
         「同一首歌被拒後不得再提請求」只限於這首歌的這次播放；
         下一首開始播放（或這首再次被播出）時就重新給機會。
         """
         if track is not None:
-            self._rejected_track_keys.pop(self._track_key(track), None)
-        for rid, state in list(self._pending_requests.items()):
-            view_track = getattr(state.get("view"), "track", None)
+            self._clear_rejection(track, guild_id=guild_id)
+        for key, state in list(self._pending_requests.items()):
+            view = state.get("view")
+            view_guild_id = getattr(view, "guild_id", None)
+            if guild_id is not None:
+                if isinstance(key, tuple) and key[0] != guild_id:
+                    continue
+                if view_guild_id is not None and view_guild_id != guild_id:
+                    continue
+            view_track = getattr(view, "track", None)
             if view_track is track or (track is not None and self._is_same_track(view_track, track)):
-                self._pending_requests.pop(rid, None)
+                self._pending_requests.pop(key, None)
+                if view is not None:
+                    view.decided = True
+                    for item in getattr(view, "children", []):
+                        item.disabled = True
+                    view.stop()
+
+    def _cancel_guild_control_views(self, guild_id: int | None) -> None:
+        """停止／離開語音頻道時清理指定伺服器的所有待決定請求、投票視圖與曲目拒絕鎖。"""
+        if guild_id is None:
+            return
+        for key, state in list(self._pending_requests.items()):
+            view = state.get("view")
+            view_guild_id = getattr(view, "guild_id", None)
+            if (isinstance(key, tuple) and key[0] == guild_id) or view_guild_id == guild_id:
+                self._pending_requests.pop(key, None)
+                if view is not None:
+                    view.decided = True
+                    for item in getattr(view, "children", []):
+                        item.disabled = True
+                    view.stop()
+        vote_view = self._stop_votes.pop(guild_id, None)
+        if vote_view is not None:
+            vote_view.finished = True
+            for item in getattr(vote_view, "children", []):
+                item.disabled = True
+            vote_view.stop()
+        for r_key in list(self._rejected_track_keys.keys()):
+            if isinstance(r_key, tuple) and r_key[0] == guild_id:
+                self._rejected_track_keys.pop(r_key, None)
 
     @classmethod
     def _is_same_track(cls, track_a, track_b) -> bool:
@@ -5263,8 +5422,9 @@ class Music(commands.Cog):
         # 若是從歌單載入但尚未具備 encoded 音軌字串（例如離線由網頁新增），在起播前即時向 Lavalink 解析
         if getattr(track, "_from_playlist_dict", False) and not getattr(track, "encoded", None):
             resolved = await self._resolve_playlist_track_obj(track)
-            if resolved is not None:
-                track = resolved
+            if resolved is None:
+                raise _TrackResolveError(f"無法解析歌單曲目：{getattr(track, 'title', '未知曲目')}")
+            track = resolved
 
         player.current_requester = requester_name
         player.current_requester_id = requester_id
@@ -5284,8 +5444,9 @@ class Music(commands.Cog):
         if not getattr(player, "_retrying_live_stream", False):
             player._live_retry_count = 0
         # 開始播放時清除這首歌之前的拒絕鎖（例如上次播放被拒、這次重新播出）
-        self._rejected_track_keys.pop(self._track_key(track), None)
         guild_obj = getattr(player, "guild", None)
+        guild_id = guild_obj.id if guild_obj is not None else None
+        self._clear_rejection(track, guild_id=guild_id)
         if guild_obj is not None:
             self._track_overdue_since.pop(guild_obj.id, None)
         try:
@@ -5306,14 +5467,15 @@ class Music(commands.Cog):
             return None
 
         player = interaction.guild.voice_client
-        if not isinstance(player, wavelink.Player):
+        player_channel = getattr(player, "channel", None) if isinstance(player, wavelink.Player) else None
+        if not isinstance(player, wavelink.Player) or player_channel is None:
             await interaction.response.send_message("ℹ️ 我目前不在任何語音頻道中。", ephemeral=True)
             return None
 
         voice = getattr(interaction.user, "voice", None)
-        if voice is None or voice.channel is None or voice.channel.id != player.channel.id:
+        if voice is None or voice.channel is None or voice.channel.id != player_channel.id:
             await interaction.response.send_message(
-                f"❌ 你必須跟我在同一個語音頻道（{player.channel.mention}）才能使用控制指令！", ephemeral=True
+                f"❌ 你必須跟我在同一個語音頻道（{player_channel.mention}）才能使用控制指令！", ephemeral=True
             )
             return None
         return player
@@ -5339,16 +5501,19 @@ class Music(commands.Cog):
         return requester_id, requester_name
 
     async def _requester_can_directly_control(self, interaction: discord.Interaction, player) -> bool:
-        """操作者是否可以直接控制（點歌者本人，或點歌者已不在機器人的語音頻道）。
-        必須在 _get_control_player 之後呼叫（此時 player.channel 一定存在）。"""
+        """操作者是否可以直接控制（點歌者本人，或點歌者已不在機器人的語音頻道）。"""
         requester_id, _ = self._get_current_requester(player)
         if requester_id is None:
             return True
         if interaction.user.id == requester_id:
             return True
-        requester = interaction.guild.get_member(requester_id)
+        player_channel = getattr(player, "channel", None)
+        if player_channel is None:
+            return True
+        get_member = getattr(interaction.guild, "get_member", None) if interaction.guild else None
+        requester = get_member(requester_id) if callable(get_member) else None
         if requester is None or requester.voice is None or requester.voice.channel is None \
-                or requester.voice.channel.id != player.channel.id:
+                or requester.voice.channel.id != player_channel.id:
             return True  # 點歌者已不在機器人的語音頻道，開放任何人操作
         return False
 
@@ -5380,18 +5545,40 @@ class Music(commands.Cog):
             return set()
         return {m.id for m in channel.members if not m.bot}
 
-    def _register_control_request(self, requester_id: int, action_label: str, view) -> None:
-        """記錄進行中的操作請求；決定（允許/拒絕/逾時）後由 _resolve_control_request 移除。"""
-        self._pending_requests[requester_id] = {"action": action_label, "view": view}
+    @staticmethod
+    def _control_request_key(guild_id: int | None, requester_id: int):
+        """點歌者請求快取 key：有 guild_id 時依伺服器隔離，避免多伺服器同時操作互相擋住。"""
+        return (guild_id, requester_id) if guild_id is not None else requester_id
 
-    def _resolve_control_request(self, requester_id: int, allowed: bool, view=None) -> None:
+    @classmethod
+    def _rejection_key(cls, track, guild_id: int | None = None):
+        """曲目拒絕鎖 key：優先依伺服器隔離，避免同首歌在兩個伺服器間誤鎖。"""
+        tkey = cls._track_key(track)
+        return (guild_id, tkey) if guild_id is not None else tkey
+
+    def _register_control_request(
+        self, requester_id: int, action_label: str, view, guild_id: int | None = None
+    ) -> None:
+        """記錄進行中的操作請求；決定（允許/拒絕/逾時）後由 _resolve_control_request 移除。"""
+        if guild_id is None:
+            guild_id = getattr(view, "guild_id", None)
+        self._pending_requests[self._control_request_key(guild_id, requester_id)] = {
+            "action": action_label,
+            "view": view,
+        }
+
+    def _resolve_control_request(
+        self, requester_id: int, allowed: bool, view=None, guild_id: int | None = None
+    ) -> None:
         """請求被決定（按鈕或逾時）時呼叫：移除進行中紀錄。
         被拒絕時寫入 _rejected_track_keys，同一首歌在下一首開始播放前不得再次提出。
         """
-        self._pending_requests.pop(requester_id, None)
+        if guild_id is None and view is not None:
+            guild_id = getattr(view, "guild_id", None)
+        self._pending_requests.pop(self._control_request_key(guild_id, requester_id), None)
         track = getattr(view, "track", None) if view is not None else None
         if not allowed and track is not None:
-            self._rejected_track_keys[self._track_key(track)] = True
+            self._rejected_track_keys[self._rejection_key(track, guild_id)] = True
 
     def _register_stop_vote(self, guild_id: int, view) -> None:
         self._stop_votes[guild_id] = view
@@ -5404,7 +5591,7 @@ class Music(commands.Cog):
         self._stop_votes.pop(guild_id, None)
         track = getattr(view, "track", None) if view is not None else None
         if not approved and track is not None:
-            self._rejected_track_keys[self._track_key(track)] = True
+            self._rejected_track_keys[self._rejection_key(track, guild_id)] = True
 
     @staticmethod
     def _track_key(track) -> object:
@@ -5417,13 +5604,18 @@ class Music(commands.Cog):
         current = getattr(player, "current", None)
         if current is None:
             return False
+        guild_id = getattr(getattr(player, "guild", None), "id", None)
+        if self._rejection_key(current, guild_id) in self._rejected_track_keys:
+            return True
         return self._track_key(current) in self._rejected_track_keys
 
-    def _clear_rejection(self, track) -> None:
+    def _clear_rejection(self, track, guild_id: int | None = None) -> None:
         """換到下一首歌（或停止播放）時清除該首歌的拒絕鎖。"""
         if track is None:
             return
         self._rejected_track_keys.pop(self._track_key(track), None)
+        if guild_id is not None:
+            self._rejected_track_keys.pop(self._rejection_key(track, guild_id), None)
 
     # ---------- 點歌頻道限制（/music_set_channel） ----------
     def _get_music_channel_id(self, guild_id: int) -> int | None:
@@ -5509,18 +5701,32 @@ class Music(commands.Cog):
 
     async def _run_pause_or_resume(self, interaction: discord.Interaction, player, want_pause: bool):
         """點歌者按了「允許」（或操作者本人有權）之後，實際執行暫停／續播。"""
-        if want_pause:
-            if not player.current or player.paused:
-                await interaction.followup.send("ℹ️ 現在沒有可以暫停的歌曲。", ephemeral=True)
+        guild = getattr(interaction, "guild", None)
+        live_vc = getattr(guild, "voice_client", None) if guild is not None else None
+        if live_vc is not player or not getattr(player, "connected", True):
+            try:
+                await interaction.followup.send("ℹ️ 機器人已離開語音頻道，操作已取消。", ephemeral=True)
+            except discord.HTTPException:
+                pass
+            return
+        try:
+            if want_pause:
+                if not getattr(player, "current", None) or getattr(player, "paused", False):
+                    await interaction.followup.send("ℹ️ 現在沒有可以暫停的歌曲。", ephemeral=True)
+                    return
+                await player.pause(True)
+                await self._announce(interaction, f"⏸️ 已暫停{self._operator_stamp(interaction)}")
+            else:
+                if not getattr(player, "paused", False):
+                    await interaction.followup.send("ℹ️ 目前不是暫停狀態。", ephemeral=True)
+                    return
+                await player.pause(False)
+                await self._announce(interaction, f"▶️ 繼續播放{self._operator_stamp(interaction)}")
+        except Exception as e:
+            if self._is_session_lost_error(e):
+                await self._handle_session_lost(player, e)
                 return
-            await player.pause(True)
-            await self._announce(interaction, f"⏸️ 已暫停{self._operator_stamp(interaction)}")
-        else:
-            if not player.paused:
-                await interaction.followup.send("ℹ️ 目前不是暫停狀態。", ephemeral=True)
-                return
-            await player.pause(False)
-            await self._announce(interaction, f"▶️ 繼續播放{self._operator_stamp(interaction)}")
+            raise
 
     async def _handle_pause_resume_request(self, interaction: discord.Interaction, player, want_pause: bool):
         """pause / resume 的攔截邏輯：非點歌者使用時，改為向點歌者請求允許。
@@ -5530,9 +5736,10 @@ class Music(commands.Cog):
         """
         action_label = "暫停" if want_pause else "續播"
         requester_id, requester_name = self._get_current_requester(player)
+        guild_id = interaction.guild.id
 
         # 同一首歌已經有請求在等點歌者決定：先等它結束
-        if requester_id in self._pending_requests:
+        if self._control_request_key(guild_id, requester_id) in self._pending_requests:
             await interaction.response.send_message(
                 "⌳ 這首歌已經有操作請求還在等待點歌者決定，請先等它結束。", ephemeral=True
             )
@@ -5552,8 +5759,9 @@ class Music(commands.Cog):
             await interaction.response.send_message("ℹ️ 目前不是暫停狀態。", ephemeral=True)
             return
 
-        view = RequesterApprovalView(self, requester_id, requester_name or "未知", track=current)
-        self._register_control_request(requester_id, action_label, view)
+        view = RequesterApprovalView(
+            self, requester_id, requester_name or "未知", track=current, guild_id=guild_id
+        )
 
         async def after_decision(allowed: bool):
             if allowed:
@@ -5562,12 +5770,22 @@ class Music(commands.Cog):
         view.after_decision = after_decision
 
         # 在原文字頻道公開發送請求（不 ephemeral，讓點歌者看得到按鈕）
-        await interaction.response.send_message(
-            f"🙋 {interaction.user.display_name} 想要{action_label}「{current.title}」，"
-            f"等待點歌者 {requester_name or '未知'} 決定（{CONTROL_REQUEST_TIMEOUT} 秒內）：",
-            view=view,
-        )
-        view.message = await interaction.original_response()
+        try:
+            await interaction.response.send_message(
+                f"🙋 {interaction.user.display_name} 想要{action_label}「{current.title}」，"
+                f"等待點歌者 {requester_name or '未知'} 決定（{CONTROL_REQUEST_TIMEOUT} 秒內）：",
+                view=view,
+            )
+        except Exception:
+            view.decided = True
+            view.stop()
+            raise
+
+        self._register_control_request(requester_id, action_label, view, guild_id=guild_id)
+        try:
+            view.message = await interaction.original_response()
+        except discord.HTTPException:
+            pass
 
     @app_commands.command(name="music_pause", description="暫停目前播放的歌曲")
     @app_commands.guild_only()
@@ -5655,15 +5873,16 @@ class Music(commands.Cog):
         defer 出來的「思考中」訊息，要收掉避免多一則公開訊息。
         """
         song_queue: deque = getattr(player, "song_queue", None)
-        # 先取消背景匯入與面板置底任務：已解析但還沒加入佇列的曲目直接丟棄，避免停止後又被塞回佇列或觸發置底
+        # 先取消背景匯入、面板置底與待處理投票／操作請求：已解析但還沒加入佇列的曲目直接丟棄，避免停止後又被塞回佇列或觸發置底
         self._cancel_import(interaction.guild.id)
         self._cancel_panel_bump(interaction.guild.id, force=True)
+        self._cancel_guild_control_views(interaction.guild.id)
         # 順序很重要：先清佇列、關循環、清除播放曲目狀態，再更新面板與停止；否則 track_end 或置底任務會誤判仍在播放
         if song_queue:
             song_queue.clear()
         player.loop_mode = "off"
         current_track = getattr(player, "current", None) or getattr(player, "_active_track", None)
-        self._clear_rejection(current_track)
+        self._clear_rejection(current_track, guild_id=interaction.guild.id)
         self._clear_player_playback_state(player)
         stop_text = f"⏹️ 已停止播放並清空佇列{self._operator_stamp(interaction)}"
         shown = await self._update_panel_ended(interaction.guild.id, reason=stop_text)
@@ -5729,18 +5948,29 @@ class Music(commands.Cog):
             self, interaction.guild.id, interaction.user.id, interaction.user.display_name, voter_ids,
             track=player.current,
         )
-        self._register_stop_vote(interaction.guild.id, view)
 
         async def on_approved():
+            if not interaction.guild or interaction.guild.voice_client is not player:
+                return
             await self._execute_stop(interaction, player)
 
         view.on_approved = on_approved
 
-        await interaction.response.send_message(
-            view=view,
-            content=view._ballot_text(f"⏱️ {CONTROL_REQUEST_TIMEOUT} 秒內有效，全員同意才會停止；有人不同意即否決。"),
-        )
-        view.message = await interaction.original_response()
+        try:
+            await interaction.response.send_message(
+                view=view,
+                content=view._ballot_text(f"⏱️ {CONTROL_REQUEST_TIMEOUT} 秒內有效，全員同意才會停止；有人不同意即否決。"),
+            )
+        except Exception:
+            view.finished = True
+            view.stop()
+            raise
+
+        self._register_stop_vote(interaction.guild.id, view)
+        try:
+            view.message = await interaction.original_response()
+        except discord.HTTPException:
+            pass
 
     @app_commands.command(name="music_loop", description="切換循環模式")
     @app_commands.describe(mode="指定循環模式；不填則自動切換到下一個模式")
