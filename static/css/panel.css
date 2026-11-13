@@ -1171,6 +1171,26 @@ select.form-control option,
   box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.4) !important;
 }
 
+.btn-save-setting:disabled,
+.btn-save-setting:disabled:hover,
+.btn-save-setting:disabled:active {
+  opacity: 0.65;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* ---------- 紅色配色：清除設定／危險操作按鈕（刪除歌單、清除設定） ---------- */
 .btn-clear-setting,
 .btn-clear-setting:visited,
@@ -2542,6 +2562,59 @@ body.has-unsaved-changes.has-back-to-top .toast-container {
   color: #fca5a5;
 }
 
+.toast.info {
+  border-color: rgba(56, 189, 248, 0.5);
+  color: #bae6fd;
+}
+
+.toast.is-loading {
+  border-color: rgba(56, 189, 248, 0.65);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55), 0 0 18px rgba(56, 189, 248, 0.2);
+}
+
+progress.loading-spinner {
+  appearance: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 2.5px solid rgba(186, 230, 253, 0.25);
+  border-top-color: #38bdf8;
+  background: transparent;
+  color: #38bdf8;
+  animation: playlistSpinnerRotate 0.75s linear infinite;
+}
+
+progress.loading-spinner.loading-spinner-sm {
+  width: 15px;
+  height: 15px;
+  border-width: 2px;
+}
+
+progress.loading-spinner::-webkit-progress-bar,
+progress.loading-spinner::-webkit-progress-value {
+  background: transparent;
+}
+
+progress.loading-spinner::-moz-progress-bar {
+  background: transparent;
+}
+
+@keyframes playlistSpinnerRotate {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  progress.loading-spinner {
+    animation: none;
+    border-color: rgba(56, 189, 248, 0.65);
+    border-top-color: #bae6fd;
+  }
+}
+
 /* ---------- 尚未儲存變更底部懸浮提示列 (Unsaved Changes Bar) ---------- */
 .unsaved-changes-bar {
   position: fixed;
@@ -3529,6 +3602,24 @@ body.has-unsaved-changes.has-back-to-top .toast-container {
 .personal-add-track-row .btn {
   flex-shrink: 0;
   white-space: nowrap;
+}
+
+.playlist-add-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: -4px 0 14px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(56, 189, 248, 0.1);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  color: #bae6fd;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.playlist-add-status[hidden] {
+  display: none;
 }
 
 .personal-tracks-toolbar {

@@ -449,7 +449,7 @@ def test_bot_default_settings_api_and_ui():
     res_login = client.get('/api/auth/dev-login?role=owner')
     assert res_login.status_code == 302
 
-    # 3. 驗證後台面板 HTML 包含機器人預設設定卡片與子分頁
+    # 3. 驗證後台面板 HTML 包含機器人預設設定卡片、子分頁與拆開的 Gemini 模型選項
     res_page = client.get('/panel')
     assert res_page.status_code == 200
     html = res_page.data.decode('utf-8')
@@ -459,6 +459,11 @@ def test_bot_default_settings_api_and_ui():
     assert 'bot-default-ai-model' in html
     assert 'bot-default-ai-instruction' in html
     assert 'btn-apply-defaults-all' in html
+    assert 'gemini:gemini-3.5-flash-lite' in html
+    assert 'gemini:gemini-4-hydrogen' in html
+    assert 'gemini:gemini-3.8-flash' in html
+    assert 'gemini:gemini-2.5-flash' in html
+    assert 'gemini:gemini-flash-latest' in html
 
     # 4. 讀取全域預設值 API
     res_get = client.get('/api/panel/owner/bot-defaults')
@@ -467,30 +472,40 @@ def test_bot_default_settings_api_and_ui():
     assert data['status'] == 'ok'
     assert 'defaults' in data
     assert 'models' in data
+    model_ids = {m['id'] for m in data['models']}
+    assert 'gemini:gemini-3.5-flash-lite' in model_ids
+    assert 'gemini:gemini-4-hydrogen' in model_ids
+    assert 'gemini:gemini-3.8-flash' in model_ids
+    assert 'gemini:gemini-3.5-flash' in model_ids
 
-    # 5. 儲存全域預設值 API
-    res_post = client.post(
-        '/api/panel/owner/bot-defaults',
-        json={
-            'ai_is_enabled': True,
-            'ai_model': 'gemini:gemini-flash-latest',
-            'ai_temperature': 0.8,
-            'ai_max_tokens': 3500,
-            'ai_instruction': '測試專用全域預設人設提示詞',
-            'apply_to_all': False,
-        },
-    )
-    assert res_post.status_code == 200
-    res_data = res_post.get_json()
-    assert res_data['status'] == 'ok'
-    assert res_data['defaults']['ai_model'] == 'gemini:gemini-flash-latest'
-    assert res_data['defaults']['ai_instruction'] == '測試專用全域預設人設提示詞'
+    # 5. 儲存全域預設值 API（測試完成後還原原設定以免汙染資料庫）
+    from cogs.database import get_bot_default_settings, save_bot_default_settings
+    orig_defaults = get_bot_default_settings()
+    try:
+        for test_model in ('gemini:gemini-flash-latest', 'gemini:gemini-4-hydrogen'):
+            res_post = client.post(
+                '/api/panel/owner/bot-defaults',
+                json={
+                    'ai_is_enabled': True,
+                    'ai_model': test_model,
+                    'ai_temperature': 0.8,
+                    'ai_max_tokens': 3500,
+                    'ai_instruction': '測試專用全域預設人設提示詞',
+                    'apply_to_all': False,
+                },
+            )
+            assert res_post.status_code == 200
+            res_data = res_post.get_json()
+            assert res_data['status'] == 'ok'
+            assert res_data['defaults']['ai_model'] == test_model
+            assert res_data['defaults']['ai_instruction'] == '測試專用全域預設人設提示詞'
 
-    # 6. 驗證 cogs.database.get_bot_default_settings 回傳最新設定
-    from cogs.database import get_bot_default_settings
-    current_defaults = get_bot_default_settings()
-    assert current_defaults['ai_model'] == 'gemini:gemini-flash-latest'
-    assert current_defaults['ai_instruction'] == '測試專用全域預設人設提示詞'
+            # 6. 驗證 cogs.database.get_bot_default_settings 回傳最新設定
+            current_defaults = get_bot_default_settings()
+            assert current_defaults['ai_model'] == test_model
+            assert current_defaults['ai_instruction'] == '測試專用全域預設人設提示詞'
+    finally:
+        save_bot_default_settings(orig_defaults)
 
 
 def test_table_to_image_extractor():
@@ -582,4 +597,354 @@ def test_resolve_error_view_and_deduplication():
     # 觸發標記已解決
     _unresolved_ai_error_keys.discard(test_key)
     assert test_key not in _unresolved_ai_error_keys
+
+
+def test_personal_playlist_ui_markup_and_agents_rules():
+    """驗證個人歌單頁面具備 Enter 送出、新增中狀態指示器與 AGENTS.md 儲存提示規範。"""
+    import os
+
+    client = app.test_client()
+    client.get('/api/auth/dev-login?role=admin')
+    res = client.get('/panel')
+    assert res.status_code == 200
+    html = res.data.decode('utf-8')
+
+    assert 'id="form-update-personal-playlist"' in html
+    assert 'id="input-edit-playlist-name"' in html
+    assert 'id="select-edit-playlist-public"' in html
+    assert 'id="btn-save-playlist-meta"' in html
+
+    assert 'id="form-add-playlist-track"' in html
+    assert 'for="input-add-playlist-track" class="visually-hidden"' in html
+    assert 'enterkeyhint="send"' in html
+    assert 'id="playlist-add-status"' in html
+    assert 'role="status"' in html
+    assert 'aria-live="polite"' in html
+    assert '新增中...' in html
+    assert 'id="unsaved-changes-bar"' in html
+
+    root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root_dir, 'AGENTS.md'), 'r', encoding='utf-8') as f:
+        agents_md = f.read()
+    assert '未儲存變更統一提示規範（`#unsaved-changes-bar`）' in agents_md
+    assert '#form-update-personal-playlist' in agents_md
+    assert 'checkUnsavedChanges()' in agents_md
+    assert 'isComposing || event.keyCode === 229' in agents_md
+
+
+def test_personal_playlist_js_unsaved_bar_and_add_track_flow():
+    """透過 Node.js 沙箱 DOM 執行 panel.js，實測新增中提示、IME 安全 Enter 送出與未儲存變更提示列。"""
+    import os
+    import shutil
+    import subprocess
+
+    node_bin = shutil.which('node')
+    if not node_bin:
+        return
+
+    root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    panel_js_path = os.path.join(root_dir, 'static', 'js', 'panel.js')
+
+    harness_script = r"""
+const fs = require('fs');
+const assert = require('assert');
+
+class FakeClassList {
+  constructor() { this.set = new Set(); }
+  add(...tokens) { tokens.forEach((t) => this.set.add(t)); }
+  remove(...tokens) { tokens.forEach((t) => this.set.delete(t)); }
+  contains(t) { return this.set.has(t); }
+  toggle(t, force) {
+    if (force === undefined) {
+      if (this.set.has(t)) { this.set.delete(t); return false; }
+      this.set.add(t); return true;
+    }
+    if (force) { this.set.add(t); return true; }
+    this.set.delete(t); return false;
+  }
+}
+
+class FakeElement {
+  constructor(tagName = 'div', id = '') {
+    this.tagName = tagName.toUpperCase();
+    this.id = id;
+    this.classList = new FakeClassList();
+    this.attributes = {};
+    this.style = {};
+    this.children = [];
+    this.parentNode = null;
+    this.listeners = {};
+    this.value = '';
+    this.textContent = '';
+    this._innerHTML = '';
+    this.disabled = false;
+    this.hidden = false;
+    this.checked = false;
+    this.dataset = {};
+  }
+  set className(val) {
+    this.classList = new FakeClassList();
+    String(val || '').split(/\s+/).filter(Boolean).forEach((c) => this.classList.add(c));
+  }
+  get className() {
+    return Array.from(this.classList.set).join(' ');
+  }
+  set innerHTML(val) {
+    this._innerHTML = String(val || '');
+    this.children = [];
+  }
+  get innerHTML() {
+    return this._innerHTML;
+  }
+  setAttribute(k, v) { this.attributes[k] = String(v); }
+  getAttribute(k) { return Object.prototype.hasOwnProperty.call(this.attributes, k) ? this.attributes[k] : null; }
+  removeAttribute(k) { delete this.attributes[k]; }
+  appendChild(child) {
+    child.parentNode = this;
+    this.children.push(child);
+    return child;
+  }
+  remove() {
+    if (this.parentNode) {
+      this.parentNode.children = this.parentNode.children.filter((c) => c !== this);
+      this.parentNode = null;
+    }
+  }
+  focus() {}
+  blur() {}
+  closest() { return null; }
+  addEventListener(type, fn) {
+    if (!this.listeners[type]) this.listeners[type] = [];
+    this.listeners[type].push(fn);
+  }
+  dispatchEvent(ev) {
+    if (!ev.target) ev.target = this;
+    ev.currentTarget = this;
+    ev.defaultPrevented = Boolean(ev.defaultPrevented);
+    let propagationStopped = false;
+    ev.preventDefault = () => { ev.defaultPrevented = true; };
+    ev.stopPropagation = () => { propagationStopped = true; };
+    const fns = this.listeners[ev.type] || [];
+    for (const fn of fns) fn(ev);
+    if (ev.bubbles && !propagationStopped && this.parentNode) {
+      this.parentNode.dispatchEvent(ev);
+    }
+    return !ev.defaultPrevented;
+  }
+  requestSubmit() {
+    this.dispatchEvent({ type: 'submit', bubbles: true, cancelable: true });
+  }
+  querySelector() { return null; }
+  querySelectorAll() { return []; }
+}
+
+const byId = new Map();
+function reg(tag, id) {
+  const el = new FakeElement(tag, id);
+  byId.set(id, el);
+  return el;
+}
+
+const toastContainer = reg('div', 'toast-container');
+const unsavedBar = reg('div', 'unsaved-changes-bar');
+const btnUnsavedSave = reg('button', 'btn-unsaved-save');
+const btnUnsavedReset = reg('button', 'btn-unsaved-reset');
+const viewServerSelection = reg('div', 'view-server-selection');
+const viewServerSettings = reg('div', 'view-server-settings');
+viewServerSettings.style.display = 'none';
+reg('span', 'active-server-name');
+reg('span', 'active-server-id');
+
+reg('div', 'personal-playlist-empty');
+reg('div', 'personal-playlist-editor');
+const formUpdateMeta = reg('form', 'form-update-personal-playlist');
+const inputEditName = reg('input', 'input-edit-playlist-name');
+const selectEditPublic = reg('select', 'select-edit-playlist-public');
+const btnSaveMeta = reg('button', 'btn-save-playlist-meta');
+btnSaveMeta.innerHTML = '<span>💾 儲存歌單設定</span>';
+formUpdateMeta.appendChild(inputEditName);
+formUpdateMeta.appendChild(selectEditPublic);
+formUpdateMeta.appendChild(btnSaveMeta);
+formUpdateMeta.querySelectorAll = () => [inputEditName, selectEditPublic];
+
+reg('span', 'personal-share-code-value');
+reg('span', 'personal-playlist-vis-badge');
+reg('span', 'personal-track-count-badge');
+reg('div', 'personal-tracks-list');
+reg('div', 'personal-saved-list');
+const inputFilterTracks = reg('input', 'input-filter-playlist-tracks');
+
+const formAddTrack = reg('form', 'form-add-playlist-track');
+const inputAddTrack = reg('input', 'input-add-playlist-track');
+const btnAddTrack = reg('button', 'btn-add-playlist-track');
+btnAddTrack.innerHTML = '<span>➕ 新增歌曲</span>';
+formAddTrack.appendChild(inputAddTrack);
+formAddTrack.appendChild(btnAddTrack);
+const addStatusBox = reg('div', 'playlist-add-status');
+addStatusBox.hidden = true;
+
+const tabPersonal = new FakeElement('div', 'tab-personal');
+tabPersonal.classList.add('tab-pane');
+
+const docListeners = {};
+global.document = {
+  body: new FakeElement('body', ''),
+  getElementById: (id) => byId.get(id) || null,
+  querySelector: () => null,
+  querySelectorAll: (sel) => {
+    if (sel === '.tab-pane') return [tabPersonal];
+    return [];
+  },
+  createElement: (tag) => new FakeElement(tag),
+  addEventListener: (type, fn) => {
+    if (!docListeners[type]) docListeners[type] = [];
+    docListeners[type].push(fn);
+  },
+};
+global.window = {
+  location: { pathname: '/panel', hash: '#personal' },
+  scrollTo: () => {},
+  addEventListener: () => {},
+};
+global.history = { replaceState: () => {} };
+global.navigator = { clipboard: { writeText: async () => {} } };
+global.Event = class FakeEvent {
+  constructor(type, opts = {}) { this.type = type; Object.assign(this, opts); }
+};
+
+let playlistState = {
+  name: '原始歌單',
+  is_public: false,
+  share_code: 'ABC123',
+  tracks: [],
+};
+let pendingAddResolve = null;
+const fetchCalls = [];
+
+global.fetch = (url, opts = {}) => {
+  fetchCalls.push({ url, method: opts.method || 'GET', body: opts.body || null });
+  if (url === '/api/panel/user/playlist' && (!opts.method || opts.method === 'GET')) {
+    return Promise.resolve({
+      ok: true,
+      json: async () => ({ status: 'ok', playlist: JSON.parse(JSON.stringify(playlistState)), saved_playlists: [], max_tracks: 500 }),
+    });
+  }
+  if (url === '/api/panel/user/playlist/add-track') {
+    return new Promise((resolve) => {
+      pendingAddResolve = (newPlaylist) => resolve({
+        ok: true,
+        json: async () => ({ status: 'ok', message: '已加入測試歌曲', playlist: newPlaylist }),
+      });
+    });
+  }
+  if (url === '/api/panel/user/playlist' && opts.method === 'PUT') {
+    const body = JSON.parse(opts.body);
+    playlistState = { ...playlistState, name: body.name, is_public: body.is_public };
+    return Promise.resolve({
+      ok: true,
+      json: async () => ({ status: 'ok', message: '歌單設定已儲存！', playlist: JSON.parse(JSON.stringify(playlistState)) }),
+    });
+  }
+  return Promise.resolve({ ok: true, json: async () => ({ status: 'ok' }) });
+};
+
+const src = fs.readFileSync(process.argv[1], 'utf-8');
+eval(src);
+
+async function run() {
+  for (const fn of (docListeners.DOMContentLoaded || [])) fn();
+  await new Promise((r) => setTimeout(r, 20));
+
+  assert.strictEqual(inputEditName.value, '原始歌單');
+  assert.strictEqual(unsavedBar.classList.contains('is-visible'), false, '初始載入不可顯示未儲存提示列');
+
+  // 1. 僅輸入篩選關鍵字不可觸發未儲存提示列
+  inputFilterTracks.value = '搜尋關鍵字';
+  inputFilterTracks.dispatchEvent({ type: 'input', bubbles: true });
+  assert.strictEqual(unsavedBar.classList.contains('is-visible'), false, '歌單搜尋篩選不可觸發未儲存提示列');
+
+  // 2. 修改歌單名稱應立即跳出未儲存提示列，點擊重設則還原並收起；切換公開權限亦然
+  inputEditName.value = '改名後歌單';
+  inputEditName.dispatchEvent({ type: 'input', bubbles: true });
+  assert.strictEqual(unsavedBar.classList.contains('is-visible'), true, '修改歌單名稱後應跳出未儲存提示列');
+  assert.strictEqual(unsavedBar.getAttribute('aria-hidden'), 'false');
+
+  btnUnsavedReset.dispatchEvent({ type: 'click', bubbles: true });
+  assert.strictEqual(inputEditName.value, '原始歌單');
+  assert.strictEqual(unsavedBar.classList.contains('is-visible'), false, '重設後應收起未儲存提示列');
+
+  selectEditPublic.value = '1';
+  selectEditPublic.dispatchEvent({ type: 'change', bubbles: true });
+  assert.strictEqual(unsavedBar.classList.contains('is-visible'), true, '切換公開權限後應跳出未儲存提示列');
+  btnUnsavedReset.dispatchEvent({ type: 'click', bubbles: true });
+  assert.strictEqual(selectEditPublic.value, '0');
+  assert.strictEqual(unsavedBar.classList.contains('is-visible'), false);
+
+  // 3. 修改歌單設定為未儲存狀態後，測試 IME 安全 Enter 送出與「新增中...」提示
+  inputEditName.value = '保留未儲存名稱';
+  inputEditName.dispatchEvent({ type: 'input', bubbles: true });
+  assert.strictEqual(unsavedBar.classList.contains('is-visible'), true);
+
+  inputAddTrack.value = '周杰倫 晴天';
+  const beforeCalls = fetchCalls.length;
+  inputAddTrack.dispatchEvent({ type: 'keydown', key: 'Enter', isComposing: true, keyCode: 229 });
+  assert.strictEqual(fetchCalls.length, beforeCalls, 'IME 組字期間按下 Enter 不可送出表單');
+
+  const enterEv = { type: 'keydown', key: 'Enter', isComposing: false, keyCode: 13 };
+  inputAddTrack.dispatchEvent(enterEv);
+  assert.strictEqual(enterEv.defaultPrevented, true, '非組字 Enter 應阻止預設重複送出');
+  assert.strictEqual(fetchCalls.filter((c) => c.url === '/api/panel/user/playlist/add-track').length, 1);
+
+  // 等待 API 回應期間，必須顯示「新增中...」Loading Toast、狀態區域與禁用按鈕
+  assert.strictEqual(addStatusBox.hidden, false, '請求期間必須顯示新增中狀態列');
+  assert.strictEqual(btnAddTrack.disabled, true, '請求期間必須禁用送出按鈕防連點');
+  assert.ok(btnAddTrack.innerHTML.includes('新增中...'), '按鈕文字應顯示新增中...');
+  const loadingToasts = toastContainer.children.filter((t) => t.classList.contains('is-loading'));
+  assert.strictEqual(loadingToasts.length, 1, '成功提示跳出前必須先顯示新增中 Toast');
+  assert.ok(loadingToasts[0].children[1].textContent.includes('新增中...'));
+
+  // 完成請求：移除新增中 Toast、跳出成功 Toast、且保留先前尚未儲存的歌單名稱修改
+  pendingAddResolve({
+    ...playlistState,
+    tracks: [{ title: '晴天', url: 'https://youtu.be/test', duration: 269000 }],
+  });
+  await new Promise((r) => setTimeout(r, 20));
+
+  assert.strictEqual(addStatusBox.hidden, true, '完成後應隱藏新增中狀態列');
+  assert.strictEqual(btnAddTrack.disabled, false, '完成後應恢復按鈕可用狀態');
+  assert.strictEqual(inputAddTrack.value, '', '成功新增後應清空輸入框');
+  assert.strictEqual(
+    toastContainer.children.filter((t) => t.classList.contains('is-loading')).length,
+    0,
+    '完成後應移除新增中 Toast'
+  );
+  assert.ok(
+    toastContainer.children.some((t) => t.classList.contains('success')),
+    '完成後應顯示成功 Toast'
+  );
+  assert.strictEqual(inputEditName.value, '保留未儲存名稱', '新增歌曲重繪時不可覆寫尚未儲存的歌單名稱');
+  assert.strictEqual(unsavedBar.classList.contains('is-visible'), true, '尚未儲存的歌單名稱提示列應維持顯示');
+
+  // 4. 點擊底部懸浮列「儲存設定」應送出 PUT 並於成功後收起提示列
+  btnUnsavedSave.dispatchEvent({ type: 'click' });
+  await new Promise((r) => setTimeout(r, 20));
+  const putCalls = fetchCalls.filter((c) => c.url === '/api/panel/user/playlist' && c.method === 'PUT');
+  assert.strictEqual(putCalls.length, 1);
+  assert.strictEqual(unsavedBar.classList.contains('is-visible'), false, '儲存成功後應收起未儲存提示列');
+}
+
+run().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
+"""
+
+    proc = subprocess.run(
+        [node_bin, '-e', harness_script, panel_js_path],
+        capture_output=True,
+        text=True,
+        encoding='utf-8',
+    )
+    assert proc.returncode == 0, f'Node.js panel.js test failed:\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}'
+
 

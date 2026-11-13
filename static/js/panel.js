@@ -122,20 +122,62 @@
   }
 
   // ---------- Toast 提示通知函式 ----------
-  function showToast(message, type = 'success') {
-    if (!toastContainer) return;
+  function showToast(message, type = 'success', options = {}) {
+    if (!toastContainer) return null;
+    const persistent = Boolean(options && options.persistent);
+    const isLoading = Boolean(options && options.loading) || type === 'loading';
+    const resolvedType = type === 'loading' ? 'info' : type;
+
     const toast = document.createElement('div');
-    toast.className = `toast ${type}`;
-    const icon = type === 'success' ? '✅' : (type === 'warning' ? '⚠️' : '❌');
-    toast.innerHTML = `<span>${icon}</span><span>${stripStatusEmoji(message)}</span>`;
+    toast.className = `toast ${resolvedType}${isLoading ? ' is-loading' : ''}`;
+    if (options && options.silentAria) {
+      toast.setAttribute('aria-hidden', 'true');
+    }
+
+    const iconEl = document.createElement(isLoading ? 'progress' : 'span');
+    if (isLoading) {
+      iconEl.className = 'loading-spinner loading-spinner-sm';
+      iconEl.setAttribute('aria-hidden', 'true');
+    } else {
+      iconEl.textContent =
+        resolvedType === 'success' ? '✅' :
+        resolvedType === 'warning' ? '⚠️' :
+        resolvedType === 'info' ? 'ℹ️' : '❌';
+    }
+
+    const msgEl = document.createElement('span');
+    msgEl.textContent = stripStatusEmoji(message);
+
+    toast.appendChild(iconEl);
+    toast.appendChild(msgEl);
     toastContainer.appendChild(toast);
 
-    setTimeout(() => {
+    let dismissed = false;
+    let autoDismissTimer = null;
+
+    function dismiss(immediate = false) {
+      if (dismissed) return;
+      dismissed = true;
+      if (autoDismissTimer) {
+        clearTimeout(autoDismissTimer);
+        autoDismissTimer = null;
+      }
+      if (immediate) {
+        toast.remove();
+        return;
+      }
       toast.style.opacity = '0';
       toast.style.transform = 'translateY(10px)';
       toast.style.transition = 'all 0.3s ease';
       setTimeout(() => toast.remove(), 300);
-    }, 4000);
+    }
+
+    if (!persistent) {
+      const duration = typeof options?.duration === 'number' ? options.duration : 4000;
+      autoDismissTimer = setTimeout(() => dismiss(false), duration);
+    }
+
+    return { element: toast, dismiss };
   }
 
   // ---------- 尚未儲存變更底部懸浮提示列 (Unsaved Changes Bar) ----------
@@ -148,7 +190,37 @@
     ai: null,
     ownerEconomy: null,
     ownerBotDefaults: null,
+    personalPlaylist: null,
   };
+
+  function submitFormSafely(formEl) {
+    if (!formEl) return;
+    if (typeof formEl.requestSubmit === 'function') {
+      formEl.requestSubmit();
+    } else {
+      formEl.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    }
+  }
+
+  function bindImeSafeEnterSubmit(inputEl, formEl, canSubmit = null) {
+    if (!inputEl || !formEl) return;
+    inputEl.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      // 中文／日韓輸入法組字期間（isComposing 或 keyCode 229）按下 Enter 係確認選字，不可直接送出表單
+      if (e.isComposing || e.keyCode === 229) return;
+      e.preventDefault();
+      if (typeof canSubmit === 'function' && !canSubmit()) return;
+      submitFormSafely(formEl);
+    });
+  }
+
+  function getPersonalPlaylistSnapshot(playlist) {
+    if (!playlist) return null;
+    return {
+      'input-edit-playlist-name': String(playlist.name ?? ''),
+      'select-edit-playlist-public': playlist.is_public ? '1' : '0',
+    };
+  }
 
   function getFormState(formEl) {
     if (!formEl) return null;
@@ -205,12 +277,14 @@
     const fMusic = document.getElementById('form-music');
     const fAi = document.getElementById('form-ai');
     const fOwnerEcon = document.getElementById('form-owner-economy');
+    const fPersonalPlaylist = document.getElementById('form-update-personal-playlist');
 
     const isOwnerMode = viewServerSettings.classList.contains('owner-mode');
     const isPersonalMode = viewServerSettings.classList.contains('personal-mode');
     let dirty = false;
     if (isPersonalMode) {
-      dirty = false;
+      dirty = Boolean(personalPlaylistData) &&
+              isFormDirty(fPersonalPlaylist, savedFormState.personalPlaylist);
     } else if (isOwnerMode) {
       const fBotDef = document.getElementById('form-owner-bot-defaults');
       dirty = isFormDirty(fOwnerEcon, savedFormState.ownerEconomy) ||
@@ -767,12 +841,9 @@
 
     if (aiEnabled) aiEnabled.checked = aiCfg.is_enabled !== false;
     if (aiModelSelect) {
-      const presetModels = [
-        'auto',
-        'gemini:gemini-flash-latest',
-        'nvidia:deepseek-ai/deepseek-v4.1-flash',
-        'mistral:ministral-8b-latest',
-      ];
+      const presetModels = Array.from(aiModelSelect.options)
+        .map((opt) => opt.value)
+        .filter((val) => val && val !== 'custom');
       const modelVal = aiCfg.model || 'auto';
       if (presetModels.includes(modelVal)) {
         aiModelSelect.value = modelVal;
@@ -2073,54 +2144,49 @@
 
   if (btnUnsavedSave) {
     btnUnsavedSave.addEventListener('click', () => {
+      const isPersonalMode = viewServerSettings && viewServerSettings.classList.contains('personal-mode');
+      if (isPersonalMode) {
+        const fPersonalPlaylist = document.getElementById('form-update-personal-playlist');
+        if (fPersonalPlaylist && personalPlaylistData && isFormDirty(fPersonalPlaylist, savedFormState.personalPlaylist)) {
+          submitFormSafely(fPersonalPlaylist);
+        }
+        return;
+      }
+
       const isOwnerMode = viewServerSettings && viewServerSettings.classList.contains('owner-mode');
       if (isOwnerMode) {
         if (formOwnerEconomy && isFormDirty(formOwnerEconomy, savedFormState.ownerEconomy)) {
-          if (typeof formOwnerEconomy.requestSubmit === 'function') {
-            formOwnerEconomy.requestSubmit();
-          } else {
-            formOwnerEconomy.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-          }
+          submitFormSafely(formOwnerEconomy);
         }
         const fBotDef = document.getElementById('form-owner-bot-defaults');
         if (fBotDef && isFormDirty(fBotDef, savedFormState.ownerBotDefaults)) {
-          if (typeof fBotDef.requestSubmit === 'function') {
-            fBotDef.requestSubmit();
-          } else {
-            fBotDef.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-          }
+          submitFormSafely(fBotDef);
         }
         return;
       }
 
       if (formWelcome && isFormDirty(formWelcome, savedFormState.welcome)) {
-        if (typeof formWelcome.requestSubmit === 'function') {
-          formWelcome.requestSubmit();
-        } else {
-          formWelcome.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-        }
+        submitFormSafely(formWelcome);
       }
       if (formMusic && isFormDirty(formMusic, savedFormState.music)) {
-        if (typeof formMusic.requestSubmit === 'function') {
-          formMusic.requestSubmit();
-        } else {
-          formMusic.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-        }
+        submitFormSafely(formMusic);
       }
       if (formAi && isFormDirty(formAi, savedFormState.ai)) {
-        if (typeof formAi.requestSubmit === 'function') {
-          formAi.requestSubmit();
-        } else {
-          formAi.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-        }
+        submitFormSafely(formAi);
       }
     });
   }
 
   if (btnUnsavedReset) {
     btnUnsavedReset.addEventListener('click', () => {
+      const isPersonalMode = viewServerSettings && viewServerSettings.classList.contains('personal-mode');
       const isOwnerMode = viewServerSettings && viewServerSettings.classList.contains('owner-mode');
-      if (isOwnerMode) {
+      if (isPersonalMode) {
+        const fPersonalPlaylist = document.getElementById('form-update-personal-playlist');
+        if (fPersonalPlaylist && savedFormState.personalPlaylist) {
+          applyFormState(fPersonalPlaylist, savedFormState.personalPlaylist);
+        }
+      } else if (isOwnerMode) {
         if (formOwnerEconomy && savedFormState.ownerEconomy) {
           applyFormState(formOwnerEconomy, savedFormState.ownerEconomy);
         }
@@ -2583,7 +2649,16 @@
       const txtInst = document.getElementById('bot-default-ai-instruction');
 
       if (chkEnabled) chkEnabled.checked = Boolean(defs.ai_is_enabled);
-      if (selModel && defs.ai_model) selModel.value = defs.ai_model;
+      if (selModel && defs.ai_model) {
+        const hasOption = Array.from(selModel.options).some((opt) => opt.value === defs.ai_model);
+        if (!hasOption) {
+          const extraOpt = document.createElement('option');
+          extraOpt.value = defs.ai_model;
+          extraOpt.textContent = `${defs.ai_model} (自訂/舊版設定)`;
+          selModel.appendChild(extraOpt);
+        }
+        selModel.value = defs.ai_model;
+      }
       if (inTemp && defs.ai_temperature !== undefined) inTemp.value = defs.ai_temperature;
       if (inTokens && defs.ai_max_tokens !== undefined) inTokens.value = defs.ai_max_tokens;
       if (txtInst && defs.ai_instruction !== undefined) txtInst.value = defs.ai_instruction;
@@ -3240,16 +3315,17 @@
         personalPlaylistData = data.playlist || null;
         personalSavedPlaylists = Array.isArray(data.saved_playlists) ? data.saved_playlists : [];
         personalMaxTracks = Number(data.max_tracks || 500);
-        renderPersonalPlaylistUI();
+        renderPersonalPlaylistUI({ forceSyncMeta: true });
       }
     } catch (err) {
       console.error('載入個人歌單資料失敗:', err);
     }
   }
 
-  function renderPersonalPlaylistUI() {
+  function renderPersonalPlaylistUI({ forceSyncMeta = false } = {}) {
     const emptyBox = document.getElementById('personal-playlist-empty');
     const editorBox = document.getElementById('personal-playlist-editor');
+    const formMeta = document.getElementById('form-update-personal-playlist');
     const inputName = document.getElementById('input-edit-playlist-name');
     const selectPublic = document.getElementById('select-edit-playlist-public');
     const shareCodeEl = document.getElementById('personal-share-code-value');
@@ -3259,12 +3335,22 @@
     if (!personalPlaylistData) {
       if (emptyBox) emptyBox.style.display = 'block';
       if (editorBox) editorBox.style.display = 'none';
+      savedFormState.personalPlaylist = null;
     } else {
       if (emptyBox) emptyBox.style.display = 'none';
       if (editorBox) editorBox.style.display = 'block';
 
-      if (inputName) inputName.value = personalPlaylistData.name || '';
-      if (selectPublic) selectPublic.value = personalPlaylistData.is_public ? '1' : '0';
+      // 若即時操作（如新增／排序／刪除曲目）觸發重繪，保留使用者尚未儲存的名稱與權限編輯
+      const wasMetaDirty =
+        !forceSyncMeta &&
+        Boolean(savedFormState.personalPlaylist) &&
+        isFormDirty(formMeta, savedFormState.personalPlaylist);
+      savedFormState.personalPlaylist = getPersonalPlaylistSnapshot(personalPlaylistData);
+      if (!wasMetaDirty) {
+        if (inputName) inputName.value = personalPlaylistData.name || '';
+        if (selectPublic) selectPublic.value = personalPlaylistData.is_public ? '1' : '0';
+      }
+
       if (shareCodeEl) shareCodeEl.textContent = personalPlaylistData.share_code || '------';
       if (visBadge) {
         if (personalPlaylistData.is_public) {
@@ -3283,6 +3369,7 @@
     }
 
     renderSavedPlaylistsList();
+    checkUnsavedChanges();
   }
 
   function renderPersonalTracksList() {
@@ -3560,7 +3647,7 @@
         if (res.ok && data.status === 'ok') {
           personalPlaylistData = data.playlist;
           if (nameInput) nameInput.value = '';
-          renderPersonalPlaylistUI();
+          renderPersonalPlaylistUI({ forceSyncMeta: true });
           showToast(data.message || '個人歌單建立成功！', 'success');
         } else {
           showToast(data.message || '建立歌單失敗', 'error');
@@ -3573,16 +3660,32 @@
 
   // 更新歌單名稱與公開權限表單
   const formUpdatePlaylist = document.getElementById('form-update-personal-playlist');
+  const inputEditPlaylistName = document.getElementById('input-edit-playlist-name');
+  let isUpdatingPlaylistMeta = false;
   if (formUpdatePlaylist) {
+    formUpdatePlaylist.addEventListener('input', checkUnsavedChanges);
+    formUpdatePlaylist.addEventListener('change', checkUnsavedChanges);
+    bindImeSafeEnterSubmit(inputEditPlaylistName, formUpdatePlaylist, () => !isUpdatingPlaylistMeta);
+
     formUpdatePlaylist.addEventListener('submit', async (e) => {
       e.preventDefault();
+      if (isUpdatingPlaylistMeta) return;
       const nameInput = document.getElementById('input-edit-playlist-name');
       const publicSelect = document.getElementById('select-edit-playlist-public');
+      const saveBtn = document.getElementById('btn-save-playlist-meta');
       const name = nameInput ? nameInput.value.trim() : '';
       const isPublic = publicSelect ? publicSelect.value === '1' : false;
       if (!name) {
         showToast('歌單名稱不得為空', 'error');
         return;
+      }
+
+      isUpdatingPlaylistMeta = true;
+      const origBtnHtml = saveBtn ? saveBtn.innerHTML : '';
+      if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.setAttribute('aria-busy', 'true');
+        saveBtn.innerHTML = '<span>💾 儲存中...</span>';
       }
       try {
         const res = await fetch('/api/panel/user/playlist', {
@@ -3593,13 +3696,20 @@
         const data = await res.json();
         if (res.ok && data.status === 'ok') {
           personalPlaylistData = data.playlist;
-          renderPersonalPlaylistUI();
+          renderPersonalPlaylistUI({ forceSyncMeta: true });
           showToast(data.message || '歌單設定已儲存！', 'success');
         } else {
           showToast(data.message || '儲存失敗', 'error');
         }
       } catch (err) {
         showToast('連線錯誤，請稍後再試', 'error');
+      } finally {
+        isUpdatingPlaylistMeta = false;
+        if (saveBtn) {
+          saveBtn.disabled = false;
+          saveBtn.removeAttribute('aria-busy');
+          saveBtn.innerHTML = origBtnHtml;
+        }
       }
     });
   }
@@ -3668,7 +3778,7 @@
             const data = await res.json();
             if (res.ok && data.status === 'ok') {
               personalPlaylistData = null;
-              renderPersonalPlaylistUI();
+              renderPersonalPlaylistUI({ forceSyncMeta: true });
               showToast(data.message || '個人歌單已刪除', 'success');
             } else {
               showToast(data.message || '刪除失敗', 'error');
@@ -3683,15 +3793,43 @@
 
   // 新增歌曲至歌單表單
   const formAddPlaylistTrack = document.getElementById('form-add-playlist-track');
+  const inputAddPlaylistTrack = document.getElementById('input-add-playlist-track');
+  let isAddingPlaylistTrack = false;
   if (formAddPlaylistTrack) {
+    bindImeSafeEnterSubmit(inputAddPlaylistTrack, formAddPlaylistTrack, () => !isAddingPlaylistTrack);
+
     formAddPlaylistTrack.addEventListener('submit', async (e) => {
       e.preventDefault();
+      if (isAddingPlaylistTrack) return;
+
       const inputQuery = document.getElementById('input-add-playlist-track');
       const submitBtn = document.getElementById('btn-add-playlist-track');
+      const statusBox = document.getElementById('playlist-add-status');
       const query = inputQuery ? inputQuery.value.trim() : '';
-      if (!query) return;
+      if (!query) {
+        showToast('請輸入歌曲名稱、關鍵字或網址', 'warning');
+        if (inputQuery) inputQuery.focus();
+        return;
+      }
 
-      if (submitBtn) submitBtn.disabled = true;
+      isAddingPlaylistTrack = true;
+      const origBtnHtml = submitBtn ? submitBtn.innerHTML : '';
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.setAttribute('aria-busy', 'true');
+        submitBtn.innerHTML = '<span>⏳ 新增中...</span>';
+      }
+      if (statusBox) statusBox.hidden = false;
+      const loadingToast = showToast('新增中...，正在解析曲目資訊', 'info', {
+        persistent: true,
+        loading: true,
+        silentAria: true,
+      });
+
+      const dismissLoadingToast = () => {
+        if (loadingToast) loadingToast.dismiss(true);
+      };
+
       try {
         const res = await fetch('/api/panel/user/playlist/add-track', {
           method: 'POST',
@@ -3699,6 +3837,8 @@
           body: JSON.stringify({ query }),
         });
         const data = await res.json();
+        dismissLoadingToast();
+
         if (res.ok && data.status === 'ok') {
           personalPlaylistData = data.playlist;
           if (inputQuery) inputQuery.value = '';
@@ -3713,9 +3853,17 @@
           showToast(data.message || '加入歌單失敗', 'error');
         }
       } catch (err) {
+        dismissLoadingToast();
         showToast('連線錯誤，請稍後再試', 'error');
       } finally {
-        if (submitBtn) submitBtn.disabled = false;
+        dismissLoadingToast();
+        isAddingPlaylistTrack = false;
+        if (statusBox) statusBox.hidden = true;
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.removeAttribute('aria-busy');
+          submitBtn.innerHTML = origBtnHtml;
+        }
       }
     });
   }

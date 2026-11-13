@@ -204,6 +204,15 @@
 2. **輸入框防干擾**：所有新增、編輯、搜尋表單的文字輸入框，必須加入 `autocomplete="off"`，避免瀏覽器歷史紀錄下拉框遮擋操作介面。
 3. **危險操作警戒樣式**：所有具備破壞性（刪除歌單、刪除規則、清空設定）的按鈕，必須具備 `.danger` 紅色警戒樣式，且點擊時必須彈出自訂二次確認彈框（Confirm Modal），禁止未確認直接刪除。
 4. **精簡文案原則**：Avoid unnecessary secondary labels and descriptions. Let the layout do the explaining.（避免不必要的次要標籤與說明文字，讓版面配置本身說話。）
+5. **未儲存變更統一提示規範（`#unsaved-changes-bar`）**：
+   - 所有在 Web 控制面板（`templates/panel.html` / `static/js/panel.js`）中**必須點擊儲存按鈕才會寫入資料庫／生效的設定表單**（包含伺服器歡迎／音樂／AI 設定、擁有者全域／預設設定，以及個人歌單名稱與公開權限設定 `#form-update-personal-playlist` 等），一律必須接入底部懸浮「尚未儲存變更」提示列（`#unsaved-changes-bar`）。
+   - 實作要求：
+     1. 必須於 `savedFormState` 保存伺服器已儲存基準快照，並於表單 `input` / `change` 事件即時呼叫 `checkUnsavedChanges()` 比對差異；新增任何必須儲存才生效的新分頁或表單時，必須同步納入 `checkUnsavedChanges()`。
+     2. 底部懸浮列之「儲存設定」（`#btn-unsaved-save`）與「重設」（`#btn-unsaved-reset`）必須完整支援所有模式（一般伺服器設定、擁有者模式、個人設定模式），於儲存成功後更新基準快照並收起提示列；於重設後還原為最後一次已儲存狀態。
+     3. 即時寫入 API 的動作（如新增／刪除／排序歌曲、重新產生分享碼、確認彈框刪除）、純前端篩選輸入框（如 `#input-filter-playlist-tracks`）及初次建立表單（如 `#form-create-personal-playlist`），**不可**誤觸發未儲存提示列；且即時動作觸發畫面重繪時，若同分頁仍有未儲存的表單修改，必須保留該修改與未儲存狀態，不得靜默覆寫。
+6. **非同步送出回饋與輸入法安全（IME-Safe Enter）**：
+   - 單行文字輸入表單支援按 `Enter` 直接送出時，必須於 `keydown` 監聽中檢查 `event.isComposing || event.keyCode === 229` 以避免中文／日韓輸入法組字選字期間誤送出，確認非組字狀態後再呼叫 `event.preventDefault()` 並以 `requestSubmit()` 送出，防止瀏覽器雙重送出。
+   - 涉及遠端解析或較長等待時間的非同步送出（如新增歌曲至個人歌單），必須在跳出成功／警告／失敗結果前先顯示「新增中／處理中...」提示（包含持久化載入 Toast、無障礙狀態區域與防連點按鈕鎖定），並於請求結束後清除載入提示再顯示最終結果。
 
 ### 原則五：Discord API 相容性與版本棄用防護
 1. **Message Interaction 判定**：
@@ -232,6 +241,8 @@
    python tools/test_panel.py
    ```
    測試通過標準：**所有測試項目必須 100% 通過（FAIL 數為 0）**。
+3. 需要時使用: Use `agent-desktop` to see and operate desktop apps. Before the first use, run
+`agent-desktop skills get desktop` and `agent-desktop skills get platform`, and follow them.
 
 ### 5.2 文件同步義務
 當新增、修改或刪除任何斜線指令或重大功能時，必須同步更新以下文件：

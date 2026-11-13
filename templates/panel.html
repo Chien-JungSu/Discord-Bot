@@ -454,14 +454,19 @@
             <div class="form-group">
               <label for="select-ai-model">預設免費 AI 引擎 (Multi-Provider LLM)</label>
               <select id="select-ai-model" class="form-control">
+                {% for m in ai_models %}
+                <option value="{{ m.id }}">{% if m.id == 'gemini:gemini-3.5-flash-lite' %}{{ m.name }} · 預設 Flash-Lite{% elif m.id == 'gemini:gemini-4-hydrogen' %}{{ m.name }} · 高階推理{% else %}{{ m.name }}{% endif %}</option>
+                {% else %}
                 <option value="auto">auto (text, vision)</option>
-                <option value="gemini:gemini-flash-latest">gemini-flash-latest (text, vision)</option>
+                <option value="gemini:gemini-3.5-flash-lite">gemini-3.5-flash-lite (text, vision) · 預設 Flash-Lite</option>
+                <option value="gemini:gemini-4-hydrogen">gemini-4-hydrogen (text, vision) · 高階推理</option>
                 <option value="nvidia:deepseek-ai/deepseek-v4.1-flash">deepseek-ai/deepseek-v4.1-flash (text, vision)</option>
                 <option value="mistral:ministral-8b-latest">ministral-8b-latest (text, vision)</option>
+                {% endfor %}
                 <option value="custom">自訂模型</option>
               </select>
               <div id="ai-custom-model-wrap" style="display: none; margin-top: 8px;">
-                <input type="text" id="ai-custom-model-input" class="form-control" placeholder="輸入自訂模型 ID，例如：gemini-flash-latest" />
+                <input type="text" id="ai-custom-model-input" class="form-control" autocomplete="off" placeholder="輸入自訂模型 ID，例如：gemini-3.5-flash-lite 或 gemini-4-hydrogen" />
               </div>
             </div>
 
@@ -948,10 +953,16 @@
                 <div class="form-group" style="margin-bottom: 18px;">
                   <label for="bot-default-ai-model">預設 AI 模型</label>
                   <select id="bot-default-ai-model" class="form-control">
+                    {% for m in ai_models %}
+                    <option value="{{ m.id }}">{{ m.name }}{% if m.desc %} ({{ m.desc }}){% endif %}</option>
+                    {% else %}
                     <option value="auto">auto (自動容錯容災鏈)</option>
+                    <option value="gemini:gemini-3.5-flash-lite">gemini-3.5-flash-lite (Google Gemini 預設 · 最新 Flash-Lite)</option>
+                    <option value="gemini:gemini-4-hydrogen">gemini-4-hydrogen (Google Gemini 4 Hydrogen · 高階執行與推理)</option>
                     <option value="gemini:gemini-flash-latest">gemini-flash-latest (Google Gemini)</option>
                     <option value="nvidia:deepseek-ai/deepseek-v4.1-flash">deepseek-ai/deepseek-v4.1-flash (NVIDIA NIM)</option>
                     <option value="mistral:ministral-8b-latest">ministral-8b-latest (Mistral AI)</option>
+                    {% endfor %}
                   </select>
                 </div>
 
@@ -1193,6 +1204,7 @@
 
               <!-- 新增歌曲表單 -->
               <form id="form-add-playlist-track" class="personal-add-track-row" autocomplete="off">
+                <label for="input-add-playlist-track" class="visually-hidden">歌曲名稱、關鍵字或網址</label>
                 <input
                   type="text"
                   id="input-add-playlist-track"
@@ -1201,12 +1213,17 @@
                   autocomplete="off"
                   autocapitalize="off"
                   spellcheck="false"
+                  enterkeyhint="send"
                   required
                 />
                 <button type="submit" id="btn-add-playlist-track" class="btn btn-save-setting">
                   <span>➕ 新增歌曲</span>
                 </button>
               </form>
+              <div id="playlist-add-status" class="playlist-add-status" role="status" aria-live="polite" hidden>
+                <progress class="loading-spinner loading-spinner-sm" aria-label="新增中"></progress>
+                <span id="playlist-add-status-text">新增中...，正在解析曲目資訊</span>
+              </div>
 
               <!-- 歌單內搜尋與分頁控制 -->
               <div class="personal-tracks-toolbar">

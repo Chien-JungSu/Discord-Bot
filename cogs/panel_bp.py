@@ -491,6 +491,7 @@ def control_panel():
         client_id=DISCORD_CLIENT_ID,
         invite_url=invite_url,
         owner_guild_id=str(get_owner_guild_id()) if get_owner_guild_id() else None,
+        ai_models=AI_PROVIDER_MODELS,
     )
 
 
