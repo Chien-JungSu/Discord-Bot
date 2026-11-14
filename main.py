@@ -102,12 +102,13 @@ INITIAL_EXTENSIONS = [
     'cogs.economy',       # /economy_daily /economy_hourly /economy_balance /economy_leaderboard /economy_pay /economy_slots /economy_gamble /economy_blackjack /economy_scratch /economy_admin 經濟系統
     'cogs.ai',            # /ai /ai_config 智慧對話 (OpenRouter 免費模型)
     'cogs.temp_message',  # /temp_message + 右鍵選單「限時訊息」
+    'cogs.ganhua',        # /幹話 /ganhua + 右鍵選單「用幹話回覆」（輕量級 TF-IDF 台灣幹話產生器）
 ]
 
 
 class MyBot(commands.Bot):
     def __init__(self):
-        super().__init__(command_prefix='/', intents=intents)
+        super().__init__(command_prefix=('!', '/'), intents=intents)
         self._global_synced = False
         self.owner_id = OWNER_ID
         self.owner_guild_id = OWNER_GUILD_ID
@@ -280,17 +281,12 @@ class MyBot(commands.Bot):
             pass
 
     async def on_command_error(self, context: commands.Context, error: commands.CommandError):
-        """實測發現的雜訊：本專案完全沒有定義任何傳統前綴指令，全部都是 slash
-        commands（app_commands），錯誤處理應該走上面的 on_app_command_error。
+        """處理前綴指令錯誤。
 
-        但 commands.Bot(command_prefix='/') 這個設定，讓 discord.py 仍然會監看
-        頻道裡「以 / 開頭的一般文字訊息」（不是透過 Discord 指令選單觸發的真正
-        Interaction），只要有人手滑打出這種訊息，就會嘗試解析成前綴指令、找不到
-        就丟 CommandNotFound，灌爆後台 log，但其實不是真正的錯誤，直接忽略即可。
-        其他種類的例外（理論上不太會發生，因為沒有任何前綴指令）還是照印出來，
-        避免真的有 bug 時被靜默吃掉。
+        1. 忽略以 / 或 ! 開頭的一般聊天訊息所產生的 CommandNotFound 雜訊。
+        2. 忽略非擁有者誤觸 !sync 等擁有者專用指令時所拋出的 NotOwner 例外，避免 log 雜訊。
         """
-        if isinstance(error, commands.CommandNotFound):
+        if isinstance(error, (commands.CommandNotFound, commands.NotOwner)):
             return
 
         print(f"Ignoring exception in command {context.command}:", file=sys.stderr)
@@ -299,6 +295,50 @@ class MyBot(commands.Bot):
 
 bot = MyBot()
 app.config['BOT'] = bot
+
+
+@bot.command(name="sync")
+@commands.is_owner()
+async def sync_commands(ctx: commands.Context, scope: str | None = None) -> None:
+    """僅限機器人擁有者使用：即時同步全域或目前伺服器的斜線／右鍵指令。
+
+    用法：
+    - `!sync`：同步全域指令
+    - `!sync guild` 或 `!sync .`：同步目前伺服器指令
+    """
+    target = (scope or "").strip().lower()
+
+    try:
+        if target in ("guild", "."):
+            if ctx.guild is None:
+                await ctx.reply("⚠️ `!sync guild` 或 `!sync .` 只能在伺服器頻道中使用，請改用 `!sync` 同步全域指令。")
+                return
+            synced = await ctx.bot.tree.sync(guild=ctx.guild)
+            if hasattr(ctx.bot, "_print_synced_commands"):
+                ctx.bot._print_synced_commands(synced, f"manual-guild:{ctx.guild.id}")
+            await ctx.reply(f"✅ 已同步 **{len(synced)}** 個指令到目前伺服器 `{ctx.guild.name}` (`{ctx.guild.id}`)！")
+            return
+
+        if target:
+            if target.isdigit():
+                guild_obj = ctx.bot.get_guild(int(target)) or discord.Object(id=int(target))
+                synced = await ctx.bot.tree.sync(guild=guild_obj)
+                if hasattr(ctx.bot, "_print_synced_commands"):
+                    ctx.bot._print_synced_commands(synced, f"manual-guild:{target}")
+                await ctx.reply(f"✅ 已同步 **{len(synced)}** 個指令到指定伺服器 (`{target}`)！")
+                return
+            await ctx.reply("ℹ️ 用法：`!sync`（全域同步）或 `!sync guild` / `!sync .`（同步目前伺服器）。")
+            return
+
+        synced = await ctx.bot.tree.sync()
+        if hasattr(ctx.bot, "_print_synced_commands"):
+            ctx.bot._print_synced_commands(synced, "manual-global")
+        await ctx.reply(f"✅ 已同步 **{len(synced)}** 個全域斜線與右鍵指令！")
+    except Exception as exc:
+        safe_err = redact_secrets(str(exc))
+        print(f"❌ [!sync] 同步指令失敗: {safe_err}", file=sys.stderr)
+        traceback.print_exception(type(exc), exc, exc.__traceback__, file=sys.stderr)
+        await ctx.reply(f"❌ 同步指令失敗：{safe_err}")
 
 
 @bot.event

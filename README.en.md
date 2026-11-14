@@ -58,6 +58,8 @@ Supported features:
 - `/economy_scratch`: buy an interactive 3×3 scratch card and match 3 identical symbols to win prizes
 - `/economy_admin`: owner-only (`owner_guild_only`) interactive control panel to configure check-in rewards, game multipliers, and user balances
 - `/temp_message`: send a timed/self-destructing message (with text and/or an uploaded image) on behalf of the user with a `-# 由 {username} 傳送` footer and a live countdown timer, automatically deleting it after the chosen duration; also includes a right-click message context menu ("限時訊息") with an ephemeral dropdown selector
+- `/幹話` (or `/ganhua`): take no parameters and randomly generate a Taiwanese banter/meme reply directly in the channel; also includes a right-click message context menu ("應用程式" → "用幹話回覆") to roast a specific message directly without leaving a private notification (use `/reload_cogs` on `cogs.ganhua` after editing `memes_data.json` to hot-reload without restarting)
+- `!sync` (owner-only): immediately sync global slash and context-menu commands, or use `!sync guild` / `!sync .` to sync commands for the current server
 
 ### Requester control lock
 
