@@ -185,11 +185,59 @@ def run_coroutine_threadsafe(coro, timeout=15):
 # OAuth2 登入 / 回呼 / 登出
 # ==============================================================================
 
+_AUTH_LOOP_PATHS = frozenset({
+    '/login',
+    '/logout',
+    '/api/auth',
+    '/api/auth/dev-login',
+})
+
+
+def _normalize_safe_next_url(raw_next: Optional[str]) -> Optional[str]:
+    """驗證並正規化登入後導回之目標網址，嚴防 Open Redirect 與重導向迴圈。"""
+    if not raw_next or not isinstance(raw_next, str):
+        return None
+    candidate = raw_next.strip()
+    if not candidate or any(ch in candidate for ch in ('\r', '\n', '\x00', '\\')):
+        return None
+
+    try:
+        parsed = urllib.parse.urlsplit(candidate)
+    except ValueError:
+        return None
+
+    if parsed.scheme or parsed.netloc:
+        if parsed.scheme.lower() not in ('http', 'https'):
+            return None
+        current_host = (request.host or '').lower()
+        if not parsed.netloc or parsed.netloc.lower() != current_host:
+            return None
+
+    path = parsed.path or '/'
+    if not path.startswith('/') or path.startswith('//'):
+        return None
+    if path in _AUTH_LOOP_PATHS or path.startswith('/api/auth/'):
+        return None
+
+    return urllib.parse.urlunsplit(('', '', path, parsed.query, parsed.fragment))
+
+
+def _resolve_login_next_url() -> str:
+    """依序從 ?next=、同源 Referer 或既有 Session 解析登入後導回網址。"""
+    return (
+        _normalize_safe_next_url(request.args.get('next'))
+        or _normalize_safe_next_url(request.referrer)
+        or _normalize_safe_next_url(session.get('login_next'))
+        or url_for('panel.control_panel')
+    )
+
+
 @panel_bp.route('/login')
 def login():
-    """導向至 Discord OAuth2 授權頁面。"""
+    """導向至 Discord OAuth2 授權頁面，並記住發起登入前的站內來源網址。"""
     state = secrets.token_urlsafe(24)
     session['oauth_state'] = state
+    session['login_next'] = _resolve_login_next_url()
 
     params = {
         'client_id': DISCORD_CLIENT_ID,
@@ -380,8 +428,10 @@ def oauth_callback():
         'is_owner': is_owner,
     }
     session['guilds'] = manageable_guilds
+    session.pop('oauth_state', None)
 
-    return redirect(url_for('panel.control_panel'))
+    target_url = _normalize_safe_next_url(session.pop('login_next', None)) or url_for('panel.control_panel')
+    return redirect(target_url)
 
 
 @panel_bp.route('/logout')
@@ -454,7 +504,13 @@ def dev_login():
         ]
 
     session['guilds'] = bot_guilds
-    return redirect(url_for('panel.control_panel'))
+    target_url = (
+        _normalize_safe_next_url(request.args.get('next'))
+        or _normalize_safe_next_url(session.pop('login_next', None))
+        or _normalize_safe_next_url(request.referrer)
+        or url_for('panel.control_panel')
+    )
+    return redirect(target_url)
 
 
 # ==============================================================================

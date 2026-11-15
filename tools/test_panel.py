@@ -622,8 +622,16 @@ def test_personal_playlist_ui_markup_and_agents_rules():
     assert 'aria-live="polite"' in html
     assert '新增中...' in html
     assert 'id="unsaved-changes-bar"' in html
+    assert 'id="personal-tracks-pagination"' in html
 
     root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root_dir, 'static', 'css', 'panel.css'), 'r', encoding='utf-8') as f:
+        panel_css = f.read()
+    tracks_css_block = panel_css.split('.personal-tracks-list {', 1)[1].split('}', 1)[0]
+    assert 'max-height: 520px' not in tracks_css_block
+    assert 'overflow-y: auto' not in tracks_css_block
+    assert '.personal-tracks-pagination' in panel_css
+
     with open(os.path.join(root_dir, 'AGENTS.md'), 'r', encoding='utf-8') as f:
         agents_md = f.read()
     assert '未儲存變更統一提示規範（`#unsaved-changes-bar`）' in agents_md
@@ -749,6 +757,7 @@ const toastContainer = reg('div', 'toast-container');
 const unsavedBar = reg('div', 'unsaved-changes-bar');
 const btnUnsavedSave = reg('button', 'btn-unsaved-save');
 const btnUnsavedReset = reg('button', 'btn-unsaved-reset');
+const btnDropdownPersonal = reg('button', 'btn-dropdown-personal');
 const viewServerSelection = reg('div', 'view-server-selection');
 const viewServerSettings = reg('div', 'view-server-settings');
 viewServerSettings.style.display = 'none';
@@ -770,7 +779,9 @@ formUpdateMeta.querySelectorAll = () => [inputEditName, selectEditPublic];
 reg('span', 'personal-share-code-value');
 reg('span', 'personal-playlist-vis-badge');
 reg('span', 'personal-track-count-badge');
-reg('div', 'personal-tracks-list');
+const personalTracksList = reg('div', 'personal-tracks-list');
+const personalTracksPagination = reg('nav', 'personal-tracks-pagination');
+personalTracksPagination.hidden = true;
 reg('div', 'personal-saved-list');
 const inputFilterTracks = reg('input', 'input-filter-playlist-tracks');
 
@@ -931,6 +942,91 @@ async function run() {
   const putCalls = fetchCalls.filter((c) => c.url === '/api/panel/user/playlist' && c.method === 'PUT');
   assert.strictEqual(putCalls.length, 1);
   assert.strictEqual(unsavedBar.classList.contains('is-visible'), false, '儲存成功後應收起未儲存提示列');
+
+  // 5. 驗證每頁顯示 10 首與分頁按鈕列（25 首 -> 3 頁；201 首 -> 21 頁且按鈕數量受控）
+  inputFilterTracks.value = '';
+  const tracks25 = Array.from({ length: 25 }, (_, i) => ({
+    title: `Track ${String(i + 1).padStart(2, '0')}`,
+    author: `Artist ${i + 1}`,
+    length: 180000 + i * 1000,
+    uri: `https://youtu.be/t${i + 1}`,
+  }));
+  playlistState = { ...playlistState, tracks: tracks25 };
+  btnDropdownPersonal.dispatchEvent({ type: 'click' });
+  await new Promise((r) => setTimeout(r, 20));
+
+  assert.strictEqual(personalTracksPagination.hidden, false);
+  const countRenderedRows = () => (personalTracksList.innerHTML.match(/class="personal-track-row"/g) || []).length;
+  const pageLabels = () => personalTracksPagination.children.map((c) => c.textContent);
+  const findPageBtn = (label) => personalTracksPagination.children.find((c) => c.tagName === 'BUTTON' && c.textContent === String(label));
+
+  assert.strictEqual(countRenderedRows(), 10, '第 1 頁應精準顯示 10 首歌曲');
+  assert.ok(personalTracksList.innerHTML.includes('#1</span>'));
+  assert.ok(personalTracksList.innerHTML.includes('#10</span>'));
+  assert.ok(!personalTracksList.innerHTML.includes('#11</span>'));
+  assert.deepStrictEqual(pageLabels(), ['上一頁', '1', '2', '3', '下一頁']);
+  assert.strictEqual(findPageBtn('回到第一頁'), undefined);
+  assert.strictEqual(findPageBtn('上一頁').disabled, true);
+  assert.strictEqual(findPageBtn('1').classList.contains('active'), true);
+  assert.strictEqual(findPageBtn('下一頁').disabled, false);
+
+  // 點擊「下一頁」切至第 2 頁
+  findPageBtn('下一頁').dispatchEvent({ type: 'click', bubbles: true });
+  assert.strictEqual(countRenderedRows(), 10, '第 2 頁應顯示 10 首歌曲 (#11~#20)');
+  assert.ok(personalTracksList.innerHTML.includes('#11</span>'));
+  assert.ok(personalTracksList.innerHTML.includes('#20</span>'));
+  assert.strictEqual(findPageBtn('2').classList.contains('active'), true);
+  assert.strictEqual(findPageBtn('上一頁').disabled, false);
+  assert.strictEqual(unsavedBar.classList.contains('is-visible'), false, '翻頁不可觸發未儲存提示列');
+
+  // 點擊「3」切至最後一頁
+  findPageBtn('3').dispatchEvent({ type: 'click', bubbles: true });
+  assert.strictEqual(countRenderedRows(), 5, '第 3 頁應顯示剩餘 5 首歌曲 (#21~#25)');
+  assert.ok(personalTracksList.innerHTML.includes('#21</span>'));
+  assert.ok(personalTracksList.innerHTML.includes('#25</span>'));
+  assert.strictEqual(findPageBtn('下一頁').disabled, true);
+
+  // 點擊「上一頁」回到第 2 頁，再點擊「1」回到第 1 頁
+  findPageBtn('上一頁').dispatchEvent({ type: 'click', bubbles: true });
+  assert.ok(personalTracksList.innerHTML.includes('#11</span>'));
+  findPageBtn('1').dispatchEvent({ type: 'click', bubbles: true });
+  assert.ok(personalTracksList.innerHTML.includes('#1</span>'));
+
+  // 201 首（21 頁）時控制最大按鈕數量（頁碼槽位最多 7 個，總按鈕不超過 9 顆）
+  const tracks201 = Array.from({ length: 201 }, (_, i) => ({
+    title: `Track ${String(i + 1).padStart(3, '0')}`,
+    author: `Artist ${i + 1}`,
+    length: 180000,
+    uri: `https://youtu.be/m${i + 1}`,
+  }));
+  playlistState = { ...playlistState, tracks: tracks201 };
+  btnDropdownPersonal.dispatchEvent({ type: 'click' });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepStrictEqual(pageLabels(), ['上一頁', '1', '2', '3', '4', '5', '…', '21', '下一頁']);
+  assert.ok(personalTracksPagination.children.filter((c) => c.tagName === 'BUTTON').length <= 9);
+
+  // 逐步翻頁至第 10 頁檢查雙側省略與上限控制
+  for (const p of ['5', '6', '7', '8', '9', '10']) {
+    findPageBtn(p).dispatchEvent({ type: 'click', bubbles: true });
+  }
+  assert.deepStrictEqual(pageLabels(), ['上一頁', '1', '…', '9', '10', '11', '…', '21', '下一頁']);
+  assert.ok(personalTracksPagination.children.filter((c) => c.tagName === 'BUTTON').length <= 9);
+  assert.ok(personalTracksList.innerHTML.includes('#91</span>'));
+  assert.ok(personalTracksList.innerHTML.includes('#100</span>'));
+
+  // 點擊末頁「21」檢查末頁視窗與「下一頁」禁用狀態
+  findPageBtn('21').dispatchEvent({ type: 'click', bubbles: true });
+  assert.deepStrictEqual(pageLabels(), ['上一頁', '1', '…', '17', '18', '19', '20', '21', '下一頁']);
+  assert.strictEqual(countRenderedRows(), 1, '第 21 頁應僅顯示第 #201 首');
+  assert.ok(personalTracksList.innerHTML.includes('#201</span>'));
+  assert.strictEqual(findPageBtn('下一頁').disabled, true);
+
+  // 搜尋篩選後應自動回到第 1 頁且保留原始序號 (#015 -> #15)
+  inputFilterTracks.value = 'Track 015';
+  inputFilterTracks.dispatchEvent({ type: 'input', bubbles: true });
+  assert.strictEqual(countRenderedRows(), 1);
+  assert.ok(personalTracksList.innerHTML.includes('#15</span>'));
+  assert.deepStrictEqual(pageLabels(), ['上一頁', '1', '下一頁']);
 }
 
 run().catch((err) => {
@@ -946,5 +1042,131 @@ run().catch((err) => {
         encoding='utf-8',
     )
     assert proc.returncode == 0, f'Node.js panel.js test failed:\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}'
+
+
+def test_login_redirect_from_multiple_entry_points():
+    """驗證從不同入口登入 Discord 帳號皆正確導回原入口，且嚴防 Open Redirect。"""
+    import io
+    import json
+    import urllib.parse
+    from unittest.mock import patch
+    import cogs.panel_bp as panel_bp_mod
+
+    client = app.test_client()
+
+    # 1. 各公開頁面與控制面板頂部「登入」按鈕不可寫死跳轉 /panel，皆應帶入當前頁面路徑作為 ?next=
+    for path in ['/', '/docs', '/commit', '/terms', '/privacy', '/panel']:
+        res = client.get(path)
+        assert res.status_code == 200
+        html = res.data.decode('utf-8')
+        assert "window.location.href='/panel'" not in html
+        assert "window.location.href='/login?next='" in html
+
+    # /profile 與 /support 未登入頁也應帶出明確的 next 目標
+    res_prof = client.get('/profile')
+    assert res_prof.status_code == 200
+    assert '/login?next=/profile' in res_prof.data.decode('utf-8')
+
+    res_sup = client.get('/support?category=profile')
+    assert res_sup.status_code == 200
+    sup_html = res_sup.data.decode('utf-8')
+    assert '/login?next=%2Fsupport%3Fcategory%3Dprofile' in sup_html or '/login?next=/support%3Fcategory%3Dprofile' in sup_html
+
+    # /panel 未登入主按鈕應於點擊時附上完整 pathname + search + hash
+    panel_html = client.get('/panel').data.decode('utf-8')
+    assert "this.href='/login?next='" in panel_html
+
+    # 2. 各站內入口透過 /login?next=... 發起登入，Session 紀錄並由 dev-login 正確導回原頁（含 hash 與 query）
+    entry_targets = [
+        '/profile',
+        '/support?category=profile',
+        '/docs',
+        '/',
+        '/panel#personal',
+        '/panel#owner',
+        '/panel#guild-222222222222222222',
+    ]
+    for target in entry_targets:
+        c = app.test_client()
+        encoded_next = urllib.parse.quote(target, safe='')
+        res_login = c.get(f'/login?next={encoded_next}')
+        assert res_login.status_code == 302
+        with c.session_transaction() as sess:
+            assert sess.get('login_next') == target
+
+        res_dev = c.get('/api/auth/dev-login?role=admin')
+        assert res_dev.status_code == 302
+        loc = res_dev.headers.get('Location', '')
+        assert loc.endswith(target) or loc == target
+
+    # 3. 驗證真實 OAuth callback (/api/auth) 在完成交換後導回來源頁 /panel#personal
+    orig_secret = panel_bp_mod.DISCORD_CLIENT_SECRET
+    panel_bp_mod.DISCORD_CLIENT_SECRET = 'test_client_secret'
+    try:
+        oauth_client = app.test_client()
+        target_hash = '/panel#personal'
+        res_start = oauth_client.get('/login?next=' + urllib.parse.quote(target_hash, safe=''))
+        assert res_start.status_code == 302
+        with oauth_client.session_transaction() as sess:
+            oauth_state = sess.get('oauth_state')
+            assert sess.get('login_next') == target_hash
+
+        class _FakeResp:
+            def __init__(self, payload):
+                self._raw = json.dumps(payload).encode('utf-8')
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+            def read(self):
+                return self._raw
+
+        def _fake_urlopen(req, timeout=15):
+            url = req.full_url if hasattr(req, 'full_url') else str(req)
+            if 'oauth2/token' in url:
+                return _FakeResp({'access_token': 'fake_token'})
+            if 'users/@me/guilds' in url:
+                return _FakeResp([{'id': '222222222222222222', 'name': 'Test Guild', 'permissions': 32, 'owner': False}])
+            if 'users/@me' in url:
+                return _FakeResp({'id': '888888888888888888', 'username': 'tester', 'global_name': 'Tester'})
+            raise AssertionError(f'Unexpected URL: {url}')
+
+        with patch('urllib.request.urlopen', side_effect=_fake_urlopen):
+            res_cb = oauth_client.get(f'/api/auth?code=fake_code&state={oauth_state}')
+        assert res_cb.status_code == 302
+        cb_loc = res_cb.headers.get('Location', '')
+        assert cb_loc.endswith('/panel#personal') or cb_loc == '/panel#personal'
+        with oauth_client.session_transaction() as sess:
+            assert 'login_next' not in sess
+            assert 'oauth_state' not in sess
+    finally:
+        panel_bp_mod.DISCORD_CLIENT_SECRET = orig_secret
+
+    # 4. 驗證未帶 ?next= 時可由同源 Referer 推導來源頁
+    ref_client = app.test_client()
+    res_ref = ref_client.get('/login', headers={'Referer': 'http://localhost/docs'})
+    assert res_ref.status_code == 302
+    with ref_client.session_transaction() as sess:
+        assert sess.get('login_next') == '/docs'
+
+    # 5. 嚴防 Open Redirect 與登入迴圈：外部網域、協定相對路徑、偽協議與 auth 端點皆退回 /panel
+    malicious_targets = [
+        'https://evil.example.com/phish',
+        '//evil.example.com/steal',
+        '/\\evil.example.com',
+        'javascript:alert(1)',
+        '/logout',
+        '/api/auth',
+        '/login',
+    ]
+    for bad in malicious_targets:
+        c_bad = app.test_client()
+        c_bad.get('/login?next=' + urllib.parse.quote(bad, safe=''))
+        with c_bad.session_transaction() as sess:
+            assert sess.get('login_next') == '/panel'
+        res_bad_dev = c_bad.get('/api/auth/dev-login?role=admin')
+        assert res_bad_dev.status_code == 302
+        assert res_bad_dev.headers.get('Location', '').endswith('/panel')
+
 
 

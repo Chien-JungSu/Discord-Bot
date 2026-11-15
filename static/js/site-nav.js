@@ -356,6 +356,29 @@
     window.addEventListener('orientationchange', syncSidebarTriggerPosition, { passive: true });
   }
 
+  // 全域：自動為無 next 參數的登入連結補上當前網址（含 ?query 與 #hash），
+  // 確保從 /panel#personal、/docs、/profile 等任意入口登入後導回原頁面
+  function syncDynamicLoginLinks() {
+    if (window.location.pathname.startsWith('/api/auth')) return;
+    const nextTarget = encodeURIComponent(
+      window.location.pathname + window.location.search + window.location.hash
+    );
+    document.querySelectorAll('a.btn-discord-login[href^="/login"]').forEach((link) => {
+      const rawHref = link.getAttribute('href') || '';
+      if (rawHref === '/login' || rawHref.startsWith('/login?next=')) {
+        // 僅對預設 /login（尚未寫入明確目標，或已在先前回寫過同類動態連結）更新目標；
+        // 若模板已指定明確 next（例如 profile_prompt 的 ?next=/profile），則保留不覆寫
+        if (rawHref === '/login' || link.dataset.dynamicLoginNext === 'true') {
+          link.setAttribute('href', `/login?next=${nextTarget}`);
+          link.dataset.dynamicLoginNext = 'true';
+        }
+      }
+    });
+  }
+
+  syncDynamicLoginLinks();
+  window.addEventListener('hashchange', syncDynamicLoginLinks);
+
   // 全域：點擊任何返回首頁的按鈕/連結時，設定置頂標籤
   document.addEventListener('click', (e) => {
     const homeLink = e.target.closest('a[href="/"], .topbar-brand, #back-link, .back-link, .unauth-back-link');

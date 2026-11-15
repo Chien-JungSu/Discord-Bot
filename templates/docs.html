@@ -90,7 +90,7 @@
           </div>
         </div>
         {% else %}
-        <button type="button" class="topbar-login-btn top-nav-link" onclick="window.location.href='/panel'">
+        <button type="button" class="topbar-login-btn top-nav-link" onclick="window.location.href='/login?next=' + encodeURIComponent(window.location.pathname + window.location.search + window.location.hash)">
           <span>登入</span>
         </button>
         {% endif %}

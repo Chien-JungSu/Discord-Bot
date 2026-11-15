@@ -3282,6 +3282,8 @@
   let personalSavedPlaylists = [];
   let personalMaxTracks = 500;
   let personalDragFromIdx = null;
+  const PERSONAL_TRACKS_PAGE_SIZE = 10;
+  let personalTracksCurrentPage = 1;
 
   function formatDurationMs(ms) {
     const val = Number(ms || 0);
@@ -3315,6 +3317,7 @@
         personalPlaylistData = data.playlist || null;
         personalSavedPlaylists = Array.isArray(data.saved_playlists) ? data.saved_playlists : [];
         personalMaxTracks = Number(data.max_tracks || 500);
+        personalTracksCurrentPage = 1;
         renderPersonalPlaylistUI({ forceSyncMeta: true });
       }
     } catch (err) {
@@ -3372,6 +3375,102 @@
     checkUnsavedChanges();
   }
 
+  /**
+   * 計算受控數量的分頁頁碼序列（最多 7 個槽位，超出以 ellipsis 省略）。
+   * 確保頁面數量多時不溢位、不產生滾動條。
+   */
+  function buildPersonalPaginationItems(currentPage, totalPages) {
+    if (totalPages <= 7) {
+      return Array.from({ length: totalPages }, (_, i) => i + 1);
+    }
+    if (currentPage <= 4) {
+      return [1, 2, 3, 4, 5, 'ellipsis', totalPages];
+    }
+    if (currentPage >= totalPages - 3) {
+      return [1, 'ellipsis', totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages];
+    }
+    return [1, 'ellipsis', currentPage - 1, currentPage, currentPage + 1, 'ellipsis', totalPages];
+  }
+
+  function createPaginationButton({ label, className, disabled = false, active = false, targetPage = null, action = null, title = '' }) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `${className}${active ? ' active' : ''}`;
+    btn.textContent = label;
+    btn.disabled = Boolean(disabled);
+    if (title) btn.title = title;
+    if (action) btn.setAttribute('data-page-action', action);
+    if (targetPage !== null) btn.setAttribute('data-page', String(targetPage));
+    if (active) btn.setAttribute('aria-current', 'page');
+
+    if (!disabled && targetPage !== null) {
+      btn.addEventListener('click', () => {
+        if (personalTracksCurrentPage === targetPage) return;
+        personalTracksCurrentPage = targetPage;
+        renderPersonalTracksList();
+      });
+    }
+    return btn;
+  }
+
+  function renderPersonalTracksPagination(totalItems, totalPages) {
+    const paginationEl = document.getElementById('personal-tracks-pagination');
+    if (!paginationEl) return;
+
+    paginationEl.innerHTML = '';
+    if (totalItems <= 0) {
+      paginationEl.hidden = true;
+      return;
+    }
+
+    paginationEl.hidden = false;
+    const isFirst = personalTracksCurrentPage <= 1;
+    const isLast = personalTracksCurrentPage >= totalPages;
+
+    paginationEl.appendChild(
+      createPaginationButton({
+        label: '上一頁',
+        className: 'btn-page-nav',
+        disabled: isFirst,
+        targetPage: Math.max(1, personalTracksCurrentPage - 1),
+        action: 'prev',
+        title: '前往上一頁',
+      })
+    );
+
+    const items = buildPersonalPaginationItems(personalTracksCurrentPage, totalPages);
+    items.forEach((item) => {
+      if (item === 'ellipsis') {
+        const span = document.createElement('span');
+        span.className = 'pagination-ellipsis';
+        span.textContent = '…';
+        span.setAttribute('aria-hidden', 'true');
+        paginationEl.appendChild(span);
+      } else {
+        paginationEl.appendChild(
+          createPaginationButton({
+            label: String(item),
+            className: 'btn-page-num',
+            active: item === personalTracksCurrentPage,
+            targetPage: item,
+            title: `第 ${item} 頁`,
+          })
+        );
+      }
+    });
+
+    paginationEl.appendChild(
+      createPaginationButton({
+        label: '下一頁',
+        className: 'btn-page-nav',
+        disabled: isLast,
+        targetPage: Math.min(totalPages, personalTracksCurrentPage + 1),
+        action: 'next',
+        title: '前往下一頁',
+      })
+    );
+  }
+
   function renderPersonalTracksList() {
     const listEl = document.getElementById('personal-tracks-list');
     const filterInput = document.getElementById('input-filter-playlist-tracks');
@@ -3382,12 +3481,14 @@
       : [];
 
     if (tracks.length === 0) {
+      personalTracksCurrentPage = 1;
       listEl.innerHTML = '<div class="empty-state">目前歌單內還沒有歌曲，快從上方搜尋欄新增第一首歌吧！</div>';
+      renderPersonalTracksPagination(0, 1);
       return;
     }
 
     const kw = (filterInput ? filterInput.value : '').trim().toLowerCase();
-    const rowsHtml = [];
+    const filteredItems = [];
 
     tracks.forEach((t, idx) => {
       const title = String(t.title || '未知曲目');
@@ -3395,13 +3496,31 @@
       if (kw && !title.toLowerCase().includes(kw) && !author.toLowerCase().includes(kw)) {
         return;
       }
+      filteredItems.push({ track: t, idx });
+    });
+
+    if (filteredItems.length === 0) {
+      personalTracksCurrentPage = 1;
+      listEl.innerHTML = '<div class="empty-state">沒有符合篩選條件的歌曲。</div>';
+      renderPersonalTracksPagination(0, 1);
+      return;
+    }
+
+    const totalPages = Math.max(1, Math.ceil(filteredItems.length / PERSONAL_TRACKS_PAGE_SIZE));
+    personalTracksCurrentPage = Math.min(Math.max(1, personalTracksCurrentPage), totalPages);
+    const startOffset = (personalTracksCurrentPage - 1) * PERSONAL_TRACKS_PAGE_SIZE;
+    const pageItems = filteredItems.slice(startOffset, startOffset + PERSONAL_TRACKS_PAGE_SIZE);
+
+    const rowsHtml = pageItems.map(({ track: t, idx }) => {
+      const title = String(t.title || '未知曲目');
+      const author = String(t.author || '未知演出者');
       const uri = t.uri ? String(t.uri) : '';
       const dur = t.is_stream ? '🔴 直播' : formatDurationMs(t.length);
       const titleHtml = uri
         ? `<a href="${escapeHtmlText(uri)}" target="_blank" rel="noreferrer" class="playlist-track-link">${escapeHtmlText(title)}</a>`
         : `<span class="playlist-track-title-text">${escapeHtmlText(title)}</span>`;
 
-      rowsHtml.push(`
+      return `
         <div class="personal-track-row" draggable="true" data-track-idx="${idx}">
           <div class="personal-track-left">
             <span class="personal-track-drag-handle" title="拖曳調整順序">☰</span>
@@ -3422,15 +3541,11 @@
             <button type="button" class="btn-icon-action danger delete btn-track-del" data-idx="${idx}" title="從歌單刪除此曲目">🗑️ 刪除</button>
           </div>
         </div>
-      `);
+      `;
     });
 
-    if (rowsHtml.length === 0) {
-      listEl.innerHTML = '<div class="empty-state">沒有符合篩選條件的歌曲。</div>';
-      return;
-    }
-
     listEl.innerHTML = rowsHtml.join('');
+    renderPersonalTracksPagination(filteredItems.length, totalPages);
 
     // 綁定上移 / 下移 / 指定編號排序 / 刪除事件
     listEl.querySelectorAll('.btn-track-up').forEach((btn) => {
@@ -3530,6 +3645,7 @@
       const data = await res.json();
       if (res.ok && data.status === 'ok') {
         personalPlaylistData = data.playlist;
+        personalTracksCurrentPage = Math.floor(toIdx / PERSONAL_TRACKS_PAGE_SIZE) + 1;
         renderPersonalPlaylistUI();
         showToast(data.message || '已更新歌曲順序', 'success');
       } else {
@@ -3842,6 +3958,10 @@
         if (res.ok && data.status === 'ok') {
           personalPlaylistData = data.playlist;
           if (inputQuery) inputQuery.value = '';
+          const trackCount = Array.isArray(personalPlaylistData?.tracks) ? personalPlaylistData.tracks.length : 0;
+          if (trackCount > 0) {
+            personalTracksCurrentPage = Math.ceil(trackCount / PERSONAL_TRACKS_PAGE_SIZE);
+          }
           renderPersonalPlaylistUI();
           showToast(data.message || '已成功加入歌單！', 'success');
         } else if (data.status === 'warning') {
@@ -3872,6 +3992,7 @@
   const inputFilterPlaylistTracks = document.getElementById('input-filter-playlist-tracks');
   if (inputFilterPlaylistTracks) {
     inputFilterPlaylistTracks.addEventListener('input', () => {
+      personalTracksCurrentPage = 1;
       renderPersonalTracksList();
     });
   }

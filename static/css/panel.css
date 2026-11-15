@@ -3630,10 +3630,82 @@ progress.loading-spinner::-moz-progress-bar {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-height: 520px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding-right: 4px;
+  overflow: visible;
+}
+
+.personal-tracks-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.personal-tracks-pagination[hidden] {
+  display: none;
+}
+
+.btn-page-nav,
+.btn-page-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 6px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(15, 23, 42, 0.65);
+  color: #e2e8f0;
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.16s ease;
+  white-space: nowrap;
+}
+
+.btn-page-num {
+  min-width: 36px;
+  padding: 6px 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.btn-page-nav:hover:not(:disabled),
+.btn-page-num:hover:not(:disabled) {
+  background: rgba(56, 189, 248, 0.14);
+  border-color: rgba(125, 211, 252, 0.45);
+  color: #ffffff;
+  transform: translateY(-1px);
+}
+
+.btn-page-num.active {
+  background: rgba(56, 189, 248, 0.22);
+  border-color: #38bdf8;
+  color: #7dd3fc;
+  font-weight: 800;
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.2);
+}
+
+.btn-page-nav:disabled,
+.btn-page-num:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.pagination-ellipsis {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 34px;
+  color: #64748b;
+  font-size: 0.9rem;
+  user-select: none;
 }
 
 .personal-track-row {
