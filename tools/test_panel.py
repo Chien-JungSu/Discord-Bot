@@ -11,6 +11,7 @@ def test_home_page():
     assert 'top-nav-link' in html
     assert '加入官方支援群' in html
     assert 'GitHub Repository' in html
+    assert 'AI 智慧助手' in html
     assert 'cta-links-row' not in html
     assert 'top-right-nav' not in html
     assert '⚙️' not in html
