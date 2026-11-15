@@ -49,9 +49,6 @@ def test_gemini_models_split_and_defaults():
     ]
     for model_id in expected_split:
         assert model_id in ids, f"缺少獨立模型選項: {model_id}"
-        assert model_id in MODEL_TOKEN_RATES
-        bare_id = model_id.split(":", 1)[1]
-        assert bare_id in MODEL_TOKEN_RATES
 
     # 預設 Gemini 項目應排在第一位 Gemini 模型
     gemini_entries = [m for m in AI_PROVIDER_MODELS if m.get("provider") == "gemini"]

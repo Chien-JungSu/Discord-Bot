@@ -130,7 +130,7 @@ def init_db():
             );
             """)
 
-            # 8. 經濟系統全域使用者帳戶表 (含一般金幣與 AI 專屬貨幣)
+            # 8. 經濟系統全域使用者帳戶表
             cursor.execute("""
             CREATE TABLE IF NOT EXISTS economy_users (
                 user_id INTEGER PRIMARY KEY,
@@ -139,8 +139,7 @@ def init_db():
                 daily_streak INTEGER NOT NULL DEFAULT 0,
                 last_hourly_ts REAL NOT NULL DEFAULT 0,
                 total_earned INTEGER NOT NULL DEFAULT 0,
-                total_wagered INTEGER NOT NULL DEFAULT 0,
-                ai_points INTEGER NOT NULL DEFAULT 0
+                total_wagered INTEGER NOT NULL DEFAULT 0
             );
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_economy_balance ON economy_users (balance DESC);")
@@ -153,7 +152,7 @@ def init_db():
             );
             """)
 
-            # 10. AI 智慧助手設定表 (OpenRouter 免費模型與個人化設定)
+            # 10. AI 智慧助手設定表
             cursor.execute("""
             CREATE TABLE IF NOT EXISTS ai_settings (
                 guild_id TEXT PRIMARY KEY,
@@ -162,8 +161,7 @@ def init_db():
                 instruction TEXT,
                 channel_id INTEGER,
                 temperature REAL NOT NULL DEFAULT 0.7,
-                max_tokens INTEGER NOT NULL DEFAULT 3000,
-                payer_user_id INTEGER
+                max_tokens INTEGER NOT NULL DEFAULT 3000
             );
             """)
 
@@ -280,17 +278,6 @@ def init_db():
             );
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_saved_playlists_user ON user_saved_playlists (user_id);")
-
-            # ---------- 自動欄位安全遷移 (Migration) ----------
-            cursor.execute("PRAGMA table_info(economy_users);")
-            econ_cols = [r["name"] if isinstance(r, sqlite3.Row) else r[1] for r in cursor.fetchall()]
-            if "ai_points" not in econ_cols:
-                cursor.execute("ALTER TABLE economy_users ADD COLUMN ai_points INTEGER NOT NULL DEFAULT 0;")
-
-            cursor.execute("PRAGMA table_info(ai_settings);")
-            ai_cols = [r["name"] if isinstance(r, sqlite3.Row) else r[1] for r in cursor.fetchall()]
-            if "payer_user_id" not in ai_cols:
-                cursor.execute("ALTER TABLE ai_settings ADD COLUMN payer_user_id INTEGER;")
 
             conn.commit()
 
@@ -686,67 +673,6 @@ AI_PROVIDER_MODELS = [
 # 向下相容別名
 OPENROUTER_FREE_MODELS = AI_PROVIDER_MODELS
 
-# 各模型對話計費費率倍數（基準：ai_cost_per_1k_tokens / 1,000）
-MODEL_TOKEN_RATES = {
-    "auto": 1.0,
-    "gemini:gemini-3.5-flash-lite": 1.0,
-    "gemini-3.5-flash-lite": 1.0,
-    "gemini:gemini-4-hydrogen": 1.0,
-    "gemini-4-hydrogen": 1.0,
-    "gemini:gemini-3.8-flash": 1.0,
-    "gemini-3.8-flash": 1.0,
-    "gemini:gemini-3.7-flash": 1.0,
-    "gemini-3.7-flash": 1.0,
-    "gemini:gemini-3.6-flash": 1.0,
-    "gemini-3.6-flash": 1.0,
-    "gemini:gemini-3.5-flash": 1.0,
-    "gemini-3.5-flash": 1.0,
-    "gemini:gemini-3-flash-preview": 1.0,
-    "gemini-3-flash-preview": 1.0,
-    "gemini:gemini-3.1-flash-lite": 1.0,
-    "gemini-3.1-flash-lite": 1.0,
-    "gemini:gemini-2.5-flash": 1.0,
-    "gemini-2.5-flash": 1.0,
-    "gemini:gemini-flash-latest": 1.0,
-    "gemini-flash-latest": 1.0,
-    "gemini:gemini-flash-lite-latest": 1.0,
-    "gemini-flash-lite-latest": 1.0,
-    "gemini:gemma-4-31b-it": 1.0,
-    "gemma-4-31b-it": 1.0,
-    "gemini:gemini-2.5-flash-lite": 1.0,
-    "gemini-2.5-flash-lite": 1.0,
-    "nvidia:deepseek-ai/deepseek-v4.1-flash": 1.0,
-    "deepseek-ai/deepseek-v4.1-flash": 1.0,
-    "nvidia:meta/llama-3.2-11b-vision-instruct": 1.0,
-    "meta/llama-3.2-11b-vision-instruct": 1.0,
-    "mistral:ministral-8b-latest": 1.0,
-    "ministral-8b-latest": 1.0,
-    # 相容舊版模型名稱
-    "groq:llama-3.3-70b-versatile": 1.0,
-    "llama-3.3-70b-versatile": 1.0,
-    "gemini:gemini-2.0-flash": 1.0,
-    "gemini-2.0-flash": 1.0,
-    "nvidia:meta/llama-3.3-70b-instruct": 1.2,
-    "meta/llama-3.3-70b-instruct": 1.2,
-    "mistral:mistral-small-latest": 1.0,
-    "mistral-small-latest": 1.0,
-    "openrouter/auto": 1.0,
-}
-
-
-def calculate_ai_token_cost(model: str, total_tokens: int) -> int:
-    """根據模型與總消耗 Token 計算扣除之 AI 貨幣數量。"""
-    try:
-        cfg = load_economy_config()
-        cost_per_1k = max(1, int(cfg.get("ai_cost_per_1k_tokens", 100)))
-    except Exception:
-        cost_per_1k = 100
-
-    rate = MODEL_TOKEN_RATES.get(model, 1.0)
-    # 依 Token 比例計算，至少扣除 1 點
-    cost = max(1, math.ceil(total_tokens * (cost_per_1k / 1000.0) * rate))
-    return int(cost)
-
 
 def load_ai_settings() -> dict:
     """讀取所有伺服器的 AI 設定。"""
@@ -756,7 +682,7 @@ def load_ai_settings() -> dict:
         try:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT guild_id, is_enabled, model, instruction, channel_id, temperature, max_tokens, payer_user_id FROM ai_settings;"
+                "SELECT guild_id, is_enabled, model, instruction, channel_id, temperature, max_tokens FROM ai_settings;"
             )
             res = {}
             for row in cursor.fetchall():
@@ -767,7 +693,6 @@ def load_ai_settings() -> dict:
                     'channel_id': row['channel_id'],
                     'temperature': float(row['temperature']) if row['temperature'] is not None else DEFAULT_AI_TEMPERATURE,
                     'max_tokens': DEFAULT_AI_MAX_TOKENS if (row['max_tokens'] is None or int(row['max_tokens']) <= 1000) else int(row['max_tokens']),
-                    'payer_user_id': row['payer_user_id'],
                 }
             return res
         finally:
@@ -871,7 +796,7 @@ def get_guild_ai_settings(guild_id: str) -> dict:
         try:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT is_enabled, model, instruction, channel_id, temperature, max_tokens, payer_user_id FROM ai_settings WHERE guild_id = ?;",
+                "SELECT is_enabled, model, instruction, channel_id, temperature, max_tokens FROM ai_settings WHERE guild_id = ?;",
                 (str(guild_id),),
             )
             row = cursor.fetchone()
@@ -883,7 +808,6 @@ def get_guild_ai_settings(guild_id: str) -> dict:
                     'channel_id': row['channel_id'],
                     'temperature': float(row['temperature']) if row['temperature'] is not None else DEFAULT_AI_TEMPERATURE,
                     'max_tokens': DEFAULT_AI_MAX_TOKENS if (row['max_tokens'] is None or int(row['max_tokens']) <= 1000) else int(row['max_tokens']),
-                    'payer_user_id': row['payer_user_id'],
                 }
         finally:
             conn.close()
@@ -895,7 +819,6 @@ def get_guild_ai_settings(guild_id: str) -> dict:
         'channel_id': None,
         'temperature': defaults['ai_temperature'],
         'max_tokens': defaults['ai_max_tokens'],
-        'payer_user_id': None,
     }
 
 
@@ -935,21 +858,12 @@ def save_guild_ai_settings(guild_id: str, settings: dict) -> None:
             except (ValueError, TypeError):
                 max_tokens = DEFAULT_AI_MAX_TOKENS
 
-            payer_user_id = settings.get('payer_user_id')
-            if payer_user_id:
-                try:
-                    payer_user_id = int(payer_user_id)
-                except (ValueError, TypeError):
-                    payer_user_id = None
-            else:
-                payer_user_id = None
-
             cursor.execute(
                 """
-                INSERT OR REPLACE INTO ai_settings (guild_id, is_enabled, model, instruction, channel_id, temperature, max_tokens, payer_user_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT OR REPLACE INTO ai_settings (guild_id, is_enabled, model, instruction, channel_id, temperature, max_tokens)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (str(guild_id), is_enabled, model, instruction, channel_id, temperature, max_tokens, payer_user_id),
+                (str(guild_id), is_enabled, model, instruction, channel_id, temperature, max_tokens),
             )
             conn.commit()
         finally:
@@ -1386,15 +1300,6 @@ DEFAULT_ECONOMY_CONFIG: dict[str, Any] = {
     "scratch_jackpot_multiplier": 10.0,
     "scratch_second_multiplier": 3.0,
     "scratch_third_multiplier": 1.5,
-
-    # AI 專屬貨幣設定 (AI Points)
-    "ai_currency_name": "AI幣",
-    "ai_currency_emoji": "⚡",
-    "ai_initial_balance": 1000,
-    "ai_daily_reward": 1000,
-    "ai_daily_streak_bonus": 100,
-    "ai_daily_streak_max": 1000,
-    "ai_cost_per_1k_tokens": 100,
 }
 
 
@@ -1493,7 +1398,7 @@ def get_economy_user(user_id: int) -> dict[str, Any]:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT user_id, balance, last_daily_ts, daily_streak, last_hourly_ts, total_earned, total_wagered, ai_points
+                SELECT user_id, balance, last_daily_ts, daily_streak, last_hourly_ts, total_earned, total_wagered
                 FROM economy_users
                 WHERE user_id = ?;
                 """,
@@ -1509,7 +1414,6 @@ def get_economy_user(user_id: int) -> dict[str, Any]:
                     "last_hourly_ts": float(row["last_hourly_ts"]),
                     "total_earned": int(row["total_earned"]),
                     "total_wagered": int(row["total_wagered"]),
-                    "ai_points": int(row["ai_points"]) if "ai_points" in row.keys() else 0,
                 }
             return {
                 "user_id": int(user_id),
@@ -1519,7 +1423,6 @@ def get_economy_user(user_id: int) -> dict[str, Any]:
                 "last_hourly_ts": 0.0,
                 "total_earned": 0,
                 "total_wagered": 0,
-                "ai_points": 0,
             }
         finally:
             conn.close()
@@ -1528,74 +1431,11 @@ def get_economy_user(user_id: int) -> dict[str, Any]:
 def _ensure_user_row(cursor: sqlite3.Cursor, user_id: int):
     cursor.execute(
         """
-        INSERT OR IGNORE INTO economy_users (user_id, balance, last_daily_ts, daily_streak, last_hourly_ts, total_earned, total_wagered, ai_points)
-        VALUES (?, 0, 0, 0, 0, 0, 0, 0);
+        INSERT OR IGNORE INTO economy_users (user_id, balance, last_daily_ts, daily_streak, last_hourly_ts, total_earned, total_wagered)
+        VALUES (?, 0, 0, 0, 0, 0, 0);
         """,
         (int(user_id),),
     )
-
-
-def get_user_ai_points(user_id: int) -> int:
-    """取得指定使用者的 AI 貨幣餘額。"""
-    init_db()
-    uid = int(user_id)
-    with _lock:
-        conn = get_connection()
-        try:
-            cursor = conn.cursor()
-            _ensure_user_row(cursor, uid)
-            cursor.execute("SELECT ai_points FROM economy_users WHERE user_id = ?;", (uid,))
-            row = cursor.fetchone()
-            return int(row["ai_points"]) if row and "ai_points" in row.keys() else 0
-        finally:
-            conn.close()
-
-
-def update_user_ai_points(
-    user_id: int,
-    delta: int,
-    allow_negative: bool = False,
-) -> tuple[bool, int]:
-    """增減使用者的 AI 專屬貨幣 (ai_points)。
-    當 delta < 0 且 allow_negative=False 時，若餘額不足則不扣款並回傳 (False, 目前餘額)。
-    成功時回傳 (True, 更新後餘額)。
-    """
-    init_db()
-    uid = int(user_id)
-    delta_int = int(delta)
-    with _lock:
-        conn = get_connection()
-        try:
-            cursor = conn.cursor()
-            _ensure_user_row(cursor, uid)
-            cursor.execute("SELECT ai_points FROM economy_users WHERE user_id = ?;", (uid,))
-            curr = int(cursor.fetchone()["ai_points"])
-            if delta_int < 0 and not allow_negative and curr + delta_int < 0:
-                return False, curr
-
-            new_pts = max(0, curr + delta_int) if not allow_negative else (curr + delta_int)
-            cursor.execute("UPDATE economy_users SET ai_points = ? WHERE user_id = ?;", (new_pts, uid))
-            conn.commit()
-            return True, new_pts
-        finally:
-            conn.close()
-
-
-def set_user_ai_points(user_id: int, new_points: int) -> int:
-    """直接設定使用者的 AI 貨幣餘額（供管理員後台發放/調整使用）。"""
-    init_db()
-    uid = int(user_id)
-    pts = max(0, int(new_points))
-    with _lock:
-        conn = get_connection()
-        try:
-            cursor = conn.cursor()
-            _ensure_user_row(cursor, uid)
-            cursor.execute("UPDATE economy_users SET ai_points = ? WHERE user_id = ?;", (pts, uid))
-            conn.commit()
-            return pts
-        finally:
-            conn.close()
 
 
 def update_economy_balance(
@@ -1670,13 +1510,9 @@ def claim_economy_daily(
     streak_bonus_per_day: int,
     streak_bonus_max: int,
     initial_balance: int = 200,
-    ai_daily_reward: Optional[int] = None,
-    ai_streak_bonus_per_day: Optional[int] = None,
-    ai_streak_bonus_max: Optional[int] = None,
-    ai_initial_balance: Optional[int] = None,
 ) -> dict[str, Any]:
-    """原子化執行每日簽到：以每日 00:00 (UTC+8) 為刷新基準，檢查當日是否已簽到、計算連簽天數與金幣/AI專屬貨幣獎勵並寫入資料庫。
-    若為第一次使用簽到指令（last_daily_ts == 0 且 last_hourly_ts == 0），額外發放初始資金與初始 AI 幣。
+    """原子化執行每日簽到：以每日 00:00 (UTC+8) 為刷新基準，檢查當日是否已簽到、計算連簽天數與金幣獎勵並寫入資料庫。
+    若為第一次使用簽到指令（last_daily_ts == 0 且 last_hourly_ts == 0），額外發放初始資金。
     """
     init_db()
     uid = int(user_id)
@@ -1688,7 +1524,7 @@ def claim_economy_daily(
             cursor = conn.cursor()
             _ensure_user_row(cursor, uid)
             cursor.execute(
-                "SELECT balance, last_daily_ts, daily_streak, last_hourly_ts, ai_points FROM economy_users WHERE user_id = ?;",
+                "SELECT balance, last_daily_ts, daily_streak, last_hourly_ts FROM economy_users WHERE user_id = ?;",
                 (uid,),
             )
             row = cursor.fetchone()
@@ -1696,7 +1532,6 @@ def claim_economy_daily(
             last_ts = float(row["last_daily_ts"])
             old_streak = int(row["daily_streak"])
             last_hourly_ts = float(row["last_hourly_ts"])
-            curr_ai_points = int(row["ai_points"]) if "ai_points" in row.keys() else 0
 
             # 若今日 00:00 (UTC+8) 之後已經簽到過，則需等到明日 00:00 (UTC+8)
             if last_ts >= today_start_ts:
@@ -1705,10 +1540,9 @@ def claim_economy_daily(
                     "next_available_ts": next_midnight_ts,
                     "balance": balance,
                     "streak": old_streak,
-                    "ai_points": curr_ai_points,
                 }
 
-            # 首次使用任何簽到指令時，發放初始資金（預設 200 金幣）與初始 AI 貨幣
+            # 首次使用任何簽到指令時，發放初始資金（預設 200 金幣）
             is_first_checkin = (last_ts == 0.0 and last_hourly_ts == 0.0)
             init_bonus = max(0, int(initial_balance)) if is_first_checkin else 0
 
@@ -1730,28 +1564,16 @@ def claim_economy_daily(
             total_reward = max(0, int(base_reward) + bonus + init_bonus)
             new_balance = balance + total_reward
 
-            # 計算 AI 專屬貨幣發放（獲取方式依規則僅能從簽到或管理員後台獲得）
-            econ_cfg = load_economy_config()
-            ai_base = max(0, int(ai_daily_reward if ai_daily_reward is not None else econ_cfg.get("ai_daily_reward", 1000)))
-            ai_s_bon = max(0, int(ai_streak_bonus_per_day if ai_streak_bonus_per_day is not None else econ_cfg.get("ai_daily_streak_bonus", 100)))
-            ai_s_max = max(0, int(ai_streak_bonus_max if ai_streak_bonus_max is not None else econ_cfg.get("ai_daily_streak_max", 1000)))
-            ai_init = max(0, int(ai_initial_balance if ai_initial_balance is not None else econ_cfg.get("ai_initial_balance", 1000))) if is_first_checkin else 0
-
-            ai_bonus = min(max(0, (new_streak - 1) * ai_s_bon), ai_s_max)
-            total_ai_reward = ai_base + ai_bonus + ai_init
-            new_ai_points = curr_ai_points + total_ai_reward
-
             cursor.execute(
                 """
                 UPDATE economy_users
                 SET balance = ?,
-                    ai_points = ?,
                     last_daily_ts = ?,
                     daily_streak = ?,
                     total_earned = total_earned + ?
                 WHERE user_id = ?;
                 """,
-                (new_balance, new_ai_points, float(now_ts), new_streak, total_reward, uid),
+                (new_balance, float(now_ts), new_streak, total_reward, uid),
             )
             conn.commit()
             return {
@@ -1765,11 +1587,6 @@ def claim_economy_daily(
                 "streak_broken": streak_broken,
                 "old_streak": old_streak,
                 "next_available_ts": next_midnight_ts,
-                "ai_reward": ai_base,
-                "ai_streak_bonus": ai_bonus,
-                "ai_initial_bonus": ai_init,
-                "total_ai_reward": total_ai_reward,
-                "new_ai_points": new_ai_points,
             }
         finally:
             conn.close()

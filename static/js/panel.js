@@ -771,7 +771,6 @@
       'select-auto-role',
       'select-music-channel',
       'select-ai-channel',
-      'select-ai-payer',
       'modal-rule-channel',
       'modal-rr-channel',
       'modal-rr-new-role',
@@ -854,30 +853,6 @@
         if (aiCustomWrap) aiCustomWrap.style.display = 'block';
         if (aiCustomInput) aiCustomInput.value = modelVal;
       }
-    }
-    const aiPayerSelect = document.getElementById('select-ai-payer');
-    if (aiPayerSelect) {
-      aiPayerSelect.innerHTML = '<option value="">-- 由發問者自行支付各自的 AI 幣（預設） --</option>';
-      const payerFrag = document.createDocumentFragment();
-      let foundPayer = false;
-      (currentMembers || []).forEach((m) => {
-        const opt = document.createElement('option');
-        opt.value = m.id;
-        opt.textContent = `${m.name} (@${m.username || m.name})`;
-        if (String(m.id) === String(aiCfg.payer_user_id)) {
-          opt.selected = true;
-          foundPayer = true;
-        }
-        payerFrag.appendChild(opt);
-      });
-      if (aiCfg.payer_user_id && !foundPayer) {
-        const opt = document.createElement('option');
-        opt.value = aiCfg.payer_user_id;
-        opt.textContent = `指定使用者 (ID: ${aiCfg.payer_user_id})`;
-        opt.selected = true;
-        payerFrag.appendChild(opt);
-      }
-      aiPayerSelect.appendChild(payerFrag);
     }
     if (aiInstruction) aiInstruction.value = aiCfg.instruction || '';
     if (aiTemp) aiTemp.value = aiCfg.temperature !== undefined ? aiCfg.temperature : 0.7;
@@ -1079,13 +1054,11 @@
       const customModelVal = (document.getElementById('ai-custom-model-input').value || '').trim();
       const finalModel = modelSelectVal === 'custom' ? (customModelVal || 'auto') : modelSelectVal;
 
-      const payerSelect = document.getElementById('select-ai-payer');
       const payload = {
         action: 'save',
         is_enabled: document.getElementById('ai-enabled').checked,
         model: finalModel,
         channel_id: document.getElementById('select-ai-channel').value || null,
-        payer_user_id: payerSelect && payerSelect.value ? payerSelect.value : null,
         instruction: document.getElementById('ai-instruction').value,
         temperature: parseFloat(document.getElementById('ai-temperature').value) || 0.7,
         max_tokens: parseInt(document.getElementById('ai-max-tokens').value) || 3000,
@@ -1138,8 +1111,6 @@
               document.getElementById('select-ai-model').value = ai.model || 'auto';
               if (aiCustomWrap) aiCustomWrap.style.display = 'none';
               document.getElementById('select-ai-channel').value = ai.channel_id || '';
-              const payerSel = document.getElementById('select-ai-payer');
-              if (payerSel) payerSel.value = ai.payer_user_id || '';
               document.getElementById('ai-instruction').value = ai.instruction || '';
               document.getElementById('ai-temperature').value = ai.temperature !== undefined ? ai.temperature : 0.7;
               document.getElementById('ai-max-tokens').value = ai.max_tokens !== undefined ? ai.max_tokens : 3000;
@@ -2240,8 +2211,6 @@
       currentInspectedUserId = uid;
       const u = data.user;
       document.getElementById('stat-balance').textContent = u.balance.toLocaleString();
-      const statAi = document.getElementById('stat-ai-points');
-      if (statAi) statAi.textContent = (u.ai_points !== undefined ? u.ai_points : 0).toLocaleString();
       document.getElementById('stat-streak').textContent = `${u.daily_streak} 天`;
       document.getElementById('stat-earned').textContent = u.total_earned.toLocaleString();
       document.getElementById('stat-wagered').textContent = u.total_wagered.toLocaleString();
@@ -2299,54 +2268,6 @@
       const val = parseInt(amtInput ? amtInput.value : 0);
       if (val > 0) amtInput.value = -val;
       modifyUserBalance('add');
-    });
-  }
-
-  async function modifyUserAiPoints(action) {
-    if (!currentInspectedUserId) return;
-    const amtInput = document.getElementById('modify-ai-amount-input');
-    const amountVal = amtInput ? amtInput.value.trim() : '';
-    if (!amountVal) {
-      showToast('請輸入異動數量', 'error');
-      return;
-    }
-
-    try {
-      const res = await fetch('/api/panel/owner/economy-user', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          user_id: currentInspectedUserId,
-          action: action,
-          currency: 'ai',
-          amount: parseInt(amountVal),
-        }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        showToast(data.message);
-        inspectUserBalance(); // 重新整理顯示
-        if (amtInput) amtInput.value = '';
-      } else {
-        showToast(data.message || '修改失敗', 'error');
-      }
-    } catch (err) {
-      showToast('請求網路錯誤', 'error');
-    }
-  }
-
-  const btnSetAi = document.getElementById('btn-set-ai-points');
-  const btnAddAi = document.getElementById('btn-add-ai-points');
-  const btnDedAi = document.getElementById('btn-deduct-ai-points');
-
-  if (btnSetAi) btnSetAi.addEventListener('click', () => modifyUserAiPoints('set'));
-  if (btnAddAi) btnAddAi.addEventListener('click', () => modifyUserAiPoints('add'));
-  if (btnDedAi) {
-    btnDedAi.addEventListener('click', () => {
-      const amtInput = document.getElementById('modify-ai-amount-input');
-      const val = parseInt(amtInput ? amtInput.value : 0);
-      if (val > 0) amtInput.value = -val;
-      modifyUserAiPoints('add');
     });
   }
 

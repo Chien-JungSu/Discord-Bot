@@ -22,14 +22,10 @@ from cogs.database import (
     DEFAULT_AI_TEMPERATURE,
     build_panel_link_button,
     build_panel_link_view,
-    calculate_ai_token_cost,
     get_guild_ai_settings,
-    get_user_ai_points,
     is_guild_ai_authorized,
     load_ai_settings,
     save_guild_ai_settings,
-    set_user_ai_points,
-    update_user_ai_points,
 )
 from cogs.latex_formatter import format_latex_in_text
 from cogs.latex_renderer import extract_and_render_latex_formulas
@@ -222,9 +218,10 @@ def format_markdown_tables(text: str) -> str:
 
 
 HORIZONTAL_RULE_PATTERN = re.compile(r'^[ \t]*([-_*─])(?:[ \t]*\1){2,}[ \t]*$')
-# AI 回覆底部統計字串特徵：例如 `0.00/C | I 33C/0.00 | O 120C/0.00 | TC 0.00 | Pay Nicko | ...`
+# AI 回覆底部統計字串特徵（相容新版純 Token 統計與舊版歷史訊息格式）
 AI_FOOTER_PATTERN = re.compile(
-    r'\|\s*I\s+\d+C/[^|\n]+\|\s*O\s+\d+C/[^|\n]+\|\s*TC\s+[^|\n]+\|\s*Pay\s+'
+    r'(?:Tokens:\s*[\d,]+\s*\(In\s+[\d,]+\s*/\s*Out\s+[\d,]+\)\s*\|'
+    r'|\|\s*I\s+\d+C/[^|\n]+\|\s*O\s+\d+C/[^|\n]+\|\s*TC\s+[^|\n]+\|\s*Pay\s+)'
 )
 # 限時訊息底部標註特徵：`-# 由 {username} 傳送 • <t:...:R> 自動刪除`
 TEMP_MESSAGE_FOOTER_PATTERN = re.compile(
@@ -462,7 +459,7 @@ async def notify_owner_ai_fallback_failure(
 class AI(commands.Cog):
     """多供應商免費 LLM 智慧對話模組 (Gemini / NVIDIA / Mistral)。
 
-    支援文字/視覺圖片雙模態、自動限速 429 容錯容災輪詢、每頻道 15 則滑動視窗記憶與經濟系統 AI 貨幣計費。
+    支援文字/視覺圖片雙模態、自動限速 429 容錯容災輪詢與每頻道 15 則滑動視窗記憶。
     """
 
     def __init__(self, bot: commands.Bot):
@@ -546,7 +543,7 @@ class AI(commands.Cog):
             if has_container and not has_interactive_controls:
                 return True
 
-        # (b) 檢查傳統 Embed 降級格式（含 AI 計費統計 Footer）
+        # (b) 檢查傳統 Embed 降級格式（含 AI 統計 Footer）
         if msg.embeds:
             for emb in msg.embeds:
                 desc = emb.description or ""
@@ -580,7 +577,6 @@ class AI(commands.Cog):
                 "channel_id": None,
                 "temperature": DEFAULT_AI_TEMPERATURE,
                 "max_tokens": DEFAULT_AI_MAX_TOKENS,
-                "payer_user_id": None,
             }
         gid_str = str(guild_id)
         if gid_str in self._settings_cache:
@@ -596,12 +592,8 @@ class AI(commands.Cog):
     def _format_ai_footer(
         self,
         stats: Dict[str, Any],
-        cost: int,
-        payer_name: str = "User",
     ) -> str:
-        """依照圖二簡約風格格式化 AI 回覆底部統計字串：
-        -# 0.00/C | I 33C/0.00 | O 120C/0.00 | TC 0.00 | Pay Nicko | gemini-flash-latest | 4.91s
-        """
+        """格式化 AI 回覆底部統計字串（顯示 Token 用量、模型與耗時）。"""
         model_raw = str(stats.get("model") or "auto")
         if ":" in model_raw:
             model_raw = model_raw.split(":", 1)[1]
@@ -612,26 +604,9 @@ class AI(commands.Cog):
         total_tokens = stats.get("total_tokens", 0) or (prompt_tokens + completion_tokens)
         thinking_time = float(stats.get("thinking_time", 0.0) or 0.0)
 
-        if total_tokens > 0 and cost > 0:
-            unit_rate = (cost / total_tokens) * 1000
-            p_ratio = prompt_tokens / total_tokens if total_tokens > 0 else 0.5
-            input_cost = cost * p_ratio
-            output_cost = cost - input_cost
-            unit_rate_str = f"{unit_rate:.2f}/C"
-            input_cost_str = f"{input_cost:.2f}"
-            output_cost_str = f"{output_cost:.2f}"
-            total_cost_str = f"{float(cost):.2f}"
-        else:
-            unit_rate_str = "0.00/C"
-            input_cost_str = "0.00"
-            output_cost_str = "0.00"
-            total_cost_str = f"{float(cost):.2f}"
-
-        clean_payer = payer_name.replace("|", "").strip() or "User"
         return (
-            f"{unit_rate_str} | I {prompt_tokens}C/{input_cost_str} | "
-            f"O {completion_tokens}C/{output_cost_str} | TC {total_cost_str} | "
-            f"Pay {clean_payer} | {clean_model} | {thinking_time:.2f}s"
+            f"Tokens: {total_tokens:,} (In {prompt_tokens:,} / Out {completion_tokens:,}) | "
+            f"{clean_model} | {thinking_time:.2f}s"
         )
 
     def _build_ai_components_v2_view(
@@ -957,28 +932,7 @@ class AI(commands.Cog):
             )
             return
 
-        # 3. 檢查 AI 專屬貨幣餘額
-        payer_id = int(cfg.get("payer_user_id") or interaction.user.id)
-        is_guild_sponsored = bool(cfg.get("payer_user_id"))
-        current_points = get_user_ai_points(payer_id)
-
-        if current_points <= 0:
-            payer_mention = f"伺服器指定贊助者 (<@{payer_id}>)" if is_guild_sponsored else f"你 (<@{payer_id}>)"
-            panel_view = build_panel_link_view(guild_id, label="查看 AI 設定") if guild_id else None
-            embed_no_balance = discord.Embed(
-                title="AI 專屬貨幣餘額不足",
-                description=(
-                    f"**{payer_mention} 目前的 AI 專屬貨幣餘額不足（目前餘額：`0` 點）。**\n\n"
-                    f"**如何獲取 AI 貨幣？**\n"
-                    f"• 每日使用 `/economy_daily` 簽到免費領取 **1,000+** 點 AI 貨幣（連續簽到享額外加成！）。\n"
-                    f"• 聯繫伺服器擁有者或管理員從後台發放 AI 點數。"
-                ),
-                color=discord.Color.red(),
-            )
-            await interaction.response.send_message(embed=embed_no_balance, view=panel_view, ephemeral=True)
-            return
-
-        # 4. 延遲回覆
+        # 3. 延遲回覆
         await interaction.response.defer(thinking=True)
 
         # 5. 圖片 URL 提取
@@ -1050,19 +1004,9 @@ class AI(commands.Cog):
         memory_manager.add_user_message(channel_id, user_name, clean_prompt or "[圖片提問]")
         memory_manager.add_assistant_message(channel_id, response_text)
 
-        # 9. 經濟系統計費扣款
-        cost = calculate_ai_token_cost(stats.get("model", "auto"), stats.get("total_tokens", 0))
-        ok, new_balance = update_user_ai_points(payer_id, -cost, allow_negative=False)
-        if not ok:
-            set_user_ai_points(payer_id, 0)
-            new_balance = 0
-
-        payer_member = interaction.guild.get_member(payer_id) if interaction.guild else None
-        payer_name = payer_member.display_name if payer_member else (interaction.user.display_name or interaction.user.name)
-
-        # 10. 抓取表格轉換為圖片、格式化 LaTeX 並發送多 Container 回覆 (超過上限自動切割，footer 永遠在末端)
+        # 9. 抓取表格轉換為圖片、格式化 LaTeX 並發送多 Container 回覆 (超過上限自動切割，footer 永遠在末端)
         clean_response, table_files = _prepare_ai_output(response_text or "")
-        footer_text = self._format_ai_footer(stats=stats, cost=cost, payer_name=payer_name)
+        footer_text = self._format_ai_footer(stats=stats)
 
         await self._send_ai_response_chunks(
             target=interaction,
@@ -1188,26 +1132,18 @@ class AI(commands.Cog):
         temp = cfg.get("temperature", DEFAULT_AI_TEMPERATURE)
         tokens = cfg.get("max_tokens", DEFAULT_AI_MAX_TOKENS)
 
-        payer_id = cfg.get("payer_user_id")
-        if payer_id:
-            pts = get_user_ai_points(payer_id)
-            payer_text = f"<@{payer_id}> (餘額: `{pts:,}` AI幣)"
-        else:
-            payer_text = "未指定（由每位提問者自行支付）"
-
         is_auth = is_guild_ai_authorized(guild_id)
         auth_text = "已開通封測授權" if is_auth else "未授權 (內部封測中)"
 
         embed = discord.Embed(
             title="伺服器 AI 智慧助手配置狀態",
-            description="管理員可隨時透過 `/ai_settings` 指令或點擊下方按鈕前往「網頁控制面板」即時自訂 AI 人設、預設模式與指定支付者！",
+            description="管理員可隨時透過 `/ai_settings` 指令或點擊下方按鈕前往「網頁控制面板」即時自訂 AI 人設與預設模式！",
             color=0xa78bfa,
         )
         embed.add_field(name="封測授權狀態", value=auth_text, inline=True)
         embed.add_field(name="功能狀態", value=status_text, inline=True)
         embed.add_field(name="預設引擎", value=f"`{model_name}`", inline=True)
         embed.add_field(name="限定頻道", value=channel_text, inline=True)
-        embed.add_field(name="指定支付者", value=payer_text, inline=True)
         embed.add_field(name="創意度 (Temperature)", value=f"`{temp}`", inline=True)
         embed.add_field(name="最大長度 (Max Tokens)", value=f"`{tokens}`", inline=True)
         embed.add_field(name="目前人設指令 (Instruction)", value=f"```\n{inst_preview}\n```", inline=False)
@@ -1222,13 +1158,11 @@ class AI(commands.Cog):
 
     @app_commands.command(
         name="ai_settings",
-        description="[管理員] 設定本伺服器的預設 AI 提供商/模型、人設指令與指定 AI 貨幣支付者",
+        description="[管理員] 設定本伺服器的預設 AI 提供商/模型與人設指令",
     )
     @app_commands.describe(
         model="選擇本伺服器預設使用的 AI 提供商與模型",
         instruction="自訂本伺服器的 AI 人設指令 (System Instruction)",
-        payer="指定承擔本伺服器所有 AI 對話費用的成員 (選填，不填則保持現狀)",
-        clear_payer="設為 True 則解除指定支付者（恢復由每位提問者自行支付）",
         channel="限定 AI 對話的專屬文字頻道 (留空則不限制頻道)",
         clear_channel="設為 True 則解除頻道限制（所有文字頻道皆可使用）",
         temperature="設定創意度 (0.0 ~ 1.0，預設 0.7)",
@@ -1242,8 +1176,6 @@ class AI(commands.Cog):
         interaction: discord.Interaction,
         model: Optional[str] = None,
         instruction: Optional[str] = None,
-        payer: Optional[discord.Member] = None,
-        clear_payer: Optional[bool] = False,
         channel: Optional[discord.TextChannel] = None,
         clear_channel: Optional[bool] = False,
         temperature: Optional[float] = None,
@@ -1284,14 +1216,6 @@ class AI(commands.Cog):
         if instruction is not None:
             cfg["instruction"] = instruction.strip()
             updates.append(f"• **人設指令**：已更新（長度 {len(cfg['instruction'])} 字元）")
-
-        if clear_payer:
-            cfg["payer_user_id"] = None
-            updates.append("• **指定支付者**：已清除（恢復由每位提問者自行支付）")
-        elif payer is not None:
-            cfg["payer_user_id"] = payer.id
-            pts = get_user_ai_points(payer.id)
-            updates.append(f"• **指定支付者**：{payer.mention}（目前餘額 `{pts:,}` AI幣）")
 
         if clear_channel:
             cfg["channel_id"] = None
@@ -1443,30 +1367,6 @@ class AI(commands.Cog):
                 pass
             return
 
-        # 檢查 AI 貨幣餘額
-        payer_id = int(cfg.get("payer_user_id") or message.author.id)
-        is_guild_sponsored = bool(cfg.get("payer_user_id"))
-        current_points = get_user_ai_points(payer_id)
-
-        if current_points <= 0:
-            payer_mention = f"伺服器指定贊助者 (<@{payer_id}>)" if is_guild_sponsored else f"{message.author.mention}"
-            panel_view = build_panel_link_view(guild_id) if guild_id else None
-            embed_no_balance = discord.Embed(
-                title="AI 專屬貨幣餘額不足",
-                description=(
-                    f"**{payer_mention} 目前的 AI 專屬貨幣餘額不足（目前餘額：`0` 點）。**\n\n"
-                    f"**如何獲取 AI 貨幣？**\n"
-                    f"• 每日使用 `/economy_daily` 簽到免費領取 **1,000+** 點 AI 貨幣（連續簽到享額外加成！）。\n"
-                    f"• 聯繫伺服器擁有者或管理員從後台發放 AI 點數。"
-                ),
-                color=discord.Color.red(),
-            )
-            try:
-                await message.reply(embed=embed_no_balance, view=panel_view, mention_author=False)
-            except Exception:
-                pass
-            return
-
         channel_id = message.channel.id
         instruction = memory_manager.get_channel_persona(
             channel_id,
@@ -1538,19 +1438,9 @@ class AI(commands.Cog):
                 memory_manager.add_user_message(channel_id, user_name, clean_content or "[圖片提問]")
                 memory_manager.add_assistant_message(channel_id, response_text)
 
-                # 扣款計費
-                cost = calculate_ai_token_cost(stats.get("model", "auto"), stats.get("total_tokens", 0))
-                ok, new_balance = update_user_ai_points(payer_id, -cost, allow_negative=False)
-                if not ok:
-                    set_user_ai_points(payer_id, 0)
-                    new_balance = 0
-
-                payer_member = message.guild.get_member(payer_id) if message.guild else None
-                payer_name = payer_member.display_name if payer_member else (message.author.display_name or message.author.name)
-
                 # 抓取表格轉換為圖片、格式化 LaTeX 並發送多 Container 回覆 (超過上限自動切割，footer 永遠在末端)
                 clean_response, table_files = _prepare_ai_output(response_text or "")
-                footer_text = self._format_ai_footer(stats=stats, cost=cost, payer_name=payer_name)
+                footer_text = self._format_ai_footer(stats=stats)
 
                 await self._send_ai_response_chunks(
                     target=message,
