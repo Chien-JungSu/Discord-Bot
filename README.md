@@ -58,6 +58,8 @@
 - `/economy_scratch`：花費金幣購買九宮格互動刮刮樂，湊滿 3 個相同圖案贏大獎
 - `/economy_admin`：後台專屬（`owner_guild_only`）參數控制面板，修改簽到獎勵、小遊戲倍率與管理使用者金幣
 - `/temp_message`：發送限時訊息（可輸入文字或上傳圖片，由機器人代為傳送並於底部附上 `-# 由 {username} 傳送` 與動態剩餘時間，到期後自動刪除；亦支援對自己的訊息按右鍵「限時訊息」透過私密下拉選單設定時效）
+- `/shorten`（或 `/reurl`）：透過 Reurl.cc 快速縮短網址（支援 UTM 追蹤參數與公開／私密回覆），亦支援右鍵訊息選單「縮短訊息中的網址」
+- AI 智慧問答系列：`/ai`、`/ai_reset`（`/reset`）、`/ai_provider`（`/provider`）、`/ai_persona`（`/persona`）、`/ai_config`、`/ai_settings`，支援圖文雙模態與 `@機器人`／回覆／專屬頻道自然對話（自動過濾轉發訊息與非 AI 訊息回覆）、多供應商免費自動容錯鏈（Google AI Studio → NVIDIA NIM → Mistral AI）、預設 `gemini-3.5-flash-lite` 與獨立拆分 Gemini 模型選單（含 `gemini-4-hydrogen` 等），完全免費無 AI 貨幣扣款；內建行內 LaTeX Unicode 自動排版與區塊公式／Markdown 表格純黑圓角 PNG 卡片渲染，並於超出上限時自動切割為多則 Container
 - `/幹話`（或 `/ganhua`）：無參數直接隨機生成一句道地台灣幹話吐槽；亦支援對任意訊息按右鍵「應用程式」→「用幹話回覆」直接於頻道針對該則訊息講幹話（修改 `memes_data.json` 後可使用 `/reload_cogs` 重載 `cogs.ganhua` 即時套用）
 - `!sync`（擁有者專用）：即時同步全域斜線／右鍵指令；`!sync guild` 或 `!sync .` 可立即同步目前伺服器指令
 
@@ -140,11 +142,21 @@
   - 採用 `channel.get_partial_message(message_id).edit()` 直接以 PATCH 更新，省去每次先 GET 的冗餘 HTTP 請求。
   - 捕捉 `discord.NotFound`（訊息被刪）時自動清除記錄並重新發送面板；遭遇 HTTP 429 Rate Limit 時依據 `retry_after` 退避並記錄冷卻截止時間，各伺服器狀態嚴格隔離。
 
-專案也包含 `cogs/web_server.py`，會在背景啟動一個 Flask 網頁伺服器（搭配 `templates/index.html` 儀表板），提供機器人狀態 API（伺服器數、延遲、運行時間等），方便部署於需要存活檢查的雲端平台。
+### AI 智慧問答、多模型路由與 LaTeX 卡片排版
+
+- **多供應商免費自動容錯鏈 (`cogs/llm_router.py`)**：整合 Google AI Studio → NVIDIA NIM → Mistral AI 三段式免費閘道與圖文雙模態支援；遇到 429 限速或逾時自動進入短期冷卻並切換下一可用模型與供應商，**已全面移除 AI 專屬貨幣／點數限制與扣款機制**，授權伺服器成員皆可免費使用。
+- **獨立拆分 Gemini 模型選單**：預設採用最新 **`gemini-3.5-flash-lite`**，並新增 **`gemini-4-hydrogen`**（Gemini Hydrogen）以及各世代 Gemini 模型（`3.8 Flash`、`3.7 Flash`、`3.6 Flash`、`3.5 Flash`、`3 Flash Preview`、`3.1 Flash-Lite`、`2.5 Flash`、`Flash Latest`、`Flash-Lite Latest`）各自獨立選項，可於 `/ai` 單次切換或於 `/ai_settings`／網頁控制面板設定預設值。
+- **LaTeX 自動格式化與純黑圓角公式卡片**：
+  - 行內公式（`$...$`，包含純數值常數如 `$24$` 去除字面 `$` 符號，同時保留真實價格如 `$100`）透過 `cogs/latex_formatter.py` 自動排版為高可讀性 Unicode 上下標與數學符號。
+  - 獨立區塊公式（`$$...$$`、`\[...\]`、`\begin{aligned}` 等，支援含換行之多行方程組與分數／根式／矩陣／積分）與 Markdown 表格分別透過 `cogs/latex_renderer.py` 與 `cogs/table_renderer.py`（內建 **STIX Two Math** 出版級數學字型）渲染為純黑圓角高解析 PNG 卡片。
+  - 當單則回覆文字較長、元件數較多或公式與表格圖片數量接近 Discord 單則訊息 10 張附件上限時，系統自動切割為多則 **UI Components V2 Container** 分段送出，確保公式卡片不會因單則容器上限回退為純文字；Token 與模型延遲統計固定附於最後一則卡片末端。
+- **智慧防誤觸發防護**：自動忽略 Discord 轉發（Forward）訊息，且當成員直接回覆機器人的非 AI 訊息（如自動回覆或限時訊息）時不誤觸發 AI 回覆。
+
+專案也包含 `cogs/web_server.py`（搭配 `cogs/panel_bp.py` 與 `cogs/profile_bp.py`），會在背景啟動 Flask 網頁伺服器（支援官網儀表板、指令文檔 `/docs`、網頁控制面板 `/panel` 與個人公開主頁 `/profile`），提供 Discord OAuth2 登入原頁導回、伺服器設定與個人歌單分頁管理，並提供健康檢查與狀態 API，方便部署於需要存活檢查的雲端平台。
 
 ## 專案需求
 
-請先安裝套件：
+請先安裝套件（建議 Python 3.11+，相容 Python 3.14）：
 
 ```bash
 pip install -r requirements.txt
@@ -152,18 +164,23 @@ pip install -r requirements.txt
 
 `requirements.txt` 內容：
 
-- discord.py
-- python-dotenv
+- discord.py (>=2.3.2)
+- python-dotenv (>=1.0.0)
+- scikit-learn (>=1.3.0)
 - Flask
 - waitress
 - certifi
 - aiohttp
 - wavelink
 - gTTS
+- aiosqlite
+- openai (>=1.50.0)
+- Pillow
+- yt-dlp
 
-`wavelink` 已包含在 `requirements.txt` 中，執行 `pip install -r requirements.txt` 即可一併安裝。音樂功能另外需要準備可連線的 Lavalink 節點；未設定節點時，其他功能仍可正常啟動，但 `/music_join`、`/music_leave`、`/music_play` 系列指令無法使用。
+`wavelink`、`openai`（用於多供應商 AI 相容介面）與 `Pillow`（用於 LaTeX 公式與表格 PNG 卡片渲染）均已包含在 `requirements.txt` 中，執行 `pip install -r requirements.txt` 即可一併安裝。音樂功能另外需要準備可連線的 Lavalink 節點；未設定節點時，其他功能仍可正常啟動，但 `/music_join`、`/music_leave`、`/music_play` 系列指令無法使用。
 
-網頁儀表板改以 production WSGI server `waitress` 啟動（已加入 `requirements.txt`），監聽 `0.0.0.0` 與 `PORT` 環境變數（未設定時預設 `20198`）。
+網頁儀表板與控制面板改以 production WSGI server `waitress` 啟動（已加入 `requirements.txt`），監聽 `0.0.0.0` 與 `PORT` 環境變數（未設定時預設 `20198`）。
 
 ## 環境變數
 
@@ -174,7 +191,16 @@ DISCORD_TOKEN=你的 Discord Bot Token
 CWA_API_KEY=中央氣象署 API 金鑰
 TDX_CLIENT_ID=交通部 TDX Client ID
 TDX_CLIENT_SECRET=交通部 TDX Client Secret
-DISCORD_OWNER_ID=你的 Discord 使用者 ID
+GEMINI_API_KEY=Google AI Studio API 金鑰（AI 模組主要引擎，亦可用 GOOGLE_API_KEY）
+NVIDIA_API_KEY=NVIDIA NIM API 金鑰（AI 模組備援 #1，亦可用 NVIDIA_NIM_API_KEY，選填）
+MISTRAL_API_KEY=Mistral AI API 金鑰（AI 模組備援 #2，選填）
+REURL_API_KEY=Reurl.cc 短網址 API 金鑰（/shorten、/reurl 用，選填）
+DISCORD_OWNER_ID=你的 Discord 使用者 ID（亦可用 OWNER_ID）
+DISCORD_OWNER_GUILD_ID=機器人擁有者後台伺服器 ID（/economy_admin 與開發認證用，亦可用 OWNER_GUILD_ID，選填）
+DISCORD_CLIENT_ID=網頁控制面板 OAuth2 Client ID（選填）
+DISCORD_CLIENT_SECRET=網頁控制面板 OAuth2 Client Secret（選填）
+DISCORD_REDIRECT_URI=網頁控制面板 OAuth2 回呼網址（選填）
+FLASK_SECRET_KEY=Flask Session 加密金鑰（選填）
 LAVALINK_URI=Lavalink 節點網址
 LAVALINK_PASSWORD=Lavalink 節點密碼
 EMPTY_VOICE_CHANNEL_TIMEOUT=語音頻道空掉多久後自動離開（秒，選填，預設 60）
@@ -183,7 +209,8 @@ NODE_HEALTH_CHECK_INTERVAL=定期健康檢查節點連線狀態的間隔秒數�
 LAVALINK_RECONNECT_COOLDOWN=節點未在連線池時自動重連的冷卻秒數（選填，預設 60）
 ```
 
-`TDX_CLIENT_ID` 與 `TDX_CLIENT_SECRET` 用於 `/bus` 公車查詢。`DISCORD_OWNER_ID` 為選填，用來接收機器人錯誤通知。若未設定，錯誤通知會略過。
+`GEMINI_API_KEY`（或 `GOOGLE_API_KEY`）、`NVIDIA_API_KEY`、`MISTRAL_API_KEY` 用於 `/ai` 多供應商免費問答閘道；`REURL_API_KEY` 用於 `/shorten`、`/reurl` 短網址功能；`DISCORD_CLIENT_ID`、`DISCORD_CLIENT_SECRET`、`DISCORD_REDIRECT_URI` 與 `FLASK_SECRET_KEY` 用於網頁控制面板與個人主頁 Discord OAuth2 登入驗證。
+`TDX_CLIENT_ID` 與 `TDX_CLIENT_SECRET` 用於 `/bus` 公車查詢。`DISCORD_OWNER_ID` 為選填，用來接收機器人錯誤通知與 AI 後備失敗通報。若未設定，錯誤通知會略過。
 也可以使用 `OWNER_ID` 作為 `DISCORD_OWNER_ID` 的替代名稱。`LAVALINK_URI` 與 `LAVALINK_PASSWORD` 用於音樂功能的 Lavalink 連線；這兩項未設定時會略過節點連線。
 `EMPTY_VOICE_CHANNEL_TIMEOUT` 為選填，設定語音頻道裡沒有真人成員（只剩機器人自己）超過幾秒後自動離開並清空佇列；未設定時預設為 60 秒。
 `LAVALINK_CONNECT_TIMEOUT` 為選填，設定連線 Lavalink 節點的逾時秒數；超時後會 DM 通知 `DISCORD_OWNER_ID`，未設定時預設為 15 秒。
@@ -256,6 +283,15 @@ python main.py
 - `/economy_admin`：後台專屬（`owner_guild_only` 且限機器人擁有者）互動式參數控制面板。可透過下拉選單與彈出視窗即時修改每日/每小時簽到獎勵與連簽加成上限、小遊戲賭注上下限、各項遊戲賠率、刮刮樂票價、貨幣名稱/圖示/轉帳手續費，以及直接發放、扣除或設定指定使用者的金幣餘額，所有設定皆持久化儲存於 SQLite（`bot_database.db`）。
 - `/temp_message duration:<時效> [text:<文字>] [image:<圖片>]`：發送限時訊息。時效提供 `1min`、`30min`、`1hr`、`6hr`、`12hr`、`24hr` 六種選項（有效時間從使用指令當下開始計算），文字與圖片至少需提供一項；機器人會代為傳送訊息，並於訊息底部加上 `-# 由 {username} 傳送 • <t:...:R> 自動刪除` 的動態剩餘時間標註，到期後自動刪除（排程持久化儲存於 SQLite `bot_database.db`，重啟後仍會準時刪除）。
 - **右鍵訊息選單「限時訊息」**：對自己傳送的訊息按右鍵 →「應用程式」→「限時訊息」，機器人會傳送私密訊息（Ephemeral）讓使用者透過下拉選單選擇有效時間（`1min`、`30min`、`1hr`、`6hr`、`12hr`、`24hr`，有效時間自點擊指令當下起算）；選取後機器人會刪除原訊息並代為重發（保留原文字與圖片附件，底部附上 `-# 由 {username} 傳送` 與動態剩餘時間），到期後自動刪除。
+
+- `/shorten url:<網址> [utm_source] [utm_medium] [utm_campaign] [ephemeral]`（或 `/reurl`）：透過 Reurl.cc 縮短網址，未輸入協定時自動補上 `https://`，可選填 UTM 追蹤參數與公開／私密回覆，底部顯示今日配額；亦支援對訊息按右鍵「應用程式」→「縮短訊息中的網址」。
+- `/ai prompt:<提問內容> [image:<圖片>] [provider:<模型或供應商>] [system_prompt:<人設指令>]`：向免費多供應商 AI 閘道發問，支援文字與 PNG/JPG/WebP/GIF 圖片雙模態；預設使用最新 `gemini-3.5-flash-lite`，選單獨立列出 `gemini-4-hydrogen`（Gemini Hydrogen）等各級 Gemini／NVIDIA NIM／Mistral AI 模型，發生 429 或逾時自動容錯切換且無任何 AI 貨幣扣款限制；支援 `@機器人` 提及、直接回覆 AI 訊息與專屬頻道自然對話（自動過濾轉發訊息與回覆非 AI 訊息），並內建行內 LaTeX Unicode 排版（含純數值 `$24$`）、區塊公式與 Markdown 表格純黑圓角 PNG 卡片渲染及多 Container 自動切割。
+- `/ai_reset`（或 `/reset`）：清除當前頻道的 AI 對話記憶。
+- `/ai_provider`（或 `/provider`）：檢視目前各 AI 供應商連線狀態、預設模型與冷卻資訊。
+- `/ai_persona [instruction:<人設指令>] [clear:<True/False>]`（或 `/persona`）：查看或自訂當前頻道的 AI 人設指令。
+- `/ai_config`：檢視本伺服器目前的 AI 設定（預設引擎、限定頻道、創意度、最大長度與啟用狀態）。
+- `/ai_settings [model] [instruction] [channel] [clear_channel] [temperature] [max_tokens] [enabled]`：由管理員調整本伺服器 AI 預設模型、人設指令、專屬頻道與開關（亦可透過 `/panel` 網頁控制面板調整，需「管理伺服器」權限）。
+- `/幹話`（或 `/ganhua`）：無須參數直接隨機生成一句道地台灣幹話發佈到頻道；亦支援對任意訊息按右鍵「應用程式」→「用幹話回覆」。
 
 ## 表符身份組功能說明
 

@@ -335,6 +335,21 @@
           <li><strong>右鍵訊息</strong>：對任意含文字的訊息選「應用程式」→「用幹話回覆」，自動過濾標註並直接於頻道回覆該則訊息。</li>
         </ul>
       </article>
+
+      <article class="card" id="cog-ai">
+        <div class="tag">AI</div>
+        <h2>AI 智慧助手</h2>
+        <ul>
+          <li><strong>/ai</strong> <em>prompt:&lt;提問內容&gt; [image:&lt;圖片&gt;] [provider:&lt;模型或供應商&gt;] [system_prompt:&lt;人設指令&gt;]</em>：向免費 AI 多供應商閘道發問，支援文字與圖片雙模態；預設採用最新 <code>gemini-3.5-flash-lite</code>，並於選單獨立列出 <code>gemini-4-hydrogen</code>（Gemini Hydrogen）等各級 Gemini／NVIDIA NIM／Mistral AI 模型，發生 429 或逾時時自動容錯切換（無 AI 貨幣扣款限制）。</li>
+          <li><strong>@機器人 / 直接回覆 / 專屬頻道</strong>：標記機器人、回覆機器人既有 AI 訊息或於指定專屬頻道發言即可連續對話；自動忽略 Discord 轉發（Forward）訊息，且回覆非 AI 訊息（如自動回覆或限時訊息）時不誤觸發。</li>
+          <li><strong>/ai_reset</strong>（或 <strong>/reset</strong>）：清除當前頻道的 AI 對話記憶。</li>
+          <li><strong>/ai_provider</strong>（或 <strong>/provider</strong>）：查看目前各免費 AI 供應商連線、預設模型與冷卻狀態。</li>
+          <li><strong>/ai_persona</strong> <em>[instruction:&lt;人設指令&gt;] [clear:&lt;True/False&gt;]</em>（或 <strong>/persona</strong>）：查看或自訂當前頻道的 AI 人設。</li>
+          <li><strong>/ai_config</strong>：檢視本伺服器目前的 AI 設定。</li>
+          <li><strong>/ai_settings</strong> <em>[model] [instruction] [channel] [clear_channel] [temperature] [max_tokens] [enabled]</em>：設定伺服器預設模型、人設指令、專屬頻道、創意度與開關（亦可於網頁控制面板管理）。需「管理伺服器」權限。</li>
+          <li><strong>LaTeX 自動排版與多 Container 卡片</strong>：行內公式（含純數值常數如 <code>$24$</code>）自動轉為高可讀性 Unicode 數學符號；獨立區塊公式（<code>$$...$$</code>、<code>\[...\]</code>、<code>\begin{...}</code>，支援多行公式）與 Markdown 表格自動渲染為純黑圓角高解析 PNG 卡片（內建 <code>STIX Two Math</code> 字型），超出圖數、元件數或字元上限時自動切割為多則 Container 卡片，避免回退純文字。</li>
+        </ul>
+      </article>
     </div>
 
     <!-- 下部居中放置文本“© 2026 炙彗JI器人”（16sp） -->

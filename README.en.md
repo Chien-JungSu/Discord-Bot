@@ -58,6 +58,8 @@ Supported features:
 - `/economy_scratch`: buy an interactive 3×3 scratch card and match 3 identical symbols to win prizes
 - `/economy_admin`: owner-only (`owner_guild_only`) interactive control panel to configure check-in rewards, game multipliers, and user balances
 - `/temp_message`: send a timed/self-destructing message (with text and/or an uploaded image) on behalf of the user with a `-# 由 {username} 傳送` footer and a live countdown timer, automatically deleting it after the chosen duration; also includes a right-click message context menu ("限時訊息") with an ephemeral dropdown selector
+- `/shorten` (or `/reurl`): shorten URLs via Reurl.cc with optional UTM parameters and ephemeral mode, plus a right-click message context menu ("縮短訊息中的網址")
+- AI Smart Assistant suite: `/ai`, `/ai_reset` (`/reset`), `/ai_provider` (`/provider`), `/ai_persona` (`/persona`), `/ai_config`, `/ai_settings`, plus natural conversations via `@bot` mentions, direct replies, and dedicated channels (automatically ignores Discord forwarded messages and replies to non-AI messages); multi-provider free failover chain (Google AI Studio → NVIDIA NIM → Mistral AI) defaulting to `gemini-3.5-flash-lite` with individually selectable Gemini model options (including `gemini-4-hydrogen`) and zero AI currency restrictions; automatic inline LaTeX Unicode formatting and pure-black rounded PNG card rendering for block math & Markdown tables with automatic multi-Container chunking
 - `/幹話` (or `/ganhua`): take no parameters and randomly generate a Taiwanese banter/meme reply directly in the channel; also includes a right-click message context menu ("應用程式" → "用幹話回覆") to roast a specific message directly without leaving a private notification (use `/reload_cogs` on `cogs.ganhua` after editing `memes_data.json` to hot-reload without restarting)
 - `!sync` (owner-only): immediately sync global slash and context-menu commands, or use `!sync guild` / `!sync .` to sync commands for the current server
 
@@ -140,11 +142,21 @@ During playback, the music control panel integrates real-time track metadata and
   - Gracefully recovers from `discord.NotFound` (auto-resends panel) and backs off per-guild during HTTP 429 rate limits according to `retry_after`.
 
 
-The project also includes `cogs/web_server.py`, which starts a Flask web server in the background (backing a `templates/index.html` dashboard) that exposes bot status APIs (guild count, latency, uptime, etc.) for cloud deployments that require a keep-alive endpoint.
+### AI Smart Assistant, Multi-Provider Routing & LaTeX Card Rendering
+
+- **Multi-Provider Free Failover Chain (`cogs/llm_router.py`)**: Routes both text and vision queries across Google AI Studio → NVIDIA NIM → Mistral AI. Automatically enters short cooldowns and fails over on 429 rate limits or timeouts. **All AI-specific currency / point billing and payer checks have been removed** — authorized servers can use all AI features free of charge.
+- **Individually Selectable Gemini Models**: Defaults Gemini to **`gemini-3.5-flash-lite`**, adds **`gemini-4-hydrogen`** (Gemini Hydrogen), and splits all supported Gemini models (`3.8 Flash`, `3.7 Flash`, `3.6 Flash`, `3.5 Flash`, `3 Flash Preview`, `3.1 Flash-Lite`, `2.5 Flash`, `Flash Latest`, `Flash-Lite Latest`) into standalone selectable options via `/ai` or as server defaults via `/ai_settings` / Web Control Panel.
+- **Automatic LaTeX Formatting & Pure-Black Rounded Math Cards**:
+  - Inline LaTeX (`$...$`, including standalone numeric constants like `$24$` while preserving real prices such as `$100`) is automatically formatted into readable Unicode subscripts/superscripts and math symbols via `cogs/latex_formatter.py`.
+  - Block equations (`$$...$$`, `\[...\]`, `\begin{aligned}`, including multi-line newline-separated formulas, fractions, roots, matrices, and integrals) and Markdown tables are rendered into pure-black rounded PNG cards (`cogs/latex_renderer.py`, `cogs/table_renderer.py`) using bundled **STIX Two Math** publication fonts.
+  - Long responses or replies with many images automatically split cleanly across multiple **UI Components V2 Container** messages (respecting Discord's 10-attachment-per-message and component limits without falling back to raw text), placing the `Tokens: ... | model | latency` footer on the final card.
+- **Smart Trigger Guards**: Automatically ignores Discord forwarded messages and avoids accidental AI replies when responding to non-AI bot messages (such as auto-replies or temp messages).
+
+The project also includes `cogs/web_server.py` (with `cogs/panel_bp.py` and `cogs/profile_bp.py`), which starts a Flask web server in the background backing the dashboard (`templates/index.html`), live command docs (`/docs`), Web Control Panel (`/panel`), and public user profiles (`/profile`) with Discord OAuth2 redirect-back support, paginated personal playlists, and keep-alive health APIs for cloud deployments.
 
 ## Requirements
 
-Install dependencies first:
+Install dependencies first (Python 3.11+ recommended, Python 3.14 compatible):
 
 ```bash
 pip install -r requirements.txt
@@ -152,18 +164,23 @@ pip install -r requirements.txt
 
 `requirements.txt` contains:
 
-- discord.py
-- python-dotenv
+- discord.py (>=2.3.2)
+- python-dotenv (>=1.0.0)
+- scikit-learn (>=1.3.0)
 - Flask
 - waitress
 - certifi
 - aiohttp
 - wavelink
 - gTTS
+- aiosqlite
+- openai (>=1.50.0)
+- Pillow
+- yt-dlp
 
-`wavelink` is already included in `requirements.txt`, so running `pip install -r requirements.txt` installs it together with all other dependencies. The music features also require a reachable Lavalink node configured via `LAVALINK_URI` and `LAVALINK_PASSWORD`. If Lavalink is unavailable, the bot still starts normally but music commands will not work.
+`wavelink`, `openai` (for the OpenAI-compatible multi-provider AI gateway), and `Pillow` (for LaTeX equation and Markdown table PNG card rendering) are already included in `requirements.txt`, so running `pip install -r requirements.txt` installs them together with all other dependencies. The music features also require a reachable Lavalink node configured via `LAVALINK_URI` and `LAVALINK_PASSWORD`. If Lavalink is unavailable, the bot still starts normally but music commands will not work.
 
-The web dashboard runs on the production WSGI server `waitress` (also listed in `requirements.txt`), listening on `0.0.0.0` and the `PORT` environment variable (defaults to `20198` when unset).
+The web dashboard and control panel run on the production WSGI server `waitress` (also listed in `requirements.txt`), listening on `0.0.0.0` and the `PORT` environment variable (defaults to `20198` when unset).
 
 ## Environment Variables
 
@@ -174,7 +191,16 @@ DISCORD_TOKEN=your Discord bot token
 CWA_API_KEY=your Central Weather Administration API key
 TDX_CLIENT_ID=your TDX Client ID
 TDX_CLIENT_SECRET=your TDX Client Secret
-DISCORD_OWNER_ID=your Discord user ID
+GEMINI_API_KEY=your Google AI Studio API key (primary AI provider; GOOGLE_API_KEY also supported)
+NVIDIA_API_KEY=your NVIDIA NIM API key (AI failover #1; NVIDIA_NIM_API_KEY also supported, optional)
+MISTRAL_API_KEY=your Mistral AI API key (AI failover #2, optional)
+REURL_API_KEY=your Reurl.cc URL shortener API key (for /shorten & /reurl, optional)
+DISCORD_OWNER_ID=your Discord user ID (OWNER_ID also supported)
+DISCORD_OWNER_GUILD_ID=owner management guild ID (for /economy_admin & owner controls; OWNER_GUILD_ID also supported, optional)
+DISCORD_CLIENT_ID=Web Panel Discord OAuth2 Client ID (optional)
+DISCORD_CLIENT_SECRET=Web Panel Discord OAuth2 Client Secret (optional)
+DISCORD_REDIRECT_URI=Web Panel Discord OAuth2 Redirect URI (optional)
+FLASK_SECRET_KEY=Flask session secret key (optional)
 LAVALINK_URI=your Lavalink node URL
 LAVALINK_PASSWORD=your Lavalink node password
 EMPTY_VOICE_CHANNEL_TIMEOUT=seconds of an empty voice channel before auto-leaving (optional, default 60)
@@ -183,7 +209,8 @@ NODE_HEALTH_CHECK_INTERVAL=interval in seconds between Lavalink node health chec
 LAVALINK_RECONNECT_COOLDOWN=cooldown in seconds before an automatic reconnect when the node is not in the pool (optional, default 60)
 ```
 
-`TDX_CLIENT_ID` and `TDX_CLIENT_SECRET` are required for `/bus`. `DISCORD_OWNER_ID` is optional and is used to receive bot error notifications. If it is not set, error notifications will be skipped.
+`GEMINI_API_KEY` (or `GOOGLE_API_KEY`), `NVIDIA_API_KEY`, and `MISTRAL_API_KEY` power the `/ai` multi-provider gateway; `REURL_API_KEY` enables `/shorten` and `/reurl`; `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `DISCORD_REDIRECT_URI`, and `FLASK_SECRET_KEY` configure Discord OAuth2 login for the Web Control Panel and User Profiles.
+`TDX_CLIENT_ID` and `TDX_CLIENT_SECRET` are required for `/bus`. `DISCORD_OWNER_ID` is optional and is used to receive bot error and AI fallback failure notifications. If it is not set, error notifications will be skipped.
 `OWNER_ID` can also be used as an alternative name for `DISCORD_OWNER_ID`. `LAVALINK_URI` and `LAVALINK_PASSWORD` configure the Lavalink connection for the music features. If either is missing, the bot skips the Lavalink connection.
 `EMPTY_VOICE_CHANNEL_TIMEOUT` is optional: how many seconds a voice channel can have no human members (bot only) before the bot auto-leaves and clears its queue. Defaults to 60 seconds.
 `LAVALINK_CONNECT_TIMEOUT` is optional: timeout in seconds for the initial Lavalink connection attempt; if exceeded, the owner receives a DM notification. Defaults to 15 seconds.
@@ -256,6 +283,15 @@ When launched, the bot starts the Flask background server from `cogs/web_server.
 - `/economy_admin`: owner-only (`owner_guild_only` and restricted to the bot owner) interactive parameter control panel. Use the dropdown menu and pre-filled modals to modify daily/hourly check-in rewards and streak bonus caps, minigame bet limits and multipliers, scratch card price, currency name/emoji/transfer tax, or directly grant/deduct/set any user's coin balance; all parameters are persisted in SQLite (`bot_database.db`).
 - `/temp_message duration:<duration> [text:<text>] [image:<image>]`: send a timed message. Choose a duration from `1min`, `30min`, `1hr`, `6hr`, `12hr`, or `24hr` (counted from the moment the command is invoked) and provide text and/or an image; the bot sends the message on behalf of the user with a `-# 由 {username} 傳送 • <t:...:R> 自動刪除` footer showing the sender's display name and live remaining time, and automatically deletes it upon expiration (persisted in SQLite `bot_database.db` across restarts).
 - **Message Context Menu ("限時訊息")**: right-click one of your own messages → "Apps" → "限時訊息" to receive an ephemeral message with a dropdown menu (`1min`, `30min`, `1hr`, `6hr`, `12hr`, `24hr`, counted from when the command was invoked); once selected, the bot deletes the original message, resends its text and image attachments with the sender & remaining time footer, and automatically deletes it when the timer expires.
+
+- `/shorten url:<url> [utm_source] [utm_medium] [utm_campaign] [ephemeral]` (or `/reurl`): shorten URLs via Reurl.cc (automatically prepends `https://` if scheme is omitted) with optional UTM tracking parameters and daily quota display; also includes a right-click message context menu ("縮短訊息中的網址").
+- `/ai prompt:<question> [image:<image>] [provider:<model_or_provider>] [system_prompt:<instruction>]`: ask the free multi-provider AI gateway (text and PNG/JPG/WebP/GIF vision). Uses `gemini-3.5-flash-lite` as Gemini default and lets you choose individual Gemini models including `gemini-4-hydrogen` (Gemini Hydrogen), automatic inline LaTeX formatting (including numeric constants like `$24$`), pure-black rounded PNG cards for block math (`$$...$$`, `\[...\]`, `\begin{...}`) and Markdown tables, automatic multi-Container splitting without AI currency billing, and `@bot` / direct-reply / dedicated-channel conversations (automatically filters forwarded messages and replies to non-AI messages).
+- `/ai_reset` (or `/reset`): clear the AI conversation memory for the current channel.
+- `/ai_provider` (or `/provider`): inspect online, default-model, and cooldown status across configured AI providers.
+- `/ai_persona [instruction:<persona>] [clear:<True/False>]` (or `/persona`): view or customize the channel-specific AI persona.
+- `/ai_config`: inspect the server's current AI configuration (model, channel restriction, temperature, max tokens, and enabled status).
+- `/ai_settings [model] [instruction] [channel] [clear_channel] [temperature] [max_tokens] [enabled]`: update server AI defaults via slash command or the Web Control Panel (requires **Manage Server** permission).
+- `/幹話` (or `/ganhua`): take no parameters and randomly generate a Taiwanese banter/meme reply directly in the channel; also includes a right-click message context menu ("用幹話回覆").
 
 ## Reaction Roles Feature
 
