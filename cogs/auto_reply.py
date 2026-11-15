@@ -388,8 +388,21 @@ class ConfirmDeleteView(discord.ui.View):
 
     @discord.ui.button(label='確認刪除', style=discord.ButtonStyle.danger, emoji='🗑️')
     async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self._disable_buttons()
+        guild_key = str(self.guild.id)
+        prev_rules = [dict(r) for r in (self.cog.settings.get(guild_key, {}).get('rules') or [])]
         removed = self.cog.remove_rule(self.guild.id, self.rule.get('id'))
+        if removed:
+            try:
+                _save_auto_reply_settings(self.cog.settings)
+            except Exception as e:
+                if prev_rules:
+                    self.cog.settings[guild_key] = {'rules': prev_rules}
+                traceback.print_exc()
+                if self.cog.bot is not None:
+                    await self.cog.bot.notify_owner_error(e, interaction, extra_info='auto_reply_remove: 儲存設定失敗')
+                await interaction.response.send_message('❌ 儲存設定時發生錯誤，變更未生效，已回報開發者。', ephemeral=True)
+                return
+        self._disable_buttons()
         if not removed:
             embed = discord.Embed(
                 title='ℹ️ 規則已不存在',
@@ -407,7 +420,7 @@ class ConfirmDeleteView(discord.ui.View):
                 ),
                 color=discord.Color.green(),
             )
-        await interaction.response.edit_message(embed=embed, view=self)
+        await interaction.response.edit_message(content=None, embed=embed, view=self)
 
     @discord.ui.button(label='取消', style=discord.ButtonStyle.secondary)
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -417,7 +430,7 @@ class ConfirmDeleteView(discord.ui.View):
             description='自動回覆規則保持不變。',
             color=discord.Color.light_grey(),
         )
-        await interaction.response.edit_message(embed=embed, view=self)
+        await interaction.response.edit_message(content=None, embed=embed, view=self)
 
 
 class AutoReplyListView(discord.ui.View):
@@ -1178,6 +1191,8 @@ class AutoReply(commands.Cog):
         guild = interaction.guild
 
         await interaction.response.defer(ephemeral=True)
+        if self.bot is not None:
+            self.reload_settings()
 
         errors: list = []
 
@@ -1277,6 +1292,8 @@ class AutoReply(commands.Cog):
         guild = interaction.guild
 
         await interaction.response.defer(ephemeral=True)
+        if self.bot is not None:
+            self.reload_settings()
 
         rules = self._get_rules(guild.id)
         if not rules:
@@ -1313,6 +1330,8 @@ class AutoReply(commands.Cog):
         guild = interaction.guild
 
         await interaction.response.defer(ephemeral=True)
+        if self.bot is not None:
+            self.reload_settings()
 
         rules = self._get_rules(guild.id)
         if not rules:
@@ -1343,6 +1362,8 @@ class AutoReply(commands.Cog):
         guild = interaction.guild
 
         await interaction.response.defer(ephemeral=True)
+        if self.bot is not None:
+            self.reload_settings()
 
         rules = self._get_rules(guild.id)
         if not rules:

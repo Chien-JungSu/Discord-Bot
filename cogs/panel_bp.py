@@ -913,12 +913,15 @@ def delete_guild_auto_reply_rule(guild_id: str):
     all_data = load_auto_reply_settings()
     guild_data = all_data.get(str(guild_id), {})
     rules = guild_data.get('rules', [])
-    new_rules = [r for r in rules if r.get('id') != int(rule_id)]
+    new_rules = [r for r in rules if str(r.get('id')) != str(rule_id)]
 
     if len(rules) == len(new_rules):
         return jsonify({'status': 'error', 'message': '找不到欲刪除的規則'}), 404
 
-    guild_data['rules'] = new_rules
+    if new_rules:
+        guild_data['rules'] = new_rules
+    else:
+        all_data.pop(str(guild_id), None)
     save_auto_reply_settings(all_data)
     _sync_cog_settings('AutoReply')
     return jsonify({'status': 'ok', 'message': '規則已成功刪除'})

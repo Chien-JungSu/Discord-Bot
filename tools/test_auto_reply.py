@@ -18,14 +18,18 @@ import sys
 
 sys.stdout.reconfigure(encoding='utf-8')  # Windows 主控台 cp950 印不出 emoji，先切到 utf-8
 
-import asyncio
 import contextlib
 import inspect
+import json
 import os
 import random
 import tempfile
+import warnings
 
 import discord
+
+# 抑制 discord.ui.TextInput(label=...) 在新版 discord.py 產生的提示警告
+warnings.filterwarnings('ignore', message=r'.*label is deprecated.*', category=DeprecationWarning)
 
 # AutoReply Cog 不是 context manager，包一層讓 with 寫法可用
 _nullctx = contextlib.nullcontext
@@ -33,7 +37,19 @@ _nullctx = contextlib.nullcontext
 # 讓 import cogs.auto_reply 可運作（腳本位於 tools/，專案根目錄是上一層）
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import cogs.database as db
 import cogs.auto_reply as ar
+
+
+def run_coro(coro):
+    """輕量執行無真實非同步 I/O 的測試 coroutine（避免受限沙箱無法建立事件迴圈 socketpair）。"""
+    try:
+        while True:
+            yielded = coro.send(None)
+            if yielded is not None:
+                raise RuntimeError(f'測試 coroutine 意外等待非同步物件: {yielded!r}')
+    except StopIteration as exc:
+        return exc.value
 
 
 class FakeChannel:
@@ -146,12 +162,16 @@ def fill(modal, values: list):
 
 
 def make_cog(tmpdir: str) -> ar.AutoReply:
-    """建立不跑 __init__ 的 AutoReply 實例，並把資料檔指到暫存目錄。"""
+    """建立不跑 __init__ 的 AutoReply 實例，並把資料檔與 SQLite 資料庫指到暫存目錄。"""
     cog = ar.AutoReply.__new__(ar.AutoReply)
     cog.settings = {}
     cog._reply_cooldowns = {}
     cog.bot = None
-    ar.AUTO_REPLY_FILE = os.path.join(tmpdir, 'auto_reply.json')
+    db.DB_FILE = os.path.join(tmpdir, 'bot_database.db')
+    db.AUTO_REPLY_JSON = os.path.join(tmpdir, 'auto_reply.json')
+    db._db_initialized = False
+    db._wal_initialized = False
+    ar.AUTO_REPLY_FILE = db.AUTO_REPLY_JSON
     return cog
 
 
@@ -296,11 +316,15 @@ def main():
               '回覆內容驗證：超過數量上限視為錯誤')
 
         # ---------- 8. 舊格式資料檔自動遷移 ----------
+        mig_dir = tempfile.mkdtemp()
+        db.DB_FILE = os.path.join(mig_dir, 'bot_database.db')
+        db.AUTO_REPLY_JSON = ar.AUTO_REPLY_FILE = os.path.join(mig_dir, 'auto_reply.json')
+        db._db_initialized = False
+        db._wal_initialized = False
         legacy_file = {
             str(gid): {'rules': [{'id': 1, 'keyword': '你好', 'reply': '嗨', 'scope': ar.SCOPE_ALL}]},
         }
         with open(ar.AUTO_REPLY_FILE, 'w', encoding='utf-8') as f:
-            import json
             json.dump(legacy_file, f)
         migrated = ar._load_auto_reply_settings()
         migrated_rule = migrated[str(gid)]['rules'][0]
@@ -315,9 +339,19 @@ def main():
               '舊格式單一回覆規則：輸入框全留空＝整份清單變空（呼叫端會追問是否刪規則）')
 
         # ---------- 9. 壞檔容錯 ----------
+        bad_dir = tempfile.mkdtemp()
+        db.DB_FILE = os.path.join(bad_dir, 'bot_database.db')
+        db.AUTO_REPLY_JSON = ar.AUTO_REPLY_FILE = os.path.join(bad_dir, 'auto_reply.json')
+        db._db_initialized = False
+        db._wal_initialized = False
         with open(ar.AUTO_REPLY_FILE, 'w', encoding='utf-8') as f:
             f.write('{ not json')
         check(ar._load_auto_reply_settings() == {}, '壞 JSON 容錯回空設定')
+
+        db.DB_FILE = os.path.join(tmpdir, 'bot_database.db')
+        db.AUTO_REPLY_JSON = ar.AUTO_REPLY_FILE = os.path.join(tmpdir, 'auto_reply.json')
+        db._db_initialized = False
+        db._wal_initialized = False
 
     # ---------- 10. 範圍過濾、冷卻與多關鍵字比對（模擬 on_message 流程） ----------
     class _HookCog:
@@ -402,8 +436,11 @@ def main():
 
         # ---------- 13. 編輯介面的按鈕與輸入框結構 ----------
         rule_ui = cog3._get_rules(gid)[2]
-        check([b.label for b in ar.AutoReplyEditActionView(cog3, None, rule_ui).children] == ['編輯關鍵字', '編輯回覆內容', '⏸️ 暫停規則', '取消'],
-              '編輯介面只有四顆按鈕（含暫停）')
+        view_ui = ar.AutoReplyEditActionView(cog3, None, rule_ui)
+        check([b.label for b in view_ui.children if b.style != discord.ButtonStyle.link] == ['編輯關鍵字', '編輯回覆內容', '編輯生效範圍', '⏸️ 暫停規則', '取消'],
+              '編輯介面有五顆互動按鈕（含編輯生效範圍與暫停）')
+        check(view_ui.children[-1].label == '🌐 前往控制面板' and view_ui.children[-1].style == discord.ButtonStyle.link,
+              '編輯介面附「前往控制面板」連結按鈕')
 
         kw_modal = ar.AutoReplyEditKeywordsModal(cog3, None, rule_ui, page=1)
         check(len(kw_modal.inputs) == ar.FIELDS_PER_PAGE, '關鍵字視窗每頁 5 個輸入框')
@@ -424,18 +461,19 @@ def main():
         check([t.default for t in page2.inputs[:3]] == ['k5', 'k6', 'k7'], '第二頁預先帶入第 6–8 個關鍵字')
         check(page2.inputs[3].default == '', '沒有的項目該格留空（使用者可自行補上）')
         more = ar.AutoReplyEditActionView(cog3, None, many, page_link=('編輯第 6-10 個關鍵字', 2, ar.AutoReplyEditKeywordsModal))
-        check([b.label for b in more.children] == ['編輯關鍵字', '編輯回覆內容', '⏸️ 暫停規則', '取消', '編輯第 6-10 個關鍵字'],
+        check([b.label for b in more.children if b.style != discord.ButtonStyle.link] == ['編輯關鍵字', '編輯回覆內容', '編輯生效範圍', '⏸️ 暫停規則', '取消', '編輯第 6-10 個關鍵字'],
               '編輯介面可帶著「繼續編輯下一頁」按鈕')
         rows = more.to_components()
-        check(len(rows) == 1 and len(rows[0]['components']) == 5, '五顆按鈕剛好排成一列（Discord 每列最多 5 顆）')
-        check(len({b['custom_id'] for b in rows[0]['components']}) == 5, '每顆按鈕的 custom_id 都不同（不會互相搶事件）')
+        all_custom_ids = [b['custom_id'] for r in rows for b in r['components'] if 'custom_id' in b]
+        check(len(rows[0]['components']) == 5 and len(all_custom_ids) == 6, '前五顆互動按鈕剛好排成第一列，第六顆排至下一列（Discord 每列最多 5 顆）')
+        check(len(set(all_custom_ids)) == 6, '每顆互動按鈕的 custom_id 都不同（不會互相搶事件）')
 
         # ---------- 14. 實際送出編輯視窗：留空＝刪除該項、全部留空＝追問是否刪規則 ----------
         rule_edit = cog3._get_rules(gid)[0]
         ui_guild = FakeGuild(gid)
         modal = ar.AutoReplyEditKeywordsModal(cog3, ui_guild, rule_edit, page=1)
         inter = fill(modal, ['測試', '   ', '  第二個關鍵字  '])
-        asyncio.run(modal.on_submit(inter))
+        run_coro(modal.on_submit(inter))
         check(len(inter.edited) == 1 and inter.edited[0]['title'] == '✅ 已更新關鍵字', '編輯關鍵字：送出後回報成功')
         check(inter.sent == [], '存檔結果就地編輯原訊息，不另外開新訊息（不洗版）')
         check(ar._rule_keywords(rule_edit) == ['測試', '第二個關鍵字'], '留空格＝刪除該項、其他空格可自行補上')
@@ -443,21 +481,21 @@ def main():
 
         modal_empty = ar.AutoReplyEditKeywordsModal(cog3, ui_guild, rule_edit, page=1)
         inter_empty = fill(modal_empty, [])
-        asyncio.run(modal_empty.on_submit(inter_empty))
+        run_coro(modal_empty.on_submit(inter_empty))
         check(len(inter_empty.edited) == 1 and '是否要刪除整條規則' in inter_empty.edited[0]['content'], '關鍵字全部留空＝追問是否刪除整條規則')
-        check(inter_empty.edited[0]['buttons'] == ['確認刪除', '取消'], '追問時附「確認刪除／取消」按鈕')
+        check(inter_empty.edited[0]['buttons'] == ['確認刪除', '取消', '🌐 前往控制面板'], '追問時附「確認刪除／取消／前往控制面板」按鈕')
         check(ar._rule_keywords(rule_edit) == ['測試', '第二個關鍵字'], '追問期間不會先把規則清空')
 
         reply_modal = ar.AutoReplyEditRepliesModal(cog3, ui_guild, rule_edit, page=1)
         inter_reply = fill(reply_modal, ['  改過的回覆  '])
-        asyncio.run(reply_modal.on_submit(inter_reply))
+        run_coro(reply_modal.on_submit(inter_reply))
         check(ar._rule_replies(rule_edit) == ['改過的回覆'], '編輯回覆：留空的格子＝刪除該則回覆')
         check('固定回覆模式' in inter_reply.edited[0]['description'], '只剩一則回覆時提示已回到固定回覆模式')
 
         reply_empty = ar.AutoReplyEditRepliesModal(cog3, ui_guild, rule_edit, page=1)
         inter_reply_empty = fill(reply_empty, [])
-        asyncio.run(reply_empty.on_submit(inter_reply_empty))
-        check(inter_reply_empty.edited[0]['buttons'] == ['確認刪除', '取消'], '回覆內容全部留空＝追問是否刪除整條規則')
+        run_coro(reply_empty.on_submit(inter_reply_empty))
+        check(inter_reply_empty.edited[0]['buttons'] == ['確認刪除', '取消', '🌐 前往控制面板'], '回覆內容全部留空＝追問是否刪除整條規則')
         check(ar._rule_replies(rule_edit) == ['改過的回覆'], '回覆追問期間不會先把規則清空')
 
         big_rule = cog3._get_rules(gid)[2]
@@ -466,17 +504,17 @@ def main():
         big_tail = list(ar._rule_keywords(big_rule))[ar.FIELDS_PER_PAGE:]  # 第 6–10 項應該完全不動
         big_modal = ar.AutoReplyEditKeywordsModal(cog3, ui_guild, big_rule, page=1)
         inter_big = fill(big_modal, ['kk1', 'kk2', 'kk3', 'kk4', 'kk5'])
-        asyncio.run(big_modal.on_submit(inter_big))
+        run_coro(big_modal.on_submit(inter_big))
         check(ar._rule_keywords(big_rule) == ['kk1', 'kk2', 'kk3', 'kk4', 'kk5'] + big_tail,
               '只填前 5 格時，第 6–10 個關鍵字保留不動')
-        check(inter_big.edited[0]['buttons'][-1] == '編輯第 6-10 個關鍵字', '超過 5 項時附「繼續編輯第 6-10 個」按鈕')
+        check(inter_big.edited[0]['buttons'][-2] == '編輯第 6-10 個關鍵字', '超過 5 項時附「繼續編輯第 6-10 個」按鈕')
 
         for i in range(6, 8):
             cog3.append_rule_keyword(gid, big_rule['id'], f'k{i}')
         before_over = list(ar._rule_keywords(big_rule))
         over_modal = ar.AutoReplyEditKeywordsModal(cog3, ui_guild, big_rule, page=1)
         inter_over = fill(over_modal, ['a1', 'a2', 'a3', 'a4', 'a5'])
-        asyncio.run(over_modal.on_submit(inter_over))
+        run_coro(over_modal.on_submit(inter_over))
         check('最多' in (inter_over.sent[0]['content'] or ''), '填滿兩頁超過上限時擋下並說明上限')
         check(ar._rule_keywords(big_rule) == before_over, '超過上限時不會存檔（原本的清單不動）')
 
@@ -485,20 +523,20 @@ def main():
         cog3.set_rule_keywords(gid, five_rule['id'], ['a', 'b', 'c', 'd', 'e'])
         five_modal = ar.AutoReplyEditKeywordsModal(cog3, ui_guild, five_rule, page=1)
         inter_five = fill(five_modal, ['a', 'b', 'c', 'd', 'e'])  # 不變，只看按鈕與訊息數量
-        asyncio.run(five_modal.on_submit(inter_five))
+        run_coro(five_modal.on_submit(inter_five))
         check(len(inter_five.edited) == 1 and inter_five.sent == [], '存檔結果編輯原訊息，不另外開訊息')
         done_five = inter_five.edited[0]
-        check(done_five['buttons'] == ['編輯關鍵字', '編輯回覆內容', '⏸️ 暫停規則', '取消', '編輯第 6-10 個關鍵字'],
+        check(done_five['buttons'] == ['編輯關鍵字', '編輯回覆內容', '編輯生效範圍', '⏸️ 暫停規則', '取消', '編輯第 6-10 個關鍵字', '🌐 前往控制面板'],
               '原訊息的按鈕換成「繼續編輯」那組（含跨頁鈕）')
         check(done_five['footer'] is not None and '第 6-10 項' in done_five['footer'], '存檔訊息說明第 6-10 項在下一頁')
 
         # 剛好 5 項時跨頁鈕也要在（否則永遠開不到第二頁、無法加第 6 項）
         result_view = done_five['view']
-        check([b.label for b in result_view.children][-1] == '編輯第 6-10 個關鍵字', '剛好 5 項時也附跨頁按鈕（不會卡住）')
+        check([b.label for b in result_view.children if b.style != discord.ButtonStyle.link][-1] == '編輯第 6-10 個關鍵字', '剛好 5 項時也附跨頁按鈕（不會卡住）')
 
         # 按下去真的會開第 2 頁的視窗（第 6–10 格）
         more_inter = FakeInteraction()
-        asyncio.run(result_view.children[-1].callback(more_inter))
+        run_coro(result_view.children[-2].callback(more_inter))
         opened = more_inter.sent[0]['modal']
         check(isinstance(opened, ar.AutoReplyEditKeywordsModal) and opened.page == 2, '按「編輯第 6-10 個」會開第 2 頁的視窗')
         check([t.label for t in opened.inputs] == [f'關鍵字 {i}' for i in range(6, 11)], '第 2 頁視窗編輯第 6–10 格')
@@ -506,25 +544,25 @@ def main():
         # 編第 2 頁時，第 1–5 項不會被清掉（原本只保留「後面」的項目會把前面洗掉）
         opened_p2 = ar.AutoReplyEditKeywordsModal(cog3, ui_guild, five_rule, page=2)
         inter_p2 = fill(opened_p2, ['f', 'g'])
-        asyncio.run(opened_p2.on_submit(inter_p2))
+        run_coro(opened_p2.on_submit(inter_p2))
         check(ar._rule_keywords(five_rule) == ['a', 'b', 'c', 'd', 'e', 'f', 'g'],
               '編輯第 6-10 項時，第 1-5 個關鍵字保留不動')
-        check(inter_p2.edited[0]['buttons'][-1] == '回到第 1-5 個關鍵字', '第 2 頁存檔後附「回到第 1-5 個關鍵字」按鈕')
+        check(inter_p2.edited[0]['buttons'][-2] == '回到第 1-5 個關鍵字', '第 2 頁存檔後附「回到第 1-5 個關鍵字」按鈕')
         back_inter = FakeInteraction()
-        asyncio.run(inter_p2.edited[0]['view'].children[-1].callback(back_inter))
+        run_coro(inter_p2.edited[0]['view'].children[-2].callback(back_inter))
         check(back_inter.sent[0]['modal'].page == 1, '按「回到第 1-5 個」會開第 1 頁的視窗')
 
         # 跨頁按鈕要能記住訊息物件，逾時才停用得掉（response.edit_message 的回傳值不是訊息）
         check(result_view.message is not None and result_view.message is inter_five.message,
               '編輯按鈕會記住原訊息物件（逾時可停用按鈕）')
-        asyncio.run(result_view.on_timeout())
-        check(all(b.disabled for b in result_view.children) and inter_five.message.edited, '逾時後按鈕會停用並更新訊息')
+        run_coro(result_view.on_timeout())
+        check(all(b.disabled for b in result_view.children if b.style != discord.ButtonStyle.link) and inter_five.message.edited, '逾時後按鈕會停用並更新訊息')
 
         # 原訊息不能再編輯時（ephemeral 超過 15 分鐘等）要退回另外開一則，不能整個流程卡死
         stale_modal = ar.AutoReplyEditKeywordsModal(cog3, ui_guild, five_rule, page=1)
         inter_stale = fill(stale_modal, ['a', 'b', 'c', 'd', 'e', 'f', 'g'])
         inter_stale.response.edit_fails = True
-        asyncio.run(stale_modal.on_submit(inter_stale))
+        run_coro(stale_modal.on_submit(inter_stale))
         check(inter_stale.edited == [] and len(inter_stale.sent) == 1 and inter_stale.sent[0]['title'] == '✅ 已更新關鍵字',
               '原訊息不能編輯時退回另開一則訊息')
 
@@ -533,8 +571,8 @@ def main():
         cog3.set_rule_replies(gid, one_rule['id'], ['只有一則'])
         one_modal = ar.AutoReplyEditRepliesModal(cog3, ui_guild, one_rule, page=1)
         inter_one = fill(one_modal, ['只有一則'])
-        asyncio.run(one_modal.on_submit(inter_one))
-        check(inter_one.edited[0]['buttons'][-1] == '編輯第 6-10 則回覆', '回覆內容頁也有跨頁按鈕')
+        run_coro(one_modal.on_submit(inter_one))
+        check(inter_one.edited[0]['buttons'][-2] == '編輯第 6-10 則回覆', '回覆內容頁也有跨頁按鈕')
 
         # ---------- 15. /auto_reply_list 的分頁 embed ----------
         big_rule['replies'] = [f'回覆{i}' * 200 for i in range(ar.MAX_REPLIES_PER_RULE)]
@@ -559,7 +597,7 @@ def main():
 
         list_rules = cog3._get_rules(gid)
         list_view = ar.AutoReplyListView(cog3, ui_guild, list_rules)
-        check([b.label for b in list_view.children] == ['◀️ 上一頁', '下一頁 ▶️'], '分頁：只有上一頁／下一頁兩顆按鈕')
+        check([b.label for b in list_view.children if b.style != discord.ButtonStyle.link] == ['◀️ 上一頁', '下一頁 ▶️'], '分頁：互動按鈕只有上一頁／下一頁')
         check(list_view.prev_button.disabled and not list_view.next_button.disabled, '分頁：第一頁不能往前翻')
         list_view.page = len(list_rules) - 1
         list_view._sync_buttons()
@@ -579,15 +617,15 @@ def main():
         check(ar.AutoReplyEditActionView(cog3, ui_guild, list_rules[0]).toggle_rule_button.label == '⏸️ 暫停規則',
               '編輯介面：啟用中的規則暫停鈕寫著「暫停規則」')
         edit_view = ar.AutoReplyEditActionView(cog3, ui_guild, big_rule)
-        check([b.label for b in edit_view.children][:3] == ['編輯關鍵字', '編輯回覆內容', '▶️ 恢復規則'],
+        check([b.label for b in edit_view.children if b.style != discord.ButtonStyle.link][:4] == ['編輯關鍵字', '編輯回覆內容', '編輯生效範圍', '▶️ 恢復規則'],
               '編輯介面：暫停按鈕排在取消之前')
         toggle_inter = FakeInteraction()
-        asyncio.run(edit_view.toggle_rule_button.callback(toggle_inter))
+        run_coro(edit_view.toggle_rule_button.callback(toggle_inter))
         check(ar._rule_enabled(big_rule), '按編輯介面的恢復鈕可恢復規則')
         check(edit_view.toggle_rule_button.label == '⏸️ 暫停規則', '恢復後按鈕文字同步換回暫停')
         check('已恢復自動回覆規則' in toggle_inter.edited[0]['title'], '恢復後就地更新原訊息回報結果')
         check(toggle_inter.sent == [], '暫停／恢復也不另外開訊息（不洗版）')
-        asyncio.run(edit_view.toggle_rule_button.callback(FakeInteraction()))
+        run_coro(edit_view.toggle_rule_button.callback(FakeInteraction()))
         check(not ar._rule_enabled(big_rule), '再按一次可暫停規則')
         check(ar._rule_keywords(big_rule) and ar._rule_replies(big_rule), '在編輯介面暫停也不會動到設定')
 
@@ -616,6 +654,114 @@ def main():
         check('self.__timeout_expiry = time.monotonic() + self.timeout'
               in inspect.getsource(discord.ui.view.BaseView._scheduled_task),
               'discord.py 每次互動都會重新計算逾時（連續操作不會中途失效）')
+
+        # ---------- 18. 刪除持久化、失敗回滾與重啟不重匯回歸測試 ----------
+        del_dir = tempfile.mkdtemp()
+        with _nullctx(make_cog(del_dir)) as cog_del:
+            gid_del = 300
+            cog_del.add_rule(gid_del, '規則一', 'alpha', '一號回覆', ar.SCOPE_ALL)
+            r2_id = cog_del.add_rule(gid_del, '規則二', 'beta', '二號回覆', ar.SCOPE_ALL)
+            ar._save_auto_reply_settings(cog_del.settings)
+            check(len(ar._load_auto_reply_settings().get(str(gid_del), {}).get('rules', [])) == 2,
+                  '刪除回歸：刪除前 SQLite 共有 2 條規則')
+
+            del_view1 = ar.ConfirmDeleteView(cog_del, FakeGuild(gid_del), cog_del._get_rules(gid_del)[0])
+            inter_del1 = FakeInteraction()
+            run_coro(del_view1.confirm_button.callback(inter_del1))
+            check(len(inter_del1.edited) == 1 and inter_del1.edited[0]['content'] is None,
+                  'ConfirmDeleteView：確認刪除後清除原提示 content')
+            check('已刪除自動回覆規則' in (inter_del1.edited[0]['title'] or ''),
+                  'ConfirmDeleteView：確認刪除後顯示刪除成功訊息')
+            rules_after_del1 = ar._load_auto_reply_settings().get(str(gid_del), {}).get('rules', [])
+            check(len(rules_after_del1) == 1 and str(rules_after_del1[0]['id']) == str(r2_id),
+                  'ConfirmDeleteView：刪除規則已持久化至 SQLite，模擬重開不恢復')
+
+            # (b) 寫入 SQLite 失敗時回滾記憶體並通知擁有者
+            notified = []
+
+            class _FakeErrorBot:
+                async def notify_owner_error(self, err, interaction, extra_info=''):
+                    notified.append((str(err), extra_info))
+
+            cog_del.bot = _FakeErrorBot()
+            orig_save = ar._save_auto_reply_settings
+
+            def _fail_save(_data):
+                raise RuntimeError('模擬寫入失敗')
+
+            ar._save_auto_reply_settings = _fail_save
+            try:
+                del_view_fail = ar.ConfirmDeleteView(cog_del, FakeGuild(gid_del), cog_del._get_rules(gid_del)[0])
+                inter_fail = FakeInteraction()
+                run_coro(del_view_fail.confirm_button.callback(inter_fail))
+            finally:
+                ar._save_auto_reply_settings = orig_save
+
+            check(len(cog_del._get_rules(gid_del)) == 1 and str(cog_del._get_rules(gid_del)[0]['id']) == str(r2_id),
+                  'ConfirmDeleteView：寫入 SQLite 失敗時回滾記憶體內的規則清單')
+            check(len(notified) == 1 and 'auto_reply_remove' in notified[0][1],
+                  'ConfirmDeleteView：寫入失敗時通知擁有者')
+            check(inter_fail.edited == [] and len(inter_fail.sent) == 1
+                  and '發生錯誤' in (inter_fail.sent[0]['content'] or ''),
+                  'ConfirmDeleteView：寫入失敗時回覆錯誤提示且不覆寫確認訊息')
+
+        # (c) 全新暫存 DB：從 auto_reply.json 匯入後刪光所有規則並重啟，不再重匯
+        mig_restart_dir = tempfile.mkdtemp()
+        with _nullctx(make_cog(mig_restart_dir)) as cog_mig:
+            with open(db.AUTO_REPLY_JSON, 'w', encoding='utf-8') as f:
+                json.dump({
+                    '400': {
+                        'rules': [{
+                            'id': 1,
+                            'name': '舊規則',
+                            'keyword': 'hi',
+                            'keywords': ['hi'],
+                            'reply': 'yo',
+                            'replies': ['yo'],
+                            'scope': ar.SCOPE_ALL,
+                        }]
+                    }
+                }, f)
+            cog_mig.settings = ar._load_auto_reply_settings()
+            check(len(cog_mig._get_rules(400)) == 1, 'JSON 遷移重開測試：初次啟動從 auto_reply.json 匯入 1 條規則')
+
+            del_mig_view = ar.ConfirmDeleteView(cog_mig, FakeGuild(400), cog_mig._get_rules(400)[0])
+            run_coro(del_mig_view.confirm_button.callback(FakeInteraction()))
+            check(ar._load_auto_reply_settings() == {}, 'JSON 遷移重開測試：刪除最後一條規則後資料庫為空')
+            check(os.path.exists(db.AUTO_REPLY_JSON), 'JSON 遷移重開測試：磁碟仍保留舊 auto_reply.json')
+
+            db._db_initialized = False
+            db._wal_initialized = False
+            check(ar._load_auto_reply_settings() == {},
+                  'JSON 遷移重開測試：刪光所有規則並重啟後不會再從 auto_reply.json 匯回舊規則')
+
+        # (d) 舊資料庫升級：已有規則但尚未記錄遷移旗標，刪除後重啟也不重匯舊 JSON
+        import sqlite3
+        upg_dir = tempfile.mkdtemp()
+        with _nullctx(make_cog(upg_dir)) as cog_upg:
+            cog_upg.add_rule(500, '既有規則', 'ping', 'pong', ar.SCOPE_ALL)
+            ar._save_auto_reply_settings(cog_upg.settings)
+            with sqlite3.connect(db.DB_FILE) as raw_conn:
+                raw_conn.execute("DELETE FROM bot_default_settings WHERE key = 'json_migrated_auto_reply'")
+                raw_conn.commit()
+            with open(db.AUTO_REPLY_JSON, 'w', encoding='utf-8') as f:
+                json.dump({'500': {'rules': [{'id': 99, 'keyword': 'ghost', 'reply': 'boo'}]}}, f)
+
+            db._db_initialized = False
+            db._wal_initialized = False
+            loaded_upg = ar._load_auto_reply_settings()
+            upg_rules = loaded_upg.get('500', {}).get('rules', [])
+            check(len(upg_rules) == 1 and upg_rules[0]['keyword'] == 'ping',
+                  '舊資料庫升級測試：保留既有 SQLite 規則並自動補齊遷移完成標記')
+
+            cog_upg.settings = loaded_upg
+            del_upg_view = ar.ConfirmDeleteView(cog_upg, FakeGuild(500), cog_upg._get_rules(500)[0])
+            run_coro(del_upg_view.confirm_button.callback(FakeInteraction()))
+
+            db._db_initialized = False
+            db._wal_initialized = False
+            check(ar._load_auto_reply_settings() == {},
+                  '舊資料庫升級測試：刪除既有規則並重啟後，舊 auto_reply.json 不會重新匯入')
 
     print()
     print(f'共 {len(PASS) + len(FAIL)} 項測試：{len(PASS)} 通過，{len(FAIL)} 失敗')

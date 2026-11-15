@@ -301,153 +301,193 @@ def init_db():
             conn.close()
 
 
+def _is_json_migrated(cursor: sqlite3.Cursor, flag_key: str) -> bool:
+    """檢查指定舊版 JSON 設定檔是否已完成遷移。"""
+    cursor.execute("SELECT value FROM bot_default_settings WHERE key = ?;", (flag_key,))
+    row = cursor.fetchone()
+    return bool(row and row[0] == '1')
+
+
+def _mark_json_migrated(cursor: sqlite3.Cursor, flag_key: str) -> None:
+    """標記指定舊版 JSON 設定檔已完成遷移（避免刪空資料後重啟重複匯入）。"""
+    cursor.execute(
+        "INSERT OR REPLACE INTO bot_default_settings (key, value) VALUES (?, '1');",
+        (flag_key,),
+    )
+
+
 def _migrate_from_json(conn: sqlite3.Connection):
     """如果資料庫為空且存在既有的 JSON 檔案，自動將資料轉入 SQLite。"""
     cursor = conn.cursor()
 
     # 1. 遷移 welcome_settings.json
-    cursor.execute("SELECT COUNT(*) FROM welcome_settings;")
-    if cursor.fetchone()[0] == 0 and os.path.exists(WELCOME_JSON):
-        try:
-            with open(WELCOME_JSON, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            if isinstance(data, dict):
-                for gid, val in data.items():
-                    if isinstance(val, dict):
-                        cursor.execute("""
-                        INSERT OR REPLACE INTO welcome_settings (guild_id, welcome_channel_id, rules_channel_id, role_channel_id)
-                        VALUES (?, ?, ?, ?)
-                        """, (
-                            str(gid),
-                            val.get('welcome_channel_id'),
-                            val.get('rules_channel_id'),
-                            val.get('role_channel_id'),
-                        ))
-                conn.commit()
-                print("✅ 已成功將 welcome_settings.json 遷移至 SQLite。")
-        except Exception as e:
-            print(f"⚠️ 遷移 welcome_settings.json 失敗: {e}")
+    if not _is_json_migrated(cursor, 'json_migrated_welcome'):
+        cursor.execute("SELECT COUNT(*) FROM welcome_settings;")
+        if cursor.fetchone()[0] > 0:
+            _mark_json_migrated(cursor, 'json_migrated_welcome')
+            conn.commit()
+        elif os.path.exists(WELCOME_JSON):
+            try:
+                with open(WELCOME_JSON, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    for gid, val in data.items():
+                        if isinstance(val, dict):
+                            cursor.execute("""
+                            INSERT OR REPLACE INTO welcome_settings (guild_id, welcome_channel_id, rules_channel_id, role_channel_id)
+                            VALUES (?, ?, ?, ?)
+                            """, (
+                                str(gid),
+                                val.get('welcome_channel_id'),
+                                val.get('rules_channel_id'),
+                                val.get('role_channel_id'),
+                            ))
+                    _mark_json_migrated(cursor, 'json_migrated_welcome')
+                    conn.commit()
+                    print("✅ 已成功將 welcome_settings.json 遷移至 SQLite。")
+            except Exception as e:
+                print(f"⚠️ 遷移 welcome_settings.json 失敗: {e}")
 
     # 2. 遷移 music_settings.json
-    cursor.execute("SELECT COUNT(*) FROM music_settings;")
-    if cursor.fetchone()[0] == 0 and os.path.exists(MUSIC_JSON):
-        try:
-            with open(MUSIC_JSON, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            if isinstance(data, dict):
-                for gid, val in data.items():
-                    if isinstance(val, dict):
-                        cursor.execute("""
-                        INSERT OR REPLACE INTO music_settings (guild_id, music_channel_id)
-                        VALUES (?, ?)
-                        """, (str(gid), val.get('music_channel_id')))
-                conn.commit()
-                print("✅ 已成功將 music_settings.json 遷移至 SQLite。")
-        except Exception as e:
-            print(f"⚠️ 遷移 music_settings.json 失敗: {e}")
+    if not _is_json_migrated(cursor, 'json_migrated_music'):
+        cursor.execute("SELECT COUNT(*) FROM music_settings;")
+        if cursor.fetchone()[0] > 0:
+            _mark_json_migrated(cursor, 'json_migrated_music')
+            conn.commit()
+        elif os.path.exists(MUSIC_JSON):
+            try:
+                with open(MUSIC_JSON, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    for gid, val in data.items():
+                        if isinstance(val, dict):
+                            cursor.execute("""
+                            INSERT OR REPLACE INTO music_settings (guild_id, music_channel_id)
+                            VALUES (?, ?)
+                            """, (str(gid), val.get('music_channel_id')))
+                    _mark_json_migrated(cursor, 'json_migrated_music')
+                    conn.commit()
+                    print("✅ 已成功將 music_settings.json 遷移至 SQLite。")
+            except Exception as e:
+                print(f"⚠️ 遷移 music_settings.json 失敗: {e}")
 
     # 3. 遷移 auto_reply.json
-    cursor.execute("SELECT COUNT(*) FROM auto_reply_rules;")
-    if cursor.fetchone()[0] == 0 and os.path.exists(AUTO_REPLY_JSON):
-        try:
-            with open(AUTO_REPLY_JSON, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            if isinstance(data, dict):
-                for gid, entry in data.items():
-                    rules = entry.get('rules') if isinstance(entry, dict) else entry
-                    if isinstance(rules, list):
-                        for r in rules:
-                            if isinstance(r, dict):
-                                kw = r.get('keywords') or ([r.get('keyword')] if r.get('keyword') else [])
-                                rep = r.get('replies') or ([r.get('reply')] if r.get('reply') else [])
-                                is_paused = 0 if r.get('enabled', True) else 1
-                                chan_id = r.get('channel_id')
-                                if chan_id is None and r.get('scope') and str(r.get('scope')) != 'all':
-                                    try:
-                                        chan_id = int(r.get('scope'))
-                                    except (ValueError, TypeError):
-                                        chan_id = None
-                                rule_id = r.get('id')
-                                if rule_id is not None:
-                                    cursor.execute("""
-                                    INSERT INTO auto_reply_rules (id, guild_id, name, keywords, replies, channel_id, is_paused)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                                    """, (
-                                        int(rule_id),
-                                        str(gid),
-                                        r.get('name') or '',
-                                        json.dumps(kw, ensure_ascii=False),
-                                        json.dumps(rep, ensure_ascii=False),
-                                        chan_id,
-                                        is_paused,
-                                    ))
-                                else:
-                                    cursor.execute("""
-                                    INSERT INTO auto_reply_rules (guild_id, name, keywords, replies, channel_id, is_paused)
-                                    VALUES (?, ?, ?, ?, ?, ?)
-                                    """, (
-                                        str(gid),
-                                        r.get('name') or '',
-                                        json.dumps(kw, ensure_ascii=False),
-                                        json.dumps(rep, ensure_ascii=False),
-                                        chan_id,
-                                        is_paused,
-                                    ))
-                conn.commit()
-                print("✅ 已成功將 auto_reply.json 遷移至 SQLite。")
-        except Exception as e:
-            print(f"⚠️ 遷移 auto_reply.json 失敗: {e}")
+    if not _is_json_migrated(cursor, 'json_migrated_auto_reply'):
+        cursor.execute("SELECT COUNT(*) FROM auto_reply_rules;")
+        if cursor.fetchone()[0] > 0:
+            _mark_json_migrated(cursor, 'json_migrated_auto_reply')
+            conn.commit()
+        elif os.path.exists(AUTO_REPLY_JSON):
+            try:
+                with open(AUTO_REPLY_JSON, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    for gid, entry in data.items():
+                        rules = entry.get('rules') if isinstance(entry, dict) else entry
+                        if isinstance(rules, list):
+                            for r in rules:
+                                if isinstance(r, dict):
+                                    kw = r.get('keywords') or ([r.get('keyword')] if r.get('keyword') else [])
+                                    rep = r.get('replies') or ([r.get('reply')] if r.get('reply') else [])
+                                    is_paused = 0 if r.get('enabled', True) else 1
+                                    chan_id = r.get('channel_id')
+                                    if chan_id is None and r.get('scope') and str(r.get('scope')) != 'all':
+                                        try:
+                                            chan_id = int(r.get('scope'))
+                                        except (ValueError, TypeError):
+                                            chan_id = None
+                                    rule_id = r.get('id')
+                                    if rule_id is not None:
+                                        cursor.execute("""
+                                        INSERT INTO auto_reply_rules (id, guild_id, name, keywords, replies, channel_id, is_paused)
+                                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                                        """, (
+                                            int(rule_id),
+                                            str(gid),
+                                            r.get('name') or '',
+                                            json.dumps(kw, ensure_ascii=False),
+                                            json.dumps(rep, ensure_ascii=False),
+                                            chan_id,
+                                            is_paused,
+                                        ))
+                                    else:
+                                        cursor.execute("""
+                                        INSERT INTO auto_reply_rules (guild_id, name, keywords, replies, channel_id, is_paused)
+                                        VALUES (?, ?, ?, ?, ?, ?)
+                                        """, (
+                                            str(gid),
+                                            r.get('name') or '',
+                                            json.dumps(kw, ensure_ascii=False),
+                                            json.dumps(rep, ensure_ascii=False),
+                                            chan_id,
+                                            is_paused,
+                                        ))
+                    _mark_json_migrated(cursor, 'json_migrated_auto_reply')
+                    conn.commit()
+                    print("✅ 已成功將 auto_reply.json 遷移至 SQLite。")
+            except Exception as e:
+                print(f"⚠️ 遷移 auto_reply.json 失敗: {e}")
 
     # 4. 遷移 reaction_roles.json
-    cursor.execute("SELECT COUNT(*) FROM reaction_roles_messages;")
-    if cursor.fetchone()[0] == 0 and os.path.exists(REACTION_ROLES_JSON):
-        try:
-            with open(REACTION_ROLES_JSON, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            if isinstance(data, dict):
-                for gid, entry in data.items():
-                    if not isinstance(entry, dict):
-                        continue
-                    msgs = entry.get('messages')
-                    if msgs is None and 'message_id' in entry:
-                        msgs = [entry]
-                    if isinstance(msgs, list):
-                        for m in msgs:
-                            msg_id = m.get('message_id')
-                            chan_id = m.get('channel_id')
-                            if not msg_id or not chan_id:
-                                continue
-                            strict_val = 1 if m.get('strict', True) else 0
-                            cursor.execute("""
-                            INSERT OR REPLACE INTO reaction_roles_messages (message_id, guild_id, channel_id, strict)
-                            VALUES (?, ?, ?, ?)
-                            """, (msg_id, str(gid), chan_id, strict_val))
-                            for p in (m.get('pairs') or []):
+    if not _is_json_migrated(cursor, 'json_migrated_reaction_roles'):
+        cursor.execute("SELECT COUNT(*) FROM reaction_roles_messages;")
+        if cursor.fetchone()[0] > 0:
+            _mark_json_migrated(cursor, 'json_migrated_reaction_roles')
+            conn.commit()
+        elif os.path.exists(REACTION_ROLES_JSON):
+            try:
+                with open(REACTION_ROLES_JSON, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    for gid, entry in data.items():
+                        if not isinstance(entry, dict):
+                            continue
+                        msgs = entry.get('messages')
+                        if msgs is None and 'message_id' in entry:
+                            msgs = [entry]
+                        if isinstance(msgs, list):
+                            for m in msgs:
+                                msg_id = m.get('message_id')
+                                chan_id = m.get('channel_id')
+                                if not msg_id or not chan_id:
+                                    continue
+                                strict_val = 1 if m.get('strict', True) else 0
                                 cursor.execute("""
-                                INSERT INTO reaction_roles_pairs (message_id, emoji, role_id)
-                                VALUES (?, ?, ?)
-                                """, (msg_id, str(p.get('emoji')), int(p.get('role_id'))))
-                conn.commit()
-                print("✅ 已成功將 reaction_roles.json 遷移至 SQLite。")
-        except Exception as e:
-            print(f"⚠️ 遷移 reaction_roles.json 失敗: {e}")
+                                INSERT OR REPLACE INTO reaction_roles_messages (message_id, guild_id, channel_id, strict)
+                                VALUES (?, ?, ?, ?)
+                                """, (msg_id, str(gid), chan_id, strict_val))
+                                for p in (m.get('pairs') or []):
+                                    cursor.execute("""
+                                    INSERT INTO reaction_roles_pairs (message_id, emoji, role_id)
+                                    VALUES (?, ?, ?)
+                                    """, (msg_id, str(p.get('emoji')), int(p.get('role_id'))))
+                    _mark_json_migrated(cursor, 'json_migrated_reaction_roles')
+                    conn.commit()
+                    print("✅ 已成功將 reaction_roles.json 遷移至 SQLite。")
+            except Exception as e:
+                print(f"⚠️ 遷移 reaction_roles.json 失敗: {e}")
 
     # 5. 遷移 reaction_roles_cooldowns.json
-    cursor.execute("SELECT COUNT(*) FROM reaction_roles_cooldowns;")
-    if cursor.fetchone()[0] == 0 and os.path.exists(COOLDOWNS_JSON):
-        try:
-            with open(COOLDOWNS_JSON, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            if isinstance(data, dict):
-                for k, ts in data.items():
-                    cursor.execute("""
-                    INSERT OR REPLACE INTO reaction_roles_cooldowns (key, timestamp)
-                    VALUES (?, ?)
-                    """, (str(k), float(ts)))
-                conn.commit()
-                print("✅ 已成功將 reaction_roles_cooldowns.json 遷移至 SQLite。")
-        except Exception as e:
-            print(f"⚠️ 遷移 reaction_roles_cooldowns.json 失敗: {e}")
+    if not _is_json_migrated(cursor, 'json_migrated_cooldowns'):
+        cursor.execute("SELECT COUNT(*) FROM reaction_roles_cooldowns;")
+        if cursor.fetchone()[0] > 0:
+            _mark_json_migrated(cursor, 'json_migrated_cooldowns')
+            conn.commit()
+        elif os.path.exists(COOLDOWNS_JSON):
+            try:
+                with open(COOLDOWNS_JSON, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    for k, ts in data.items():
+                        cursor.execute("""
+                        INSERT OR REPLACE INTO reaction_roles_cooldowns (key, timestamp)
+                        VALUES (?, ?)
+                        """, (str(k), float(ts)))
+                    _mark_json_migrated(cursor, 'json_migrated_cooldowns')
+                    conn.commit()
+                    print("✅ 已成功將 reaction_roles_cooldowns.json 遷移至 SQLite。")
+            except Exception as e:
+                print(f"⚠️ 遷移 reaction_roles_cooldowns.json 失敗: {e}")
 
 
 # ==============================================================================
@@ -495,6 +535,7 @@ def save_welcome_settings(data: dict):
                         val.get('role_channel_id'),
                         val.get('auto_role_id'),
                     ))
+            _mark_json_migrated(cursor, 'json_migrated_welcome')
             conn.commit()
         finally:
             conn.close()
@@ -534,6 +575,7 @@ def save_music_settings(data: dict):
                     INSERT INTO music_settings (guild_id, music_channel_id)
                     VALUES (?, ?)
                     """, (str(gid), val.get('music_channel_id')))
+            _mark_json_migrated(cursor, 'json_migrated_music')
             conn.commit()
         finally:
             conn.close()
@@ -1130,6 +1172,7 @@ def save_auto_reply_settings(data: dict):
                                     chan_id,
                                     is_paused,
                                 ))
+            _mark_json_migrated(cursor, 'json_migrated_auto_reply')
             conn.commit()
         finally:
             conn.close()
@@ -1206,6 +1249,7 @@ def save_reaction_roles(data: dict):
                         VALUES (?, ?, ?)
                         """, (msg_id, str(p.get('emoji')), int(p.get('role_id'))))
 
+            _mark_json_migrated(cursor, 'json_migrated_reaction_roles')
             conn.commit()
         finally:
             conn.close()
@@ -1237,6 +1281,7 @@ def save_reaction_cooldowns(data: dict):
                 INSERT OR REPLACE INTO reaction_roles_cooldowns (key, timestamp)
                 VALUES (?, ?)
                 """, (str(k), float(ts)))
+            _mark_json_migrated(cursor, 'json_migrated_cooldowns')
             conn.commit()
         finally:
             conn.close()
