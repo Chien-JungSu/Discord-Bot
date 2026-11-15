@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import os
 import random
@@ -60,6 +61,13 @@ LAVALINK_RECONNECT_COOLDOWN = float(os.getenv('LAVALINK_RECONNECT_COOLDOWN', '60
 
 # 第 6 週新增：播放面板進度條定時更新間隔（秒，集中常數設定，至少 5 秒防 API rate limit）
 PROGRESS_UPDATE_INTERVAL = float(os.getenv('PROGRESS_UPDATE_INTERVAL', '5.0'))
+
+# 單一伺服器兩次背景進度條編輯（或任何面板編輯後距下次背景更新）的最短間隔（秒）：
+# Discord 對同一訊息 PATCH 設有子速率限制（約每 30 秒 5 次），預設間隔 10 秒可保留餘裕給互動按鈕與切歌事件。
+PANEL_PROGRESS_MIN_INTERVAL = float(os.getenv('PANEL_PROGRESS_MIN_INTERVAL', '10.0'))
+# 當 msg.edit 耗時超過此閾值（秒），代表 discord.py 內部可能遭遇 429 並睡眠 retry_after 重試，觸發退避冷卻。
+PANEL_EDIT_SLOW_THRESHOLD = 2.0
+PANEL_RATE_LIMIT_BACKOFF = 15.0
 
 # 控制面板防洗版自動置底（Sticky Panel）防抖延遲與最小冷卻秒數：
 # - PANEL_BUMP_DELAY：當點歌頻道有普通訊息把控制面板往上刷時，等待頻道靜止的防抖延遲秒數（預設 6 秒）。
@@ -1127,8 +1135,14 @@ class MusicControlView(ui.LayoutView):
         player: "wavelink_module.Player" = interaction.guild.voice_client
         cog: "Music" = self.cog or interaction.client.get_cog("Music")
 
-        is_paused = getattr(player, "paused", False)
-        await player.pause(not is_paused)
+        is_paused = bool(getattr(player, "paused", False))
+        want_pause = not is_paused
+        is_stable = bool(getattr(player, "_is_stable_voice_player", False))
+        if cog and want_pause and not is_stable:
+            cog._sync_player_position_on_pause(player, True, was_paused=is_paused)
+        await player.pause(want_pause)
+        if cog and not want_pause and not is_stable:
+            cog._sync_player_position_on_pause(player, False, was_paused=is_paused)
         if cog:
             await cog._sync_panel(interaction.guild.id, player, interaction=interaction)
         elif not interaction.response.is_done():
@@ -1154,6 +1168,8 @@ class MusicControlView(ui.LayoutView):
         current_pos = getattr(player, "position", 0)
         target = max(0, current_pos - 10000)
         await player.seek(target)
+        if cog and not getattr(player, "_is_stable_voice_player", False):
+            cog._sync_player_position_on_seek(player, target)
         if cog:
             await cog._sync_panel(interaction.guild.id, player, interaction=interaction)
         elif not interaction.response.is_done():
@@ -1180,6 +1196,8 @@ class MusicControlView(ui.LayoutView):
         track_len = getattr(track, "length", 0) or 0
         target = max(0, min(current_pos + 10000, max(track_len - 1000, 0)))
         await player.seek(target)
+        if cog and not getattr(player, "_is_stable_voice_player", False):
+            cog._sync_player_position_on_seek(player, target)
         if cog:
             await cog._sync_panel(interaction.guild.id, player, interaction=interaction)
         elif not interaction.response.is_done():
@@ -1915,6 +1933,9 @@ class Music(commands.Cog):
         self._last_progress_str: dict[int, str] = {}
         # key: guild_id, value: 觸發 429 暫停更新的截止時間戳（time.monotonic()）
         self._rate_limit_until: dict[int, float] = {}
+        # key: guild_id, value: 上次完成控制面板發送／編輯的時間戳（time.monotonic()）與非進度條狀態簽章
+        self._last_panel_edit_at: dict[int, float] = {}
+        self._last_panel_state: dict[int, tuple] = {}
         # 第 6 週新增：面板底部即時提示字串 (guild_id -> notice string) 與自動清除計時任務 (guild_id -> Task)
         self._panel_notices: dict[int, str] = {}
         self._panel_notice_tasks: dict[int, asyncio.Task] = {}
@@ -1945,6 +1966,11 @@ class Music(commands.Cog):
         self._session_resetting: dict[str, float] = {}
         # 曲目結束看門狗（Track-End Watchdog）：key=guild_id, value=(track, 首次偵測到 pos>=length 的 monotonic 時間戳)
         self._track_overdue_since: dict[int, tuple[Any, float]] = {}
+        # 語音交握連線進行中伺服器 ID 集合與最近一次 Session 探測時間戳，避免連線期間誤觸退房清理
+        self._connecting_guilds: set[int] = set()
+        self._last_session_probe_at: float = 0.0
+        self._cached_player_base: Any = None
+        self._cached_player_cls: Any = None
 
     async def cog_unload(self):
         """Cog 被卸載時（例如重新載入模組）順便取消所有還在跑的自動離開計時器，
@@ -1969,7 +1995,13 @@ class Music(commands.Cog):
             self.progress_update_loop.cancel()
         self._last_progress_str.clear()
         self._rate_limit_until.clear()
+        self._last_panel_edit_at.clear()
+        self._last_panel_state.clear()
         self._track_overdue_since.clear()
+        self._connecting_guilds.clear()
+        self._last_session_probe_at = 0.0
+        self._cached_player_base = None
+        self._cached_player_cls = None
 
         # 取消所有面板提示自動清除任務
         for task in self._panel_notice_tasks.values():
@@ -2336,6 +2368,479 @@ class Music(commands.Cog):
         return False
 
     @staticmethod
+    def _reset_player_position_state(player: Any, start_ms: int = 0) -> None:
+        """換歌或從指定時間續播時重置進度計算基準，避免沿用上一首殘留的 _last_position / _last_update。"""
+        if player is None:
+            return
+        safe_start = max(0, int(start_ms or 0))
+        if hasattr(player, "_last_position"):
+            try:
+                player._last_position = safe_start
+            except Exception:
+                pass
+        if hasattr(player, "_last_update"):
+            try:
+                player._last_update = time.monotonic_ns()
+            except Exception:
+                pass
+        if hasattr(player, "position") and not isinstance(getattr(type(player), "position", None), property):
+            try:
+                player.position = safe_start
+            except Exception:
+                pass
+        player._last_raw_lavalink_pos = safe_start
+        player._last_lavalink_update_mono = 0.0
+        player._track_start_pos = safe_start
+        player._track_started_mono = time.monotonic()
+
+    def _sync_player_position_on_pause(
+        self, player: Any, want_pause: bool, *, was_paused: bool | None = None
+    ) -> None:
+        """在暫停／繼續播放切換時結算或重置本地單調時鐘基準，避免恢復播放後把暫停時間誤算成進度暴衝。"""
+        if player is None:
+            return
+        if was_paused is None:
+            was_paused = bool(getattr(player, "paused", False))
+        now_mono = time.monotonic()
+        now_ns = time.monotonic_ns()
+        cur = getattr(player, "_current", None) or getattr(player, "current", None)
+        len_ms = getattr(cur, "length", None) if cur is not None else None
+
+        if want_pause and not was_paused:
+            last_upd = getattr(player, "_last_update", None)
+            if last_upd is not None and hasattr(player, "_last_position"):
+                elapsed_ms = max(0, int((now_ns - last_upd) / 1_000_000))
+                new_pos = int(getattr(player, "_last_position", 0) or 0) + elapsed_ms
+                if len_ms and len_ms > 0:
+                    new_pos = min(new_pos, int(len_ms))
+                player._last_position = new_pos
+                player._last_update = now_ns
+            if getattr(player, "_last_lavalink_update_mono", 0.0) > 0.0:
+                extra_ms = max(0, int((now_mono - float(player._last_lavalink_update_mono)) * 1000))
+                new_raw = int(getattr(player, "_last_raw_lavalink_pos", 0) or 0) + extra_ms
+                if len_ms and len_ms > 0:
+                    new_raw = min(new_raw, int(len_ms))
+                player._last_raw_lavalink_pos = new_raw
+                player._last_lavalink_update_mono = now_mono
+        elif not want_pause and was_paused:
+            if hasattr(player, "_last_update"):
+                player._last_update = now_ns
+            if getattr(player, "_last_lavalink_update_mono", 0.0) > 0.0:
+                player._last_lavalink_update_mono = now_mono
+            guild = getattr(player, "guild", None)
+            if guild is not None:
+                self._track_overdue_since.pop(guild.id, None)
+
+    def _sync_player_position_on_seek(self, player: Any, target_ms: int) -> None:
+        """在跳轉播放時間後同步更新本地進度與清除看門狗逾期紀錄，避免曲尾往回跳轉仍被誤切。"""
+        if player is None:
+            return
+        safe_target = max(0, int(target_ms or 0))
+        if hasattr(player, "_last_position"):
+            player._last_position = safe_target
+        if hasattr(player, "_last_update"):
+            player._last_update = time.monotonic_ns()
+        if hasattr(player, "position") and not isinstance(getattr(type(player), "position", None), property):
+            player.position = safe_target
+        player._last_raw_lavalink_pos = safe_target
+        player._track_start_pos = safe_target
+        player._track_started_mono = time.monotonic()
+        if getattr(player, "_last_lavalink_update_mono", 0.0) > 0.0:
+            player._last_lavalink_update_mono = time.monotonic()
+        guild = getattr(player, "guild", None)
+        if guild is not None:
+            self._track_overdue_since.pop(guild.id, None)
+
+    @staticmethod
+    def _restore_current_track(player: Any, active_track: Any) -> None:
+        """若 wavelink 因非 replaced 的 TrackEndEvent 先清掉了 _current，還原目前實際在播的曲目。"""
+        if player is None or active_track is None:
+            return
+        if getattr(player, "current", None) is None:
+            try:
+                player._current = active_track
+            except Exception:
+                pass
+            if getattr(player, "current", None) is None and not isinstance(
+                getattr(type(player), "current", None), property
+            ):
+                try:
+                    player.current = active_track
+                except Exception:
+                    pass
+
+    def _handle_player_update_telemetry(self, player: Any, raw_pos: int) -> bool:
+        """更新 Lavalink playerUpdate 真實進度遙測，並過濾換歌瞬間抵達的上一首殘留進度事件。
+
+        回傳 True 代表判定為上一首殘留的過時進度更新（應忽略，不得覆蓋 _last_position）。
+        """
+        if player is None:
+            return False
+        now_mono = time.monotonic()
+        safe_pos = max(0, int(raw_pos or 0))
+        started_mono = float(getattr(player, "_track_started_mono", 0.0) or 0.0)
+        start_pos = int(getattr(player, "_track_start_pos", 0) or 0)
+        last_update_mono = float(getattr(player, "_last_lavalink_update_mono", 0.0) or 0.0)
+
+        if (
+            started_mono > 0.0
+            and (now_mono - started_mono) < 3.0
+            and last_update_mono == 0.0
+            and safe_pos > start_pos + 10_000
+        ):
+            return True
+
+        player._last_raw_lavalink_pos = safe_pos
+        player._last_lavalink_update_mono = now_mono
+        if not getattr(player, "_is_current_stream", False):
+            retry_pos = int(getattr(player, "_mid_track_retry_pos", 0) or 0)
+            if safe_pos - retry_pos >= 25_000:
+                player._mid_track_retry_count = 0
+        return False
+
+    def _get_player_cls(self) -> Any:
+        """取得具備安全語音交握與 Session 失效自動恢復能力的 Player 類別。
+
+        解決原版 wavelink.Player 兩項關鍵缺陷：
+        1. _dispatch_voice_update() 遇到 LavalinkException（如 404 Session Lost）時會直接呼叫
+           self.disconnect() 踢出語音頻道且不喚醒 _connection_event，導致機器人「加入即退出」並卡死 30 秒。
+        2. on_voice_state_update() 未主動呼叫 _dispatch_voice_update()，若 Gateway 先送 VOICE_SERVER_UPDATE
+           再送 VOICE_STATE_UPDATE，將永遠無法觸發連線事件直到 30 秒逾時。
+        """
+        if wavelink is None:
+            return None
+        base_cls = getattr(wavelink, "Player", None)
+        if not isinstance(base_cls, type):
+            return base_cls
+        if getattr(self, "_cached_player_base", None) is base_cls and getattr(self, "_cached_player_cls", None) is not None:
+            return self._cached_player_cls
+
+        cog_ref = self
+
+        class _StableVoicePlayer(base_cls):
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                super().__init__(*args, **kwargs)
+                self._music_cog = cog_ref
+                self._is_stable_voice_player = True
+                self._connecting = False
+                self._last_voice_update_error: BaseException | None = None
+                self._last_dispatched_voice: tuple[Any, Any, Any, Any] | None = None
+                self._voice_dispatch_lock = asyncio.Lock()
+                self._last_raw_lavalink_pos = 0
+                self._last_lavalink_update_mono = 0.0
+                self._track_start_pos = 0
+                self._mid_track_retry_count = 0
+                self._mid_track_retry_pos = 0
+
+            def _resolve_music_cog(self) -> Any:
+                cog = getattr(self, "_music_cog", None)
+                if cog is not None:
+                    return cog
+                client = getattr(self, "client", None)
+                get_cog = getattr(client, "get_cog", None) if client is not None else None
+                return get_cog("Music") if callable(get_cog) else None
+
+            async def play(
+                self,
+                track: Any,
+                *,
+                replace: bool = True,
+                start: int = 0,
+                end: int | None = None,
+                volume: int | None = None,
+                paused: bool | None = None,
+                **kwargs: Any,
+            ) -> Any:
+                cog = self._resolve_music_cog()
+                if cog is not None and hasattr(cog, "_reset_player_position_state"):
+                    cog._reset_player_position_state(self, start_ms=start)
+                result = await super().play(
+                    track,
+                    replace=replace,
+                    start=start,
+                    end=end,
+                    volume=volume,
+                    paused=paused,
+                    **kwargs,
+                )
+                if cog is not None and hasattr(cog, "_reset_player_position_state"):
+                    cog._reset_player_position_state(self, start_ms=start)
+                return result
+
+            async def pause(self, value: bool, /) -> None:
+                cog = self._resolve_music_cog()
+                was_paused = bool(getattr(self, "_paused", False))
+                if value and cog is not None and hasattr(cog, "_sync_player_position_on_pause"):
+                    cog._sync_player_position_on_pause(self, True, was_paused=was_paused)
+                await super().pause(value)
+                if not value and cog is not None and hasattr(cog, "_sync_player_position_on_pause"):
+                    cog._sync_player_position_on_pause(self, False, was_paused=was_paused)
+
+            async def seek(self, position: int = 0, /) -> None:
+                await super().seek(position)
+                cog = self._resolve_music_cog()
+                if cog is not None and hasattr(cog, "_sync_player_position_on_seek"):
+                    cog._sync_player_position_on_seek(self, position)
+
+            async def _update_event(self, payload: Any) -> None:
+                cog = self._resolve_music_cog()
+                raw_pos = int(getattr(payload, "position", 0) or 0)
+                if cog is not None and hasattr(cog, "_handle_player_update_telemetry"):
+                    if cog._handle_player_update_telemetry(self, raw_pos):
+                        self._last_update = time.monotonic_ns()
+                        self._last_position = max(0, int(getattr(self, "_track_start_pos", 0) or 0))
+                        return
+                await super()._update_event(payload)
+
+            async def on_voice_state_update(self, data: Any, /) -> None:
+                prev_channel = getattr(self, "channel", None)
+                await super().on_voice_state_update(data)
+                channel_id = data.get("channel_id") if isinstance(data, dict) else getattr(data, "channel_id", None)
+                if not channel_id:
+                    if getattr(self, "_connecting", False):
+                        self._last_voice_update_error = RuntimeError(
+                            "Discord 語音閘道於交握期間中斷 (channel_id=None)"
+                        )
+                        conn_ev = getattr(self, "_connection_event", None)
+                        if conn_ev is not None and hasattr(conn_ev, "set"):
+                            conn_ev.set()
+                    return
+
+                if getattr(self, "channel", None) is None and prev_channel is not None:
+                    self.channel = prev_channel
+
+                voice_state = getattr(self, "_voice_state", None)
+                voice_data = voice_state.get("voice", {}) if isinstance(voice_state, dict) else {}
+                conn_ev = getattr(self, "_connection_event", None)
+                has_full_voice = bool(
+                    voice_data.get("session_id") and voice_data.get("token") and voice_data.get("endpoint")
+                )
+                if has_full_voice and conn_ev is not None and not conn_ev.is_set():
+                    await self._dispatch_voice_update()
+
+            async def _dispatch_voice_update(self) -> None:
+                guild = getattr(self, "guild", None)
+                if guild is None:
+                    return
+                lock = getattr(self, "_voice_dispatch_lock", None)
+                if lock is None:
+                    lock = asyncio.Lock()
+                    self._voice_dispatch_lock = lock
+
+                async with lock:
+                    voice_state = getattr(self, "_voice_state", None)
+                    voice_data = voice_state.get("voice", {}) if isinstance(voice_state, dict) else {}
+                    session_id = voice_data.get("session_id")
+                    token = voice_data.get("token")
+                    endpoint = voice_data.get("endpoint")
+                    channel_id = voice_state.get("channel_id") if isinstance(voice_state, dict) else None
+                    if not channel_id:
+                        ch = getattr(self, "channel", None)
+                        if ch is not None and getattr(ch, "id", None) is not None:
+                            channel_id = str(ch.id)
+
+                    if not session_id or not token or not endpoint:
+                        return
+
+                    voice_sig = (session_id, token, endpoint, channel_id)
+                    conn_ev = getattr(self, "_connection_event", None)
+                    if (
+                        getattr(self, "_last_dispatched_voice", None) == voice_sig
+                        and getattr(self, "_connected", False)
+                        and conn_ev is not None
+                        and conn_ev.is_set()
+                    ):
+                        return
+
+                    cog = self._resolve_music_cog()
+                    if cog is not None and hasattr(cog, "_adopt_orphan_player"):
+                        cog._adopt_orphan_player(self)
+
+                    request: dict[str, Any] = {
+                        "voice": {
+                            "sessionId": session_id,
+                            "token": token,
+                            "endpoint": endpoint,
+                        }
+                    }
+                    if channel_id is not None:
+                        request["voice"]["channelId"] = str(channel_id)
+
+                    try:
+                        await self.node._update_player(guild.id, data=request)
+                    except Exception as exc:
+                        is_session_lost = False
+                        if cog is not None and hasattr(cog, "_is_session_lost_error"):
+                            is_session_lost = cog._is_session_lost_error(exc) or (
+                                hasattr(getattr(self, "node", None), "_session_id")
+                                and getattr(getattr(self, "node", None), "_session_id", None) is None
+                            )
+                        if is_session_lost and cog is not None and hasattr(cog, "_ensure_node_session_ready"):
+                            print(
+                                f"🔄 [語音交握] 偵測到 Lavalink Session 失效，嘗試重建後重送語音狀態 "
+                                f"(guild_id={guild.id}): {exc}"
+                            )
+                            rebuilt = await cog._ensure_node_session_ready(
+                                force_reset=True, reason=f"語音交握 Session 失效: {exc}"
+                            )
+                            if rebuilt:
+                                cog._adopt_orphan_player(self)
+                                try:
+                                    await self.node._update_player(guild.id, data=request)
+                                except Exception as retry_exc:
+                                    exc = retry_exc
+                                else:
+                                    self._last_voice_update_error = None
+                                    self._last_dispatched_voice = voice_sig
+                                    self._connected = True
+                                    if conn_ev is not None and hasattr(conn_ev, "set"):
+                                        conn_ev.set()
+                                    return
+
+                        # 絕不呼叫 self.disconnect() 踢出機器人，而是立即結束 _connection_event.wait() 交由上層重試或清理
+                        self._last_voice_update_error = exc
+                        self._connected = False
+                        if conn_ev is not None and hasattr(conn_ev, "set"):
+                            conn_ev.set()
+                        return
+                    else:
+                        self._last_voice_update_error = None
+                        self._last_dispatched_voice = voice_sig
+                        self._connected = True
+                        if conn_ev is not None and hasattr(conn_ev, "set"):
+                            conn_ev.set()
+
+            async def connect(
+                self,
+                *,
+                timeout: float = 10.0,
+                reconnect: bool = True,
+                self_deaf: bool = False,
+                self_mute: bool = False,
+            ) -> None:
+                self._connecting = True
+                self._last_voice_update_error = None
+                try:
+                    await super().connect(
+                        timeout=timeout, reconnect=reconnect, self_deaf=self_deaf, self_mute=self_mute
+                    )
+                    err = getattr(self, "_last_voice_update_error", None)
+                    if err is not None:
+                        raise err
+                    if not getattr(self, "_connected", False):
+                        raise RuntimeError("語音交握未完成：Lavalink 尚未確認語音連線")
+                finally:
+                    self._connecting = False
+
+        _StableVoicePlayer.__name__ = f"Stable{base_cls.__name__}"
+        self._cached_player_base = base_cls
+        self._cached_player_cls = _StableVoicePlayer
+        return _StableVoicePlayer
+
+    async def _ensure_node_session_ready(self, *, force_reset: bool = False, reason: str = "") -> bool:
+        """在加入語音頻道前驗證 Lavalink Session 是否有效，失效時自動重建並等待就緒。"""
+        if wavelink is None:
+            return False
+        pool_nodes = list(getattr(wavelink.Pool, "nodes", {}).values())
+        connected_nodes = [
+            n for n in pool_nodes if getattr(getattr(n, "status", None), "name", None) == "CONNECTED"
+        ]
+        if not connected_nodes:
+            return False
+
+        target_node = connected_nodes[0]
+        session_resetting = getattr(self, "_session_resetting", None)
+        if session_resetting is None:
+            session_resetting = {}
+            self._session_resetting = session_resetting
+
+        if not force_reset and hasattr(target_node, "_session_id") and getattr(target_node, "_session_id", None) is None:
+            force_reset = True
+            reason = reason or "節點尚未持有有效的 Lavalink session_id"
+
+        now = time.monotonic()
+        last_probe = float(getattr(self, "_last_session_probe_at", 0.0) or 0.0)
+        has_players = bool(getattr(target_node, "players", None))
+        if not force_reset and (now - last_probe >= 15.0 or not has_players):
+            fetch_fn = getattr(target_node, "fetch_players", None)
+            if callable(fetch_fn):
+                try:
+                    maybe_coro = fetch_fn()
+                    if inspect.isawaitable(maybe_coro):
+                        await asyncio.wait_for(maybe_coro, timeout=4.0)
+                        self._last_session_probe_at = time.monotonic()
+                except Exception as exc:
+                    if self._is_session_lost_error(exc):
+                        force_reset = True
+                        reason = reason or f"連線前探測 Session 失效：{exc}"
+                    else:
+                        print(f"⚠️ [Session 預檢] 探測節點玩家失敗（不阻擋連線）：{exc}")
+
+        if not force_reset:
+            return True
+
+        await self._reset_lavalink_session(target_node, reason=reason or "Session 失效重建")
+
+        deadline = time.monotonic() + 6.0
+        while time.monotonic() < deadline:
+            await asyncio.sleep(0.15)
+            for node in list(getattr(wavelink.Pool, "nodes", {}).values()):
+                if getattr(getattr(node, "status", None), "name", None) != "CONNECTED":
+                    continue
+                ident = str(getattr(node, "identifier", None) or id(node))
+                if ident in session_resetting:
+                    continue
+                if hasattr(node, "_session_id") and getattr(node, "_session_id", None) is None:
+                    continue
+                self._last_session_probe_at = time.monotonic()
+                return True
+        return False
+
+    async def _connect_voice_channel(
+        self, guild: discord.Guild, channel: Any
+    ) -> "wavelink_module.Player":
+        """安全連線至語音頻道：預檢 Lavalink Session 並於首次失敗時自動清理與重試。"""
+        if not hasattr(self, "_connecting_guilds") or self._connecting_guilds is None:
+            self._connecting_guilds = set()
+
+        player_cls = self._get_player_cls()
+        guild_id = guild.id
+        self._connecting_guilds.add(guild_id)
+        try:
+            await self._ensure_node_session_ready()
+
+            last_exc: Exception | None = None
+            for attempt in range(2):
+                try:
+                    return await channel.connect(cls=player_cls)
+                except Exception as exc:
+                    last_exc = exc
+                    if attempt >= 1:
+                        break
+                    print(f"⚠️ [語音連線] 第 1 次加入「{channel}」失敗，清理並重試 (guild_id={guild_id}): {exc}")
+                    await self._cleanup_guild_voice_and_player(guild, reset_gateway=True)
+                    if self._is_session_lost_error(exc):
+                        await self._ensure_node_session_ready(
+                            force_reset=True, reason=f"首次語音連線遭遇 Session 失效：{exc}"
+                        )
+                    else:
+                        await self._ensure_node_session_ready()
+                    await asyncio.sleep(0.6)
+
+            assert last_exc is not None
+            raise last_exc
+        finally:
+            self._connecting_guilds.discard(guild_id)
+
+    @staticmethod
+    def _format_voice_connect_error(error: BaseException) -> str:
+        """將加入語音頻道的例外轉換為一致的繁體中文使用者提示訊息。"""
+        is_timeout = isinstance(error, (asyncio.TimeoutError, TimeoutError)) or "timeout" in str(error).lower()
+        if is_timeout:
+            return "❌ 加入語音頻道交握逾時（音訊節點未能在期限內完成交握，已自動清理重置連線狀態），請稍後再試一次！"
+        return f"❌ 加入語音頻道時發生錯誤：{error}（已自動退出重置狀態）"
+
+    @staticmethod
     def _is_live_track(track: Any) -> bool:
         """判斷曲目是否為直播串流（is_stream=True、不可跳轉、或時長 < 0 / >= 24 小時 86,400,000 ms，支援曲目物件與字典結構）。"""
         if track is None:
@@ -2393,6 +2898,12 @@ class Music(commands.Cog):
         if guild is None:
             return
         guild_id = guild.id
+        if (
+            guild_id in getattr(self, "_connecting_guilds", ())
+            or getattr(player, "_connecting", False)
+            or getattr(player, "advancing", False)
+        ):
+            return
         await self._sync_player_voice_to_lavalink(player)
 
         if not getattr(player, "connected", False):
@@ -2409,7 +2920,20 @@ class Music(commands.Cog):
 
         length = int(getattr(track, "length", 0) or 0)
         is_stream = self._is_live_track(track)
-        position = 0 if is_stream else (int(getattr(player, "position", 0) or 0) if current is not None else 0)
+        last_update_mono = float(getattr(player, "_last_lavalink_update_mono", 0.0) or 0.0)
+        if is_stream or current is None:
+            position = 0
+        elif last_update_mono > 0.0:
+            last_raw = max(0, int(getattr(player, "_last_raw_lavalink_pos", 0) or 0))
+            if getattr(player, "paused", False):
+                position = last_raw
+            else:
+                extra_ms = max(0, min(int((time.monotonic() - last_update_mono) * 1000), 5000))
+                position = last_raw + extra_ms
+            if length > 0:
+                position = min(position, length)
+        else:
+            position = int(getattr(player, "position", 0) or 0)
 
         try:
             if not is_stream and length > 0 and position >= length - 1500:
@@ -2422,17 +2946,19 @@ class Music(commands.Cog):
                 track = await self._refresh_live_stream_track(track)
                 player._active_track = track
 
+            start_ms = 0 if is_stream else max(0, position)
             print(
-                f"▶️ [Session 復原] {'重新銜接直播' if is_stream else f'從 {format_position(position)} 恢復播放'}"
+                f"▶️ [Session 復原] {'重新銜接直播' if is_stream else f'從 {format_position(start_ms)} 恢復播放'}"
                 f"「{getattr(track, 'title', '?')}」 (guild_id={guild_id})"
             )
             await player.play(
                 track,
                 replace=True,
-                start=0 if is_stream else max(0, position),
+                start=start_ms,
                 volume=getattr(player, "volume", 100),
                 paused=bool(getattr(player, "paused", False)),
             )
+            self._reset_player_position_state(player, start_ms=start_ms)
             await self._notify_panel(guild_id, "🔄 音訊節點連線已自動恢復，繼續播放中。", duration=8.0)
         except Exception as exc:
             print(f"❌ [Session 復原] 恢復播放失敗 (guild_id={guild_id})：{exc}")
@@ -2535,23 +3061,34 @@ class Music(commands.Cog):
                 self._node_alert_sent[identifier] = False
                 print(f"✅ Lavalink 節點已恢復連線：{uri}（identifier={identifier}）")
 
-            # 主動探測 Session 是否仍然有效：WebSocket 看似 CONNECTED，但 Lavalink 端 Session 可能早已被回收
-            # （公開節點重啟／半開連線），此時歌曲會靜默停止且不再送 TrackEndEvent。只在有 player 時探測，避免多餘請求。
-            if status_name == "CONNECTED" and getattr(node, "players", None):
-                try:
-                    remote_players = await node.fetch_players()
-                except Exception as exc:
-                    if self._is_session_lost_error(exc):
-                        await self._reset_lavalink_session(node, reason=f"health check 探測：{exc}")
+            # 主動探測 Session 是否仍然有效：即使目前沒有活躍播放器（閒置狀態），公開節點重啟或回收 Session
+            # 後仍可能留下失效的 session_id，若未事先探測重建，下一次點歌加入語音房就會立刻 404 並秒退。
+            if status_name == "CONNECTED":
+                if hasattr(node, "_session_id") and getattr(node, "_session_id", None) is None:
+                    await self._reset_lavalink_session(node, reason="health check 偵測節點無有效 session_id")
+                    continue
+                fetch_fn = getattr(node, "fetch_players", None)
+                if callable(fetch_fn):
+                    try:
+                        maybe_coro = fetch_fn()
+                        if inspect.isawaitable(maybe_coro):
+                            remote_players = await asyncio.wait_for(maybe_coro, timeout=5.0)
+                            self._last_session_probe_at = time.monotonic()
+                        else:
+                            remote_players = None
+                    except Exception as exc:
+                        if self._is_session_lost_error(exc):
+                            await self._reset_lavalink_session(node, reason=f"health check 探測：{exc}")
+                        else:
+                            print(f">>> node_health_check 探測 Session 失敗（identifier={identifier}）：{exc}")
                     else:
-                        print(f">>> node_health_check 探測 Session 失敗（identifier={identifier}）：{exc}")
-                else:
-                    # Session 仍有效，但 Lavalink 端個別 player 已被銷毀（本地卻還在播）時，同樣進行單一 player 復原
-                    remote_ids = {int(getattr(p, "guild_id", 0) or 0) for p in remote_players}
-                    for gid, local_player in list(node.players.items()):
-                        if gid not in remote_ids and getattr(local_player, "_current", None) is not None:
-                            print(f"🔄 Lavalink 端已找不到 guild_id={gid} 的播放器，嘗試恢復播放")
-                            asyncio.create_task(self._recover_player_after_session_reset(local_player))
+                        if remote_players is not None and getattr(node, "players", None):
+                            # Session 仍有效，但 Lavalink 端個別 player 已被銷毀（本地卻還在播）時，同樣進行單一 player 復原
+                            remote_ids = {int(getattr(p, "guild_id", 0) or 0) for p in remote_players}
+                            for gid, local_player in list(node.players.items()):
+                                if gid not in remote_ids and getattr(local_player, "_current", None) is not None:
+                                    print(f"🔄 Lavalink 端已找不到 guild_id={gid} 的播放器，嘗試恢復播放")
+                                    asyncio.create_task(self._recover_player_after_session_reset(local_player))
 
     @node_health_check.before_loop
     async def before_node_health_check(self):
@@ -2559,21 +3096,87 @@ class Music(commands.Cog):
         # 避免啟動初期 wavelink.Pool 還沒建立好就先檢查、白跑一次。
         await self.bot.wait_until_ready()
 
+    def _record_panel_edit_completion(
+        self,
+        guild_id: int,
+        edit_started: float,
+        *,
+        progress_str: str | None = None,
+        state_sig: tuple | None = None,
+    ) -> None:
+        """記錄面板發送／編輯完成時間並偵測 discord.py 內部 429 重試睡眠。"""
+        edit_done = time.monotonic()
+        self._last_panel_edit_at[guild_id] = edit_done
+        if progress_str is not None:
+            self._last_progress_str[guild_id] = progress_str
+        if state_sig is not None:
+            self._last_panel_state[guild_id] = state_sig
+        elapsed = edit_done - edit_started
+        if elapsed >= PANEL_EDIT_SLOW_THRESHOLD:
+            backoff = max(PANEL_RATE_LIMIT_BACKOFF, elapsed * 2.0)
+            self._rate_limit_until[guild_id] = max(
+                self._rate_limit_until.get(guild_id, 0.0),
+                edit_done + backoff,
+            )
+            print(
+                f"⚠️ [控制面板] 伺服器 {guild_id} 編輯訊息耗時 {elapsed:.2f} 秒（疑似觸發 Discord 內部 429 重試），"
+                f"自動退避 {backoff:.1f} 秒"
+            )
+
+    def _build_panel_state_sig(
+        self,
+        guild_id: int,
+        player: Any,
+        notice: str | None,
+        final: bool,
+        message_id: int | None,
+    ) -> tuple:
+        """建立控制面板的非進度條狀態簽章，避免狀態未變時重複發送 PATCH。"""
+        if player is None or getattr(player, "current", None) is None:
+            return (message_id, None, None, None, None, None, 0, None, notice or "", bool(final))
+        track = player.current
+        track_key = self._track_key(track)
+        is_paused = bool(getattr(player, "paused", False))
+        try:
+            volume = int(getattr(player, "volume", 100))
+        except (ValueError, TypeError):
+            volume = 100
+        loop_mode = getattr(player, "loop_mode", "off")
+        shuffle = bool(getattr(player, "shuffle", False))
+        song_queue = getattr(player, "song_queue", None)
+        q_len = len(song_queue) if song_queue else 0
+        next_key = None
+        if q_len > 0:
+            first_item = song_queue[0]
+            next_track = first_item[0] if isinstance(first_item, (tuple, list)) and first_item else first_item
+            next_key = self._track_key(next_track) if next_track is not None else None
+        return (
+            message_id,
+            track_key,
+            is_paused,
+            volume,
+            loop_mode,
+            shuffle,
+            q_len,
+            next_key,
+            notice or "",
+            bool(final),
+        )
+
     # ---------- 第 6 週新增：全域播放面板進度條更新背景迴圈 ----------
     @tasks.loop(seconds=PROGRESS_UPDATE_INTERVAL)
     async def progress_update_loop(self):
         """第 6 週新增：單一全域背景迴圈，定時刷新所有播放中伺服器的 Embed 進度條。
 
         節流與 API Rate Limit 保護機制：
-        1. 集中常數 PROGRESS_UPDATE_INTERVAL（預設 5 秒），避免頻繁呼叫 Discord API。
-        2. 檢查 HTTP 429 退避時間戳（_rate_limit_until），在冷卻期間內跳過該伺服器。
+        1. 集中常數 PROGRESS_UPDATE_INTERVAL（預設 5 秒），並以 PANEL_PROGRESS_MIN_INTERVAL（預設 10 秒）限制任何兩次面板編輯之間的最短間隔，避開 Discord 單訊息 PATCH 子速率限制。
+        2. 檢查 HTTP 429 退避時間戳（_rate_limit_until），並透過測量 edit 耗時偵測 discord.py 內部 429 重試睡眠。
         3. 若播放器暫停（player.paused），進度不變，直接跳過 edit。
         4. 語音頻道內沒有非機器人使用者時，跳過更新以省資源。
         5. 若計算出的進度條字串與上次完全相同（_last_progress_str），跳過 edit。
         6. 使用 partial message 編輯，省去 GET 訊息請求。
-        7. 捕獲 discord.NotFound（訊息被刪）時清除並嘗試重新發送；捕獲 429 時依 retry_after 退避。
+        7. 捕獲 discord.NotFound（訊息被刪）時清除並嘗試重新發送；捕獲 429 / RateLimited 時依 retry_after 退避。
         """
-        now = time.monotonic()
         guild_ids = list(self.panel_messages.keys())
         for guild_id in guild_ids:
             channel_id = None
@@ -2588,11 +3191,6 @@ class Music(commands.Cog):
                 ):
                     continue
 
-                # 1. 檢查 429 退避冷卻
-                cooldown_until = self._rate_limit_until.get(guild_id, 0.0)
-                if now < cooldown_until:
-                    continue
-
                 guild = self.bot.get_guild(guild_id)
                 if guild is None:
                     continue
@@ -2603,7 +3201,7 @@ class Music(commands.Cog):
                     self._track_overdue_since.pop(guild_id, None)
                     continue
 
-                # 2. 播放器暫停時進度條無變化，跳過 edit 避免消耗 API 額度
+                # 1. 播放器暫停時進度條無變化，跳過 edit 避免消耗 API 額度
                 if getattr(player, "paused", False):
                     self._track_overdue_since.pop(guild_id, None)
                     continue
@@ -2613,7 +3211,7 @@ class Music(commands.Cog):
                 pos_ms = getattr(player, "position", 0)
                 len_ms = getattr(track, "length", None)
 
-                # 曲目結束看門狗（Track-End Watchdog）：
+                # 2. 曲目結束看門狗（Track-End Watchdog，置於編輯冷卻檢查之前，確保退避期間仍能準時換歌）：
                 # wavelink.Player.position 是以本地 monotonic 時間推算並夾限在 track.length。
                 # 當 Lavalink 節點在播放期間遺失 Session 或漏發 TrackEndEvent 時，本地進度會停在 100% (pos_ms >= len_ms)，
                 # 但 on_wavelink_track_end 永遠不會被觸發，導致「當前歌曲播完卻沒自動播放下一首，且按按鈕全部 404」。
@@ -2625,37 +3223,69 @@ class Music(commands.Cog):
                     and pos_ms >= len_ms
                     and not getattr(player, "advancing", False)
                 ):
-                    overdue_info = self._track_overdue_since.get(guild_id)
-                    now_mono = time.monotonic()
-                    if overdue_info is None or overdue_info[0] is not track:
-                        self._track_overdue_since[guild_id] = (track, now_mono)
-                    elif now_mono - overdue_info[1] >= 4.0:
+                    now_wd = time.monotonic()
+                    started_mono = float(getattr(player, "_track_started_mono", 0.0) or 0.0)
+                    start_pos = int(getattr(player, "_track_start_pos", 0) or 0)
+                    last_update_mono = float(getattr(player, "_last_lavalink_update_mono", 0.0) or 0.0)
+                    has_raw_pos = last_update_mono > 0.0
+                    raw_pos_now = int(getattr(player, "_last_raw_lavalink_pos", 0) or 0) if has_raw_pos else int(pos_ms or 0)
+
+                    # 新歌剛啟動未滿 5 秒且起播位置非曲尾：多為換歌殘留時鐘／延遲更新，不可誤判已播完
+                    if started_mono > 0.0 and (now_wd - started_mono) < 5.0 and start_pos < len_ms - 5000:
                         self._track_overdue_since.pop(guild_id, None)
-                        print(
-                            f"⚠️ [播放看門狗] 偵測到「{getattr(track, 'title', '?')}」已達曲目結尾但未收到 TrackEndEvent，"
-                            f"自動觸發換歌流程 (guild_id={guild_id})"
-                        )
-                        await self.on_wavelink_track_end(
-                            SimpleNamespace(player=player, reason="finished", track=track)
-                        )
-                        continue
+                    # Lavalink 最後回報的真實位置離結尾尚遠（>15 秒）：屬中途停頓／斷流，絕不可當作自然播完切歌
+                    elif has_raw_pos and raw_pos_now < len_ms - 15_000:
+                        self._track_overdue_since.pop(guild_id, None)
+                    else:
+                        overdue_info = self._track_overdue_since.get(guild_id)
+                        if (
+                            overdue_info is None
+                            or overdue_info[0] is not track
+                            or (len(overdue_info) >= 3 and raw_pos_now > overdue_info[2])
+                        ):
+                            self._track_overdue_since[guild_id] = (track, now_wd, raw_pos_now)
+                        elif now_wd - overdue_info[1] >= 4.0:
+                            self._track_overdue_since.pop(guild_id, None)
+                            print(
+                                f"⚠️ [播放看門狗] 偵測到「{getattr(track, 'title', '?')}」已達曲目結尾但未收到 TrackEndEvent，"
+                                f"自動觸發換歌流程 (guild_id={guild_id})"
+                            )
+                            await self.on_wavelink_track_end(
+                                SimpleNamespace(
+                                    player=player,
+                                    reason="finished",
+                                    track=track,
+                                    _synthetic=True,
+                                    _expected_play_seq=getattr(player, "_play_seq", 0),
+                                )
+                            )
+                            continue
                 else:
                     self._track_overdue_since.pop(guild_id, None)
 
-                # 3. 語音頻道是否有真人成員（排除機器人）
+                # 3. 檢查 429 退避冷卻與跨路徑最小編輯間隔（動態讀取 time.monotonic()，避免前序 await 影響判斷）
+                now_mono = time.monotonic()
+                cooldown_until = self._rate_limit_until.get(guild_id, 0.0)
+                if now_mono < cooldown_until:
+                    continue
+                last_edit_at = self._last_panel_edit_at.get(guild_id)
+                if last_edit_at is not None and (now_mono - last_edit_at) < PANEL_PROGRESS_MIN_INTERVAL:
+                    continue
+
+                # 4. 語音頻道是否有真人成員（排除機器人）
                 vc = getattr(player, "channel", None)
                 if vc is not None:
                     members = getattr(vc, "members", [])
                     if not any(not getattr(m, "bot", False) for m in members):
                         continue
 
-                # 4. 取得當前進度字串並檢查是否與上次相同
+                # 5. 取得當前進度字串並檢查是否與上次相同
                 current_progress_str = build_progress_bar(pos_ms, len_ms, is_stream=is_stream)
 
                 if self._last_progress_str.get(guild_id) == current_progress_str:
                     continue
 
-                # 5. 取得面板資訊
+                # 6. 取得面板資訊
                 panel_info = self.panel_messages.get(guild_id)
                 if not panel_info:
                     continue
@@ -2673,18 +3303,32 @@ class Music(commands.Cog):
                 async with self._get_panel_lock(guild_id):
                     if not self._is_playback_active(player) or self.panel_messages.get(guild_id) != (channel_id, message_id):
                         continue
+                    now_locked = time.monotonic()
+                    if now_locked < self._rate_limit_until.get(guild_id, 0.0):
+                        continue
+                    last_edit_locked = self._last_panel_edit_at.get(guild_id)
+                    if last_edit_locked is not None and (now_locked - last_edit_locked) < PANEL_PROGRESS_MIN_INTERVAL:
+                        continue
 
+                    notice_now = self._panel_notices.get(guild_id)
                     view = MusicControlView(
                         self,
                         player=player,
-                        notice=self._panel_notices.get(guild_id),
+                        notice=notice_now,
                     )
                     view.refresh_buttons(player)
 
-                    # 6. 使用 partial_message 編輯，直接發送 PATCH 請求，省去 fetch_message 的 GET 請求
+                    # 7. 使用 partial_message 編輯，直接發送 PATCH 請求，省去 fetch_message 的 GET 請求
                     msg = channel.get_partial_message(message_id)
+                    edit_started = time.monotonic()
                     await msg.edit(content=None, embed=None, view=view)
-                    self._last_progress_str[guild_id] = current_progress_str
+                    state_sig = self._build_panel_state_sig(guild_id, player, notice_now, False, message_id)
+                    self._record_panel_edit_completion(
+                        guild_id,
+                        edit_started,
+                        progress_str=current_progress_str,
+                        state_sig=state_sig,
+                    )
 
             except discord.NotFound:
                 # 只有當記錄中的面板 ID 仍然是剛剛編輯失敗的那則 message_id，且仍在播放中時，才視為面板被刪除並重發
@@ -2695,17 +3339,33 @@ class Music(commands.Cog):
                 ):
                     self.panel_messages.pop(guild_id, None)
                     self._last_progress_str.pop(guild_id, None)
+                    self._last_panel_edit_at.pop(guild_id, None)
+                    self._last_panel_state.pop(guild_id, None)
                     if self._is_playback_active(player):
                         print(f"ℹ️ [進度條更新] 伺服器 {guild_id} 控制面板訊息已被刪除，嘗試重新發送面板...")
                         try:
                             await self._sync_panel(guild_id, player)
                         except Exception as exc:
                             print(f"⚠️ [進度條更新] 重新發送面板失敗 (guild_id={guild_id}): {exc}")
+            except discord.RateLimited as exc:
+                retry_after = float(getattr(exc, "retry_after", PANEL_RATE_LIMIT_BACKOFF) or PANEL_RATE_LIMIT_BACKOFF)
+                now_exc = time.monotonic()
+                print(f"⚠️ [進度條更新] 伺服器 {guild_id} 觸發 Discord API Rate Limit，將暫停更新 {retry_after:.1f} 秒")
+                self._rate_limit_until[guild_id] = max(
+                    self._rate_limit_until.get(guild_id, 0.0),
+                    now_exc + retry_after,
+                )
+                self._last_panel_edit_at[guild_id] = now_exc
             except discord.HTTPException as exc:
                 if getattr(exc, "status", None) == 429:
                     retry_after = float(getattr(exc, "retry_after", 5.0) or 5.0)
+                    now_exc = time.monotonic()
                     print(f"⚠️ [進度條更新] 伺服器 {guild_id} 觸發 Discord API Rate Limit (429)，將暫停更新 {retry_after:.1f} 秒")
-                    self._rate_limit_until[guild_id] = time.monotonic() + retry_after
+                    self._rate_limit_until[guild_id] = max(
+                        self._rate_limit_until.get(guild_id, 0.0),
+                        now_exc + retry_after,
+                    )
+                    self._last_panel_edit_at[guild_id] = now_exc
                 else:
                     print(f"⚠️ [進度條更新] 伺服器 {guild_id} 遭遇 HTTPException (status={getattr(exc, 'status', None)}): {exc}")
             except Exception as exc:
@@ -2745,6 +3405,23 @@ class Music(commands.Cog):
         if started_track is not None:
             player._started_track = started_track
         await self._sync_panel(player.guild.id, player)
+
+    @commands.Cog.listener()
+    async def on_wavelink_player_update(self, payload: Any):
+        """接收 Lavalink 週期性進度回報，同步真實播放位置並過濾換歌瞬間殘留的舊曲進度。"""
+        player = getattr(payload, "player", None)
+        if player is None:
+            return
+        raw_pos = int(getattr(payload, "position", 0) or 0)
+        is_stale = self._handle_player_update_telemetry(player, raw_pos)
+        if is_stale and not getattr(player, "_is_stable_voice_player", False):
+            start_pos = max(0, int(getattr(player, "_track_start_pos", 0) or 0))
+            if hasattr(player, "_last_update"):
+                player._last_update = time.monotonic_ns()
+            if hasattr(player, "_last_position"):
+                player._last_position = start_pos
+            if hasattr(player, "position") and not isinstance(getattr(type(player), "position", None), property):
+                player.position = start_pos
 
     @commands.Cog.listener()
     async def on_wavelink_track_exception(self, payload: Any):
@@ -2864,11 +3541,46 @@ class Music(commands.Cog):
             finally:
                 player._retrying_live_stream = False
             return
-        # 一般非直播曲目若卡住且已接近結尾，直接觸發結束換下一首
+        # 一般非直播曲目若卡住且已接近結尾，直接觸發結束換下一首；若仍在曲中則自動從斷點重新續播以解除卡頓
         pos = int(getattr(player, "position", 0) or 0)
         length = int(getattr(track, "length", 0) or 0)
         if length > 0 and pos >= length - 3000:
             await self.on_wavelink_track_end(SimpleNamespace(player=player, reason="finished", track=track))
+            return
+
+        if (
+            getattr(track, "is_seekable", True)
+            and not getattr(player, "advancing", False)
+            and int(getattr(player, "_mid_track_retry_count", 0) or 0) < 2
+        ):
+            has_raw = float(getattr(player, "_last_lavalink_update_mono", 0.0) or 0.0) > 0.0
+            resume_pos = max(
+                0,
+                int(getattr(player, "_last_raw_lavalink_pos", 0) or 0) if has_raw else pos,
+            )
+            if length > 0:
+                resume_pos = min(resume_pos, max(0, length - 1000))
+            player._mid_track_retry_count = int(getattr(player, "_mid_track_retry_count", 0) or 0) + 1
+            player._mid_track_retry_pos = resume_pos
+            requester_name = getattr(player, "current_requester", None) or "未知"
+            requester_id = getattr(player, "current_requester_id", None)
+            print(
+                f"🔄 [卡頓自動續播] 偵測到「{getattr(track, 'title', '?')}」於 {format_position(resume_pos)} 緩衝卡住 (TrackStuck)，"
+                f"自動從斷點續播（第 {player._mid_track_retry_count}/2 次，guild_id={guild_id}）"
+            )
+            player.advancing = True
+            player._retrying_mid_track = True
+            try:
+                await self._play_track(
+                    player, track, requester_name, requester_id, start_position=resume_pos
+                )
+            except Exception as exc:
+                print(f"⚠️ [卡頓自動續播] 從斷點續播失敗：{exc}")
+                if self._is_session_lost_error(exc):
+                    await self._handle_session_lost(player, exc)
+            finally:
+                player._retrying_mid_track = False
+                player.advancing = False
 
     @commands.Cog.listener()
     async def on_wavelink_track_end(self, payload: Any):
@@ -2905,12 +3617,18 @@ class Music(commands.Cog):
                 self._cancel_panel_bump(guild_obj.id, force=True)
             return
 
+        active_track = getattr(player, "_active_track", None)
+        expected_seq = getattr(payload, "_expected_play_seq", None)
+        if expected_seq is not None and expected_seq != getattr(player, "_play_seq", 0):
+            self._restore_current_track(player, active_track)
+            return
+
         # 防護 1：若正在進行換歌（advancing），忽略重入事件避免連跳兩首
         if getattr(player, "advancing", False):
+            self._restore_current_track(player, active_track)
             return
 
         ended_track = getattr(payload, "track", None)
-        active_track = getattr(player, "_active_track", None)
         started_track = getattr(player, "_started_track", None)
 
         # 防護 2：若事件夾帶的曲目與目前實際在播的 _active_track（及 _started_track）皆不同，
@@ -2919,39 +3637,49 @@ class Music(commands.Cog):
             matches_active = self._is_same_track(ended_track, active_track)
             matches_started = started_track is not None and self._is_same_track(ended_track, started_track)
             if not matches_active and not matches_started:
-                if getattr(player, "current", None) is None:
-                    try:
-                        player._current = active_track
-                    except Exception:
-                        pass
+                self._restore_current_track(player, active_track)
                 return
 
-        # 讀出並立刻消耗旗標，避免影響下一首
+        # 讀出意圖，確認非殘留／重複事件後再消耗
         intent = getattr(player, "end_intent", None)
-        player.end_intent = None
 
         # 防護 3：Lavalink 的 stopped 只會在主動呼叫 skip/stop 時發出；若沒有對應的 end_intent，
         # 代表是重複派發或殘留的停止事件，不能當成自然播完去切下一首。
         if reason == "stopped" and intent is None:
-            if active_track is not None and getattr(player, "current", None) is None:
-                try:
-                    player._current = active_track
-                except Exception:
-                    pass
+            self._restore_current_track(player, active_track)
+            return
+
+        # 同曲重播瞬間重複結束防護：剛啟動同首歌未滿 2 秒（且曲長 >= 5 秒）即收到非人工合成 finished 且無意圖，
+        # 多為上一輪單曲循環／重播延遲抵達的 TrackEndEvent，還原 _current 並忽略。
+        active_len = int(getattr(active_track, "length", 0) or 0) if active_track is not None else 0
+        last_ended_track = getattr(player, "_last_ended_track", None)
+        started_mono = float(getattr(player, "_track_started_mono", 0.0) or 0.0)
+        if (
+            not getattr(payload, "_synthetic", False)
+            and reason == "finished"
+            and intent is None
+            and active_track is not None
+            and ended_track is not None
+            and last_ended_track is not None
+            and active_len >= 5000
+            and started_mono > 0.0
+            and (time.monotonic() - started_mono) < 2.0
+            and self._is_same_track(ended_track, last_ended_track)
+        ):
+            self._restore_current_track(player, active_track)
             return
 
         # 防護 4：同一個播放序號（_play_seq）只允許觸發一次 track_end 換歌流程
         play_seq = getattr(player, "_play_seq", 0)
         if play_seq > 0:
             if getattr(player, "_last_ended_seq", None) == play_seq:
-                if active_track is not None and getattr(player, "current", None) is None:
-                    try:
-                        player._current = active_track
-                    except Exception:
-                        pass
+                self._restore_current_track(player, active_track)
                 return
             player._last_ended_seq = play_seq
 
+        player.end_intent = None
+        player._last_ended_track = active_track or ended_track
+        player._last_ended_mono = time.monotonic()
         player._active_track = None
         player._started_track = None
 
@@ -3014,6 +3742,64 @@ class Music(commands.Cog):
             player._is_current_stream = False
             ended_track = None
             replay_track = None
+
+        # ---------- 一般曲目中途異常斷流／提早結束斷點續播 ----------
+        if (
+            intent is None
+            and not is_live
+            and replay_track is not None
+            and reason in ("finished", "loadfailed", "load_failed")
+        ):
+            track_len = int(getattr(replay_track, "length", 0) or 0)
+            last_update_mono = float(getattr(player, "_last_lavalink_update_mono", 0.0) or 0.0)
+            last_raw_pos = int(getattr(player, "_last_raw_lavalink_pos", 0) or 0)
+            if (
+                getattr(replay_track, "is_seekable", True)
+                and track_len >= 20_000
+                and last_update_mono > 0.0
+                and last_raw_pos >= 2000
+            ):
+                if getattr(player, "paused", False):
+                    resume_pos = last_raw_pos
+                else:
+                    extra_ms = max(0, min(int((time.monotonic() - last_update_mono) * 1000), 5000))
+                    resume_pos = last_raw_pos + extra_ms
+                retry_count = int(getattr(player, "_mid_track_retry_count", 0) or 0)
+                if resume_pos < track_len - 12_000 and retry_count < 2:
+                    player._mid_track_retry_count = retry_count + 1
+                    player._mid_track_retry_pos = resume_pos
+                    guild_obj = getattr(player, "guild", None)
+                    gid = guild_obj.id if guild_obj else None
+                    print(
+                        f"🔄 [斷流自動續播] 非直播曲目「{getattr(replay_track, 'title', '?')}」於 "
+                        f"{format_position(resume_pos)} / {format_position(track_len)} 收到 {reason}，"
+                        f"自動從斷點續播（第 {player._mid_track_retry_count}/2 次，guild_id={gid}）"
+                    )
+                    player.advancing = True
+                    player._retrying_mid_track = True
+                    try:
+                        retry_track = (
+                            await self._refresh_live_stream_track(replay_track)
+                            if reason in ("loadfailed", "load_failed")
+                            else replay_track
+                        )
+                        await self._play_track(
+                            player,
+                            retry_track,
+                            requester_name,
+                            requester_id,
+                            start_position=resume_pos,
+                        )
+                        return
+                    except Exception as exc:
+                        print(f"ℹ️ [斷流自動續播] 從斷點續播失敗：{exc}")
+                        if self._is_session_lost_error(exc):
+                            player._active_track = replay_track
+                            await self._handle_session_lost(player, exc)
+                            return
+                    finally:
+                        player._retrying_mid_track = False
+                        player.advancing = False
 
         if reason in ("loadfailed", "load_failed"):
             ended_track = None
@@ -3154,6 +3940,9 @@ class Music(commands.Cog):
             return
 
         guild = member.guild
+        if member.id == self.bot.user.id and guild.id in getattr(self, "_connecting_guilds", ()):
+            return
+
         player: "wavelink_module.Player | None" = guild.voice_client
 
         if player is None:
@@ -3161,12 +3950,12 @@ class Music(commands.Cog):
             # 但保險起見還是清一次，避免機器人被強制斷線（例如被踢出頻道）
             # 導致計時器變成孤兒、永遠不會被觸發也永遠不會被取消。
             self._cancel_empty_channel_timer(guild.id)
-            # 第 7 週：Bot 被踢出／斷線時，背景匯入也要取消，並把面板收成最終狀態
-            if guild.id in self._import_tasks:
-                self._cancel_import(guild.id)
-            if member.id == self.bot.user.id:
+            if member.id == self.bot.user.id and after.channel is None:
+                # 第 7 週：Bot 被踢出／斷線時，背景匯入也要取消，並把面板收成最終狀態
+                if guild.id in self._import_tasks:
+                    self._cancel_import(guild.id)
                 self._cancel_guild_control_views(guild.id)
-                await self._cleanup_guild_voice_and_player(guild)
+                await self._cleanup_guild_voice_and_player(guild, reset_gateway=False)
                 if guild.id in self.panel_messages:
                     await self._update_panel_ended(guild.id, reason="👋 我已離開語音頻道，想聽歌再 `/music_play` 一次就可以！")
             return
@@ -3273,7 +4062,9 @@ class Music(commands.Cog):
                 pass
 
     # ---------- 共用邏輯 ----------
-    async def _cleanup_guild_voice_and_player(self, guild: discord.Guild) -> None:
+    async def _cleanup_guild_voice_and_player(
+        self, guild: discord.Guild, *, reset_gateway: bool = True
+    ) -> None:
         """徹底清理指定伺服器的語音連線、wavelink Player 與 Lavalink 節點殘留狀態。
 
         解決症狀：機器人加入語音房時立刻退出、30 秒交握逾時（ChannelTimeoutException）與幽靈連線。
@@ -3283,19 +4074,27 @@ class Music(commands.Cog):
         if guild is None:
             return
 
-        # 1. 斷開 Discord.py VoiceClient
+        # 1. 斷開 Discord.py VoiceClient（若 disconnect 失敗仍確保從 ConnectionState 移除）
         vc = guild.voice_client
         if vc is not None:
             try:
                 await vc.disconnect(force=True)
             except Exception as exc:
                 print(f"⚠️ 清理 VoiceClient 失敗 (guild_id={guild.id})：{exc}")
+            if guild.voice_client is not None:
+                cleanup_fn = getattr(vc, "cleanup", None)
+                if callable(cleanup_fn):
+                    try:
+                        cleanup_fn()
+                    except Exception:
+                        pass
 
-        # 2. 強制透過 Discord Gateway 發送語音狀態 None，重置伺服器端半開（half-open）狀態
-        try:
-            await guild.change_voice_state(channel=None)
-        except Exception as exc:
-            print(f"⚠️ 重置 Gateway 語音狀態失敗 (guild_id={guild.id})：{exc}")
+        # 2. 若需重置 Gateway 狀態，發送語音狀態 None 以清除伺服器端半開（half-open）狀態
+        if reset_gateway:
+            try:
+                await guild.change_voice_state(channel=None)
+            except Exception as exc:
+                print(f"⚠️ 重置 Gateway 語音狀態失敗 (guild_id={guild.id})：{exc}")
 
         # 3. 清理 wavelink 節點上的 _players 與 Lavalink 服務端的 player
         if wavelink is not None:
@@ -3345,7 +4144,7 @@ class Music(commands.Cog):
                 return None
 
             try:
-                player = await user_channel.connect(cls=wavelink.Player)
+                player = await self._connect_voice_channel(interaction.guild, user_channel)
                 # 第3週更新：改成 disabled，改由我們自己的 song_queue +
                 # on_wavelink_track_end 監聽器接管「播完自動接下一首」的邏輯，
                 # 避免跟 wavelink 內建的 autoplay 互相搶著呼叫 player.play()。
@@ -3353,18 +4152,12 @@ class Music(commands.Cog):
                 player.song_queue = deque()
             except Exception as e:
                 print(f">>> /play 加入語音頻道失敗：{e}")
-                # 關鍵防護：若 handshake 失敗或逾時（例如 Lavalink session 異常導致機器人被立刻踢出，
-                # 觸發 ChannelTimeoutException 30 秒逾時），徹底清理 VoiceClient、Gateway 語音狀態與 Lavalink 端狀態
+                # 關鍵防護：若 handshake 失敗或逾時，徹底清理 VoiceClient、Gateway 語音狀態與 Lavalink 端狀態
                 await self._cleanup_guild_voice_and_player(interaction.guild)
                 asyncio.create_task(self._reconnect_lavalink_if_needed())
 
                 await self.bot.notify_owner_error(e, interaction, extra_info=f"/play 加入 {user_channel} 失敗")
-                is_timeout = isinstance(e, (asyncio.TimeoutError, TimeoutError)) or "timeout" in str(e).lower()
-                if is_timeout:
-                    err_msg = "❌ 加入語音頻道交握逾時（音訊節點未能在期限內完成交握，已自動清理重置連線狀態），請稍後再試一次！"
-                else:
-                    err_msg = f"❌ 加入語音頻道時發生錯誤：{e}（已自動退出重置狀態）"
-                await self._ephemeral_error(interaction, err_msg)
+                await self._ephemeral_error(interaction, self._format_voice_connect_error(e))
                 return None
         elif player.channel.id != user_channel.id:
             await self._ephemeral_error(
@@ -3409,8 +4202,8 @@ class Music(commands.Cog):
 
         if interaction.guild.voice_client is not None:
             vc = interaction.guild.voice_client
-            # 檢查是否為殘留的失效/非正常連線
-            if not getattr(vc, "connected", True):
+            # 檢查是否為殘留的失效/非正常連線（包含 channel 遺失的孤兒 VoiceClient）
+            if not getattr(vc, "connected", True) or getattr(vc, "channel", None) is None:
                 await self._cleanup_guild_voice_and_player(interaction.guild)
             else:
                 target_channel = getattr(vc, "channel", None)
@@ -3439,21 +4232,15 @@ class Music(commands.Cog):
             return
 
         try:
-            player = await channel.connect(cls=wavelink.Player)
+            player = await self._connect_voice_channel(interaction.guild, channel)
         except Exception as e:
             print(f">>> 加入語音頻道失敗：{e}")
-            # 關鍵防護：若 handshake 失敗或逾時（例如 Lavalink session 異常導致機器人被立刻踢出，
-            # 觸發 ChannelTimeoutException 30 秒逾時），徹底清理 VoiceClient、Gateway 語音狀態與 Lavalink 端狀態
+            # 關鍵防護：若 handshake 失敗或逾時，徹底清理 VoiceClient、Gateway 語音狀態與 Lavalink 端狀態
             await self._cleanup_guild_voice_and_player(interaction.guild)
             asyncio.create_task(self._reconnect_lavalink_if_needed())
 
             await self.bot.notify_owner_error(e, interaction, extra_info=f"/join 加入 {channel} 失敗")
-            is_timeout = isinstance(e, (asyncio.TimeoutError, TimeoutError)) or "timeout" in str(e).lower()
-            if is_timeout:
-                err_msg = "❌ 加入語音頻道交握逾時（音訊節點未能在期限內完成交握，已自動清理重置連線狀態），請稍後再試一次！"
-            else:
-                err_msg = f"❌ 加入語音頻道時發生錯誤：{e}（已自動退出重置狀態）"
-            await interaction.followup.send(err_msg, ephemeral=True)
+            await interaction.followup.send(self._format_voice_connect_error(e), ephemeral=True)
             return
 
         # 第3週更新：與 _ensure_player 一致，改成 disabled，
@@ -3770,35 +4557,82 @@ class Music(commands.Cog):
             if interaction is None and guild_id in self._pending_panel_interaction:
                 interaction = self._pending_panel_interaction.pop(guild_id, None)
 
+            notice_text = notice_override if notice_override is not None else self._panel_notices.get(guild_id)
+            tracked = panel_info_override if panel_info_override is not None else self.panel_messages.get(guild_id)
+            tracked_msg_id = tracked[1] if tracked else None
+            state_sig = self._build_panel_state_sig(guild_id, player, notice_text, final, tracked_msg_id)
+
+            # 非互動式的非最終更新：遵守 429 退避與狀態簽章去重，避免於冷卻期或短時間內對同狀態重複發送 PATCH
+            if interaction is None and not final and tracked is not None:
+                now_mono = time.monotonic()
+                if now_mono < self._rate_limit_until.get(guild_id, 0.0):
+                    self._last_progress_str.pop(guild_id, None)
+                    return
+                last_edit_at = self._last_panel_edit_at.get(guild_id)
+                if (
+                    self._last_panel_state.get(guild_id) == state_sig
+                    and last_edit_at is not None
+                    and (now_mono - last_edit_at) < PANEL_PROGRESS_MIN_INTERVAL
+                ):
+                    return
+
             view = MusicControlView(
                 self,
                 player=player,
-                notice=notice_override if notice_override is not None else self._panel_notices.get(guild_id),
+                notice=notice_text,
             )
             view.refresh_buttons(player)
-
-            tracked = panel_info_override if panel_info_override is not None else self.panel_messages.get(guild_id)
 
             # 優先以 interaction 回應
             if interaction is not None:
                 try:
+                    edit_started = time.monotonic()
                     if not interaction.response.is_done():
                         await interaction.response.edit_message(content=None, embed=None, view=view)
                     else:
                         await interaction.edit_original_response(content=None, embed=None, view=view)
+                    progress_str_now = None
                     if player is not None and getattr(player, "current", None) is not None:
                         pos = getattr(player, "position", 0)
                         length = getattr(player.current, "length", 0)
                         is_stream = self._is_live_track(player.current)
-                        self._last_progress_str[guild_id] = build_progress_bar(pos, length, is_stream=is_stream)
-                    # final 模式：只有「被按的那則就是記錄中的面板」才算處理完，否則繼續編輯記錄中的面板
+                        progress_str_now = build_progress_bar(pos, length, is_stream=is_stream)
                     msg_id = getattr(getattr(interaction, "message", None), "id", None)
+                    inter_sig = (
+                        self._build_panel_state_sig(guild_id, player, notice_text, final, msg_id)
+                        if msg_id is not None
+                        else state_sig
+                    )
+                    self._record_panel_edit_completion(
+                        guild_id,
+                        edit_started,
+                        progress_str=progress_str_now,
+                        state_sig=inter_sig,
+                    )
+                    # final 模式：只有「被按的那則就是記錄中的面板」才算處理完，否則繼續編輯記錄中的面板
                     if not final or tracked is None or tracked[1] == msg_id:
                         return
+                except discord.RateLimited as exc:
+                    retry_after = float(getattr(exc, "retry_after", PANEL_RATE_LIMIT_BACKOFF) or PANEL_RATE_LIMIT_BACKOFF)
+                    now_exc = time.monotonic()
+                    self._rate_limit_until[guild_id] = max(
+                        self._rate_limit_until.get(guild_id, 0.0),
+                        now_exc + retry_after,
+                    )
+                    self._last_panel_edit_at[guild_id] = now_exc
+                    print(f">>> 透過 interaction 更新面板觸發 Rate Limit：{exc}")
                 except (discord.NotFound, discord.HTTPException) as exc:
-                    print(f">>> 透過 interaction 更新面板失敗，改走 fetch_message：{exc}")
+                    if getattr(exc, "status", None) == 429:
+                        retry_after = float(getattr(exc, "retry_after", PANEL_RATE_LIMIT_BACKOFF) or PANEL_RATE_LIMIT_BACKOFF)
+                        now_exc = time.monotonic()
+                        self._rate_limit_until[guild_id] = max(
+                            self._rate_limit_until.get(guild_id, 0.0),
+                            now_exc + retry_after,
+                        )
+                        self._last_panel_edit_at[guild_id] = now_exc
+                    print(f">>> 透過 interaction 更新面板失敗，改走訊息編輯：{exc}")
 
-            # 無 interaction 時，透過記錄的 channel_id 與 message_id 編輯既有訊息
+            # 無 interaction 時，透過記錄的 channel_id 與 message_id 編輯既有訊息（優先使用 partial_message 省去 GET）
             panel_info = tracked
             target_channel = getattr(player, "home_channel", None) if player else None
 
@@ -3813,20 +4647,53 @@ class Music(commands.Cog):
 
                 if channel is not None:
                     try:
-                        msg = await channel.fetch_message(message_id)
+                        partial_fn = getattr(channel, "get_partial_message", None)
+                        msg = partial_fn(message_id) if callable(partial_fn) else None
+                        if msg is None or not inspect.iscoroutinefunction(getattr(msg, "edit", None)):
+                            msg = await channel.fetch_message(message_id)
+                        edit_started = time.monotonic()
                         await msg.edit(content=None, embed=None, view=view)
+                        progress_str_now = None
                         if player is not None and getattr(player, "current", None) is not None:
                             pos = getattr(player, "position", 0)
                             length = getattr(player.current, "length", 0)
                             is_stream = self._is_live_track(player.current)
-                            self._last_progress_str[guild_id] = build_progress_bar(pos, length, is_stream=is_stream)
+                            progress_str_now = build_progress_bar(pos, length, is_stream=is_stream)
+                        self._record_panel_edit_completion(
+                            guild_id,
+                            edit_started,
+                            progress_str=progress_str_now,
+                            state_sig=self._build_panel_state_sig(guild_id, player, notice_text, final, message_id),
+                        )
                         return
                     except discord.NotFound:
                         print(f"ℹ️ 控制面板訊息已被刪除 (message_id={message_id})，將重新發送新面板。")
                         if self.panel_messages.get(guild_id) == (channel_id, message_id):
                             self.panel_messages.pop(guild_id, None)
                         self._last_progress_str.pop(guild_id, None)
+                        self._last_panel_edit_at.pop(guild_id, None)
+                        self._last_panel_state.pop(guild_id, None)
+                    except discord.RateLimited as exc:
+                        retry_after = float(getattr(exc, "retry_after", PANEL_RATE_LIMIT_BACKOFF) or PANEL_RATE_LIMIT_BACKOFF)
+                        now_exc = time.monotonic()
+                        self._rate_limit_until[guild_id] = max(
+                            self._rate_limit_until.get(guild_id, 0.0),
+                            now_exc + retry_after,
+                        )
+                        self._last_panel_edit_at[guild_id] = now_exc
+                        self._last_progress_str.pop(guild_id, None)
+                        print(f"⚠️ 編輯控制面板訊息觸發 Rate Limit：{exc}")
+                        return
                     except discord.HTTPException as exc:
+                        if getattr(exc, "status", None) == 429:
+                            retry_after = float(getattr(exc, "retry_after", PANEL_RATE_LIMIT_BACKOFF) or PANEL_RATE_LIMIT_BACKOFF)
+                            now_exc = time.monotonic()
+                            self._rate_limit_until[guild_id] = max(
+                                self._rate_limit_until.get(guild_id, 0.0),
+                                now_exc + retry_after,
+                            )
+                            self._last_panel_edit_at[guild_id] = now_exc
+                            self._last_progress_str.pop(guild_id, None)
                         print(f"⚠️ 編輯控制面板訊息失敗：{exc}")
                         return
 
@@ -3834,6 +4701,7 @@ class Music(commands.Cog):
             if not final and target_channel is not None and self._is_playback_active(player):
                 self._sending_panel_guilds.add(guild_id)
                 try:
+                    edit_started = time.monotonic()
                     new_msg = await target_channel.send(view=view)
                     self._known_panel_msg_ids.append(new_msg.id)
                     self.panel_messages[guild_id] = (target_channel.id, new_msg.id)
@@ -3842,11 +4710,29 @@ class Music(commands.Cog):
                     pos = getattr(player, "position", 0)
                     length = getattr(player.current, "length", 0)
                     is_stream = self._is_live_track(player.current)
-                    self._last_progress_str[guild_id] = build_progress_bar(pos, length, is_stream=is_stream)
+                    self._record_panel_edit_completion(
+                        guild_id,
+                        edit_started,
+                        progress_str=build_progress_bar(pos, length, is_stream=is_stream),
+                        state_sig=self._build_panel_state_sig(guild_id, player, notice_text, final, new_msg.id),
+                    )
                     await self._cleanup_old_panels(
                         guild_id, keep_message_id=new_msg.id, default_channel=target_channel
                     )
+                except discord.RateLimited as exc:
+                    retry_after = float(getattr(exc, "retry_after", PANEL_RATE_LIMIT_BACKOFF) or PANEL_RATE_LIMIT_BACKOFF)
+                    self._rate_limit_until[guild_id] = max(
+                        self._rate_limit_until.get(guild_id, 0.0),
+                        time.monotonic() + retry_after,
+                    )
+                    print(f"❌ 發送新控制面板訊息觸發 Rate Limit：{exc}")
                 except discord.HTTPException as exc:
+                    if getattr(exc, "status", None) == 429:
+                        retry_after = float(getattr(exc, "retry_after", PANEL_RATE_LIMIT_BACKOFF) or PANEL_RATE_LIMIT_BACKOFF)
+                        self._rate_limit_until[guild_id] = max(
+                            self._rate_limit_until.get(guild_id, 0.0),
+                            time.monotonic() + retry_after,
+                        )
                     print(f"❌ 發送新控制面板訊息失敗：{exc}")
                 finally:
                     self._sending_panel_guilds.discard(guild_id)
@@ -3877,6 +4763,8 @@ class Music(commands.Cog):
         self._last_bump_at.pop(guild_id, None)
         self._last_progress_str.pop(guild_id, None)
         self._rate_limit_until.pop(guild_id, None)
+        self._last_panel_edit_at.pop(guild_id, None)
+        self._last_panel_state.pop(guild_id, None)
         task = self._panel_notice_tasks.pop(guild_id, None)
         if task and not task.done():
             task.cancel()
@@ -3898,6 +4786,9 @@ class Music(commands.Cog):
         )
         # 拋棄並清理同場播放可能殘留的多餘舊面板（保留最終顯示已結束的那一則）
         self.panel_messages.pop(guild_id, None)
+        self._last_progress_str.pop(guild_id, None)
+        self._last_panel_edit_at.pop(guild_id, None)
+        self._last_panel_state.pop(guild_id, None)
         keep_id = (
             panel_info[1]
             if panel_info is not None
@@ -4124,6 +5015,7 @@ class Music(commands.Cog):
             self._bumping_guilds.add(guild_id)
             self._sending_panel_guilds.add(guild_id)
             try:
+                send_started = time.monotonic()
                 new_msg = await channel.send(view=view)
                 self._known_panel_msg_ids.append(new_msg.id)
                 # 若在發送新面板的網路等待期間，播放已經停止／結束或面板已被拋棄，立即收回這則新面板並中止
@@ -4147,7 +5039,14 @@ class Music(commands.Cog):
                 pos = getattr(player, "position", 0)
                 length = getattr(player.current, "length", 0)
                 is_stream = self._is_live_track(player.current)
-                self._last_progress_str[guild_id] = build_progress_bar(pos, length, is_stream=is_stream)
+                self._record_panel_edit_completion(
+                    guild_id,
+                    send_started,
+                    progress_str=build_progress_bar(pos, length, is_stream=is_stream),
+                    state_sig=self._build_panel_state_sig(
+                        guild_id, player, self._panel_notices.get(guild_id), False, new_msg.id
+                    ),
+                )
             except discord.HTTPException as exc:
                 if getattr(exc, "status", None) == 429:
                     retry_after = float(getattr(exc, "retry_after", 5.0) or 5.0)
@@ -4804,16 +5703,32 @@ class Music(commands.Cog):
         requester_name = interaction.user.display_name
         requester_id = interaction.user.id
 
+        owner_tag = "你的歌單" if is_own else f"{owner_name} 的歌單"
+        saved_hint = "（已透過分享碼自動收藏至你的歌單選單）" if (used_share_code and not is_own) else ""
+        shuffle_hint = "（🔀 已隨機排列）" if shuffle else ""
+        notice = (
+            f"📀 **已載入{owner_tag}「{pl_name}」**：共 {len(playables)} 首曲目已排入播放佇列{shuffle_hint}"
+            f" 由 {requester_name} 點播{saved_hint}"
+        )
+
         was_idle = self._is_player_idle(player)
         started_first = False
-
-        for idx, track_obj in enumerate(playables):
-            if was_idle and not started_first:
+        if was_idle:
+            # 先建立待播佇列與面板通知，讓 on_wavelink_track_start 首次建面板即含完整資訊，避免連續編輯觸發 429
+            self._set_panel_notice(interaction.guild.id, notice, duration=10.0)
+            prequeued = len(playables) - 1
+            for track_obj in playables[1:]:
+                player.song_queue.append((track_obj, requester_name, requester_id))
+            for idx, track_obj in enumerate(playables):
                 try:
                     await self._play_track(player, track_obj, requester_name, requester_id)
                     started_first = True
+                    break
                 except Exception as e:
                     if self._is_session_lost_error(e):
+                        while prequeued > 0 and player.song_queue:
+                            player.song_queue.pop()
+                            prequeued -= 1
                         player.song_queue.extend(
                             (t, requester_name, requester_id) for t in playables[idx:]
                         )
@@ -4824,22 +5739,23 @@ class Music(commands.Cog):
                         )
                         return
                     print(f">>> 播放歌單首曲失敗，嘗試下一首：{e}")
-                    continue
-            else:
+                    if prequeued > 0:
+                        tail_idx = len(player.song_queue) - prequeued
+                        del player.song_queue[tail_idx]
+                        prequeued -= 1
+
+            if not started_first:
+                t = self._panel_notice_tasks.pop(interaction.guild.id, None)
+                if t and not t.done():
+                    t.cancel()
+                self._panel_notices.pop(interaction.guild.id, None)
+                await self._ephemeral_error(interaction, f"❌ 歌單「**{pl_name}**」內的曲目目前皆無法播放，請稍後再試。")
+                return
+        else:
+            for track_obj in playables:
                 player.song_queue.append((track_obj, requester_name, requester_id))
+            self._set_panel_notice(interaction.guild.id, notice, duration=10.0)
 
-        if was_idle and not started_first:
-            await self._ephemeral_error(interaction, f"❌ 歌單「**{pl_name}**」內的曲目目前皆無法播放，請稍後再試。")
-            return
-
-        owner_tag = "你的歌單" if is_own else f"{owner_name} 的歌單"
-        saved_hint = "（已透過分享碼自動收藏至你的歌單選單）" if (used_share_code and not is_own) else ""
-        shuffle_hint = "（🔀 已隨機排列）" if shuffle else ""
-        notice = (
-            f"📀 **已載入{owner_tag}「{pl_name}」**：共 {len(playables)} 首曲目已排入播放佇列{shuffle_hint}"
-            f" 由 {requester_name} 點播{saved_hint}"
-        )
-        self._set_panel_notice(interaction.guild.id, notice, duration=10.0)
         await self._sync_panel(interaction.guild.id, player)
 
         try:
@@ -4951,11 +5867,14 @@ class Music(commands.Cog):
             plist_tracks = list(track.tracks)
             if shuffle:
                 random.shuffle(plist_tracks)
+            p_name = getattr(track, "name", "播放清單")
+            notice = f"➕ **已新增播放清單**：{p_name}（共 {len(plist_tracks)} 首） 由 {interaction.user.display_name} 點播"
             if self._is_player_idle(player):
                 first_trk = plist_tracks[0]
                 queue_len_before = len(player.song_queue)
                 for pl_t in plist_tracks[1:]:
                     player.song_queue.append((pl_t, interaction.user.display_name, interaction.user.id))
+                self._set_panel_notice(interaction.guild.id, notice, duration=8.0)
                 try:
                     await self._play_track(player, first_trk, interaction.user.display_name, interaction.user.id)
                 except Exception as e:
@@ -4968,6 +5887,10 @@ class Music(commands.Cog):
                         return
                     while len(player.song_queue) > queue_len_before:
                         player.song_queue.pop()
+                    t = self._panel_notice_tasks.pop(interaction.guild.id, None)
+                    if t and not t.done():
+                        t.cancel()
+                    self._panel_notices.pop(interaction.guild.id, None)
                     print(f">>> 播放清單首曲時發生錯誤：{e}")
                     await self.bot.notify_owner_error(
                         e, interaction, extra_info=f"/play 播放清單失敗 track={getattr(first_trk, 'title', '?')}"
@@ -4977,9 +5900,7 @@ class Music(commands.Cog):
             else:
                 for pl_t in plist_tracks:
                     player.song_queue.append((pl_t, interaction.user.display_name, interaction.user.id))
-            p_name = getattr(track, "name", "播放清單")
-            notice = f"➕ **已新增播放清單**：{p_name}（共 {len(plist_tracks)} 首） 由 {interaction.user.display_name} 點播"
-            self._set_panel_notice(interaction.guild.id, notice, duration=8.0)
+                self._set_panel_notice(interaction.guild.id, notice, duration=8.0)
             await self._sync_panel(interaction.guild.id, player)
             try:
                 await interaction.delete_original_response()
@@ -5315,26 +6236,46 @@ class Music(commands.Cog):
 
     @classmethod
     def _is_same_track(cls, track_a, track_b) -> bool:
-        """比對兩個曲目物件是否代表同一首歌。
-
-        關鍵細節：Lavalink 在 TrackEndEvent 回傳的 track.encoded 二進位資料尾端會寫入最終播放位置（position），
-        因此同一首歌在播完時的 encoded 字串必然與起播時（position=0）的 encoded 不同！
-        若直接拿 encoded 做第一順位 return，會把正常播完的同一首歌誤判為不同歌曲而中斷自動連播。
-        正確做法：只要 identifier、uri、title 或 encoded 任一有效欄位相同，即判定為同一首歌。
-        """
+        """比對兩個曲目物件是否代表同一首歌（嚴格區分同名不同音源與過濾空字串）。"""
         if track_a is None or track_b is None:
             return False
         if track_a is track_b:
             return True
-        has_comparable = False
-        for attr in ("identifier", "uri", "title", "encoded"):
-            val_a = getattr(track_a, attr, None)
-            val_b = getattr(track_b, attr, None)
-            if val_a is not None and val_b is not None:
-                has_comparable = True
-                if val_a == val_b:
-                    return True
-        return not has_comparable
+
+        def _norm(val: Any) -> str | None:
+            if val is None:
+                return None
+            if isinstance(val, str):
+                stripped = val.strip()
+                return stripped if stripped else None
+            return str(val)
+
+        id_a = _norm(getattr(track_a, "identifier", None))
+        id_b = _norm(getattr(track_b, "identifier", None))
+        if id_a is not None and id_b is not None:
+            return id_a == id_b
+
+        uri_a = _norm(getattr(track_a, "uri", None))
+        uri_b = _norm(getattr(track_b, "uri", None))
+        if uri_a is not None and uri_b is not None:
+            if uri_a == uri_b:
+                return True
+            try:
+                return bool(are_tracks_duplicate(track_a, track_b))
+            except Exception:
+                return False
+
+        enc_a = _norm(getattr(track_a, "encoded", None))
+        enc_b = _norm(getattr(track_b, "encoded", None))
+        if enc_a is not None and enc_b is not None:
+            return enc_a == enc_b
+
+        title_a = _norm(getattr(track_a, "title", None))
+        title_b = _norm(getattr(track_b, "title", None))
+        if title_a is not None and title_b is not None:
+            return title_a == title_b
+
+        return all(x is None for x in (id_a, id_b, uri_a, uri_b, enc_a, enc_b, title_a, title_b))
 
     # ---------- 第4週新增：播放控制 ----------
     @staticmethod
@@ -5382,6 +6323,12 @@ class Music(commands.Cog):
         player._is_current_stream = False
         player._retrying_live_stream = False
         player._live_retry_count = 0
+        player._retrying_mid_track = False
+        player._mid_track_retry_count = 0
+        player._mid_track_retry_pos = 0
+        player._last_raw_lavalink_pos = 0
+        player._last_lavalink_update_mono = 0.0
+        player._track_start_pos = 0
         for attr in ("_current", "current"):
             try:
                 setattr(player, attr, None)
@@ -5411,6 +6358,8 @@ class Music(commands.Cog):
         track: "wavelink_module.Playable",
         requester_name: str,
         requester_id: int | None = None,
+        *,
+        start_position: int = 0,
     ):
         """統一的開始播放入口：先記下「目前這首是誰點的」再播。
 
@@ -5431,9 +6380,11 @@ class Music(commands.Cog):
         # 重置可能殘留的 end_intent 與停止標記，並記錄當前播放曲目與播放序號，防止舊事件或重複事件在關閉循環時跳過當前歌曲
         player.end_intent = None
         player._stopped_track = None
+        player._started_track = None
         player._active_track = track
         player._play_seq = getattr(player, "_play_seq", 0) + 1
-        player._track_started_mono = time.monotonic()
+        safe_start = max(0, int(start_position or 0))
+        self._reset_player_position_state(player, start_ms=safe_start)
         is_stream = self._is_live_track(track)
         player._is_current_stream = is_stream
         if is_stream:
@@ -5443,19 +6394,32 @@ class Music(commands.Cog):
                 pass
         if not getattr(player, "_retrying_live_stream", False):
             player._live_retry_count = 0
+        if not getattr(player, "_retrying_mid_track", False):
+            player._mid_track_retry_count = 0
+            player._mid_track_retry_pos = 0
         # 開始播放時清除這首歌之前的拒絕鎖（例如上次播放被拒、這次重新播出）
         guild_obj = getattr(player, "guild", None)
         guild_id = guild_obj.id if guild_obj is not None else None
         self._clear_rejection(track, guild_id=guild_id)
         if guild_obj is not None:
             self._track_overdue_since.pop(guild_obj.id, None)
-        try:
+
+        async def _call_play():
+            if safe_start > 0:
+                try:
+                    await player.play(track, start=safe_start)
+                    return
+                except TypeError:
+                    pass
             await player.play(track)
+
+        try:
+            await _call_play()
         except Exception as exc:
             if self._is_session_lost_error(exc):
                 # 若是孤兒節點或新 Session 尚未同步語音狀態，先嘗試立即轉移節點並重送語音憑證後重試一次
                 if self._adopt_orphan_player(player) and await self._sync_player_voice_to_lavalink(player):
-                    await player.play(track)
+                    await _call_play()
                     return
             raise
 
@@ -5710,10 +6674,13 @@ class Music(commands.Cog):
                 pass
             return
         try:
+            is_stable = bool(getattr(player, "_is_stable_voice_player", False))
             if want_pause:
                 if not getattr(player, "current", None) or getattr(player, "paused", False):
                     await interaction.followup.send("ℹ️ 現在沒有可以暫停的歌曲。", ephemeral=True)
                     return
+                if not is_stable:
+                    self._sync_player_position_on_pause(player, True, was_paused=False)
                 await player.pause(True)
                 await self._announce(interaction, f"⏸️ 已暫停{self._operator_stamp(interaction)}")
             else:
@@ -5721,6 +6688,8 @@ class Music(commands.Cog):
                     await interaction.followup.send("ℹ️ 目前不是暫停狀態。", ephemeral=True)
                     return
                 await player.pause(False)
+                if not is_stable:
+                    self._sync_player_position_on_pause(player, False, was_paused=True)
                 await self._announce(interaction, f"▶️ 繼續播放{self._operator_stamp(interaction)}")
         except Exception as e:
             if self._is_session_lost_error(e):
@@ -5803,6 +6772,8 @@ class Music(commands.Cog):
             if player.paused:
                 await interaction.response.send_message("ℹ️ 已經是暫停狀態了。", ephemeral=True)
                 return
+            if not getattr(player, "_is_stable_voice_player", False):
+                self._sync_player_position_on_pause(player, True, was_paused=False)
             await player.pause(True)
             await self._announce(interaction, f"⏸️ 已暫停{self._operator_stamp(interaction)}")
             return
@@ -5823,6 +6794,8 @@ class Music(commands.Cog):
                 await interaction.response.send_message("ℹ️ 目前不是暫停狀態。", ephemeral=True)
                 return
             await player.pause(False)
+            if not getattr(player, "_is_stable_voice_player", False):
+                self._sync_player_position_on_pause(player, False, was_paused=True)
             await self._announce(interaction, f"▶️ 繼續播放{self._operator_stamp(interaction)}")
             return
 
@@ -6024,6 +6997,8 @@ class Music(commands.Cog):
         # 夾在合法範圍內，結尾留 1 秒，避免直接跳到最後觸發 track_end
         target = max(0, min(target, max(track.length - 1000, 0)))
         await player.seek(target)
+        if not getattr(player, "_is_stable_voice_player", False):
+            self._sync_player_position_on_seek(player, target)
         await self._announce(
             interaction,
             f"⏩ 已跳轉至 `{format_position(target)} / {format_position(track.length)}`"

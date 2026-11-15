@@ -1383,6 +1383,504 @@ async def test_bug_fixes():
         "progress_update_loop 與 _update_panel_ended 受面板鎖保護，結束後不會被舊進度條覆寫",
     )
 
+    # 8. 語音交握穩定性：Gateway 亂序、404 Session Lost 不退房、閒置探測與連線重試防護
+    orig_pool_nodes = dict(getattr(music_mod.wavelink.Pool, "nodes", {}))
+    try:
+        # 8a. VOICE_SERVER_UPDATE 先於 VOICE_STATE_UPDATE 抵達時仍能完成交握
+        fake_node = SimpleNamespace(
+            identifier="test_voice_node",
+            status=SimpleNamespace(name="CONNECTED"),
+            _session_id="sess_ok",
+            _players={},
+            players={},
+            _inactive_channel_tokens=3,
+            _inactive_player_timeout=300,
+            _update_player=AsyncMock(),
+            _destroy_player=AsyncMock(),
+        )
+        music_mod.wavelink.Pool.nodes = {"test_voice_node": fake_node}
+
+        bot_v = MagicMock()
+        bot_v.user = SimpleNamespace(id=999)
+        bot_v.get_channel = lambda cid: None  # 刻意回傳 None，驗證既有 player.channel 不會被洗掉
+        cog_v = Music(bot_v)
+        guild_v = SimpleNamespace(id=GID, voice_client=None, change_voice_state=AsyncMock())
+        voice_ch_v = SimpleNamespace(id=555, guild=guild_v)
+
+        player_cls_v = cog_v._get_player_cls()
+        vp = player_cls_v(bot_v, voice_ch_v, nodes=[fake_node])
+        vp._guild = guild_v
+        vp.channel = voice_ch_v
+
+        # Gateway 先送 VOICE_SERVER_UPDATE 再送 VOICE_STATE_UPDATE
+        await vp.on_voice_server_update({"token": "tok_1", "endpoint": "ep_1"})
+        check(
+            fake_node._update_player.await_count == 0 and not vp._connection_event.is_set(),
+            "_StableVoicePlayer: 僅收到 VOICE_SERVER_UPDATE 尚無 session_id 時等待 STATE 事件",
+        )
+        await vp.on_voice_state_update({"channel_id": "555", "session_id": "v_sess_1"})
+        check(
+            fake_node._update_player.await_count == 1
+            and vp._connection_event.is_set()
+            and vp._connected is True
+            and vp.channel is voice_ch_v,
+            "_StableVoicePlayer: VOICE_SERVER_UPDATE 先到、VOICE_STATE_UPDATE 後到時仍能觸發 _update_player 並保留 channel",
+        )
+
+        # 8b. 語音交握期間遭遇 404 Session Lost 時不呼叫 disconnect() 踢出機器人，而是重建 Session 並重送成功
+        fake_node._update_player = AsyncMock(side_effect=[SessionLostError(), None])
+        vp2 = player_cls_v(bot_v, voice_ch_v, nodes=[fake_node])
+        vp2._guild = guild_v
+        vp2.channel = voice_ch_v
+        vp2.disconnect = AsyncMock()
+        cog_v._ensure_node_session_ready = AsyncMock(return_value=True)
+
+        await vp2.on_voice_state_update({"channel_id": "555", "session_id": "v_sess_2"})
+        await vp2.on_voice_server_update({"token": "tok_2", "endpoint": "ep_2"})
+        check(
+            vp2.disconnect.await_count == 0
+            and cog_v._ensure_node_session_ready.await_count == 1
+            and cog_v._ensure_node_session_ready.await_args.kwargs.get("force_reset") is True
+            and fake_node._update_player.await_count == 2
+            and vp2._connection_event.is_set()
+            and vp2._connected is True,
+            "_StableVoicePlayer: 交握遭遇 404 Session Lost 時不踢出語音房，自動重建 Session 並重送完成連線",
+        )
+
+        # 8c. 若重建後仍失敗，立即 set _connection_event 解除阻塞且不呼 disconnect（避免卡死 30 秒逾時）
+        fake_node._update_player = AsyncMock(side_effect=RuntimeError("boom_voice"))
+        vp3 = player_cls_v(bot_v, voice_ch_v, nodes=[fake_node])
+        vp3._guild = guild_v
+        vp3.channel = voice_ch_v
+        vp3.disconnect = AsyncMock()
+        await vp3.on_voice_state_update({"channel_id": "555", "session_id": "v_sess_3"})
+        await vp3.on_voice_server_update({"token": "tok_3", "endpoint": "ep_3"})
+        check(
+            vp3.disconnect.await_count == 0
+            and vp3._connection_event.is_set()
+            and vp3._connected is False
+            and isinstance(vp3._last_voice_update_error, RuntimeError),
+            "_StableVoicePlayer: _update_player 失敗時立即喚醒 _connection_event 並記錄錯誤，避免乾等 30 秒",
+        )
+
+        # 8d. 閒置狀態（node.players 為空）下 node_health_check 仍主動探測並修復已失效的 Session
+        idle_socket = SimpleNamespace(closed=False, close=AsyncMock())
+        idle_node = SimpleNamespace(
+            identifier="idle_n1",
+            uri="http://localhost:2333",
+            status=SimpleNamespace(name="CONNECTED"),
+            _session_id="expired_sess",
+            players={},
+            _websocket=SimpleNamespace(socket=idle_socket),
+            fetch_players=AsyncMock(side_effect=SessionLostError()),
+        )
+        music_mod.wavelink.Pool.nodes = {"idle_n1": idle_node}
+        cog_idle = Music(MagicMock())
+        cog_idle.bot.notify_owner_error = AsyncMock()
+        await cog_idle.node_health_check.coro(cog_idle)
+        check(
+            idle_node.fetch_players.await_count == 1
+            and idle_socket.close.await_count == 1
+            and idle_node._session_id is None,
+            "node_health_check: 閒置無播放器期間仍主動探測 Session，遭遇 404 立即關閉舊 WebSocket 重建",
+        )
+
+        # 8e. _connect_voice_channel 首次失敗自動清理並重試成功，且連線期間忽略自身 on_voice_state_update 干擾
+        bot_conn = MagicMock()
+        bot_conn.user = SimpleNamespace(id=999)
+        cog_conn = Music(bot_conn)
+        cog_conn._ensure_node_session_ready = AsyncMock(return_value=True)
+        cleanup_mock = AsyncMock()
+        cog_conn._cleanup_guild_voice_and_player = cleanup_mock
+        connected_player = SimpleNamespace(channel=None, connected=True)
+        guild_conn = SimpleNamespace(id=GID, voice_client=None, change_voice_state=AsyncMock())
+
+        connect_calls = 0
+
+        async def flaky_channel_connect(*, cls=None):
+            nonlocal connect_calls
+            connect_calls += 1
+            # 模擬連線期間 Discord Gateway 觸發機器人自身的 voice_state_update
+            await cog_conn.on_voice_state_update(
+                SimpleNamespace(id=999, guild=guild_conn),
+                SimpleNamespace(channel=None),
+                SimpleNamespace(channel=SimpleNamespace(id=777)),
+            )
+            if connect_calls == 1:
+                raise RuntimeError("transient handshake failure")
+            return connected_player
+
+        ch_conn = SimpleNamespace(id=777, connect=flaky_channel_connect)
+        res_player = await cog_conn._connect_voice_channel(guild_conn, ch_conn)
+        check(
+            res_player is connected_player
+            and connect_calls == 2
+            and cleanup_mock.await_count == 1
+            and GID not in cog_conn._connecting_guilds,
+            "_connect_voice_channel: 連線期間不觸發自身清理，首次失敗後自動清理重試第 2 次成功",
+        )
+    finally:
+        music_mod.wavelink.Pool.nodes = orig_pool_nodes
+
+    # 9. 控制面板節流、PartialMessage 優先與狀態簽章去重（防止 429）
+    orig_monotonic = music_mod.time.monotonic
+    try:
+        base_mono = orig_monotonic() + 1000.0
+        now = [base_mono]
+        music_mod.time.monotonic = lambda: now[0]
+
+        player_rl = FakePlayer()
+        player_rl.shuffle = False
+        player_rl.current = fake_track("ThrottleTrack", length=200000)
+        player_rl.position = 10000
+        player_rl.channel = SimpleNamespace(members=[SimpleNamespace(bot=False)])
+
+        partial_msg = MagicMock()
+        partial_msg.edit = AsyncMock()
+        rl_ch = MagicMock()
+        rl_ch.id = 10
+        rl_ch.fetch_message = AsyncMock()
+        rl_ch.get_partial_message = MagicMock(return_value=partial_msg)
+
+        bot_rl = MagicMock()
+        bot_rl.user = SimpleNamespace(id=999)
+        guild_rl = SimpleNamespace(id=GID, voice_client=player_rl)
+        bot_rl.get_guild = lambda gid: guild_rl if gid == GID else None
+        bot_rl.get_channel = lambda cid: rl_ch if cid == 10 else None
+        bot_rl.notify_owner_error = AsyncMock()
+
+        cog_rl = Music(bot_rl)
+        cog_rl.panel_messages[GID] = (10, 20)
+
+        await cog_rl._sync_panel(GID, player_rl)
+        check(
+            partial_msg.edit.await_count == 1
+            and rl_ch.fetch_message.await_count == 0
+            and GID in cog_rl._last_panel_edit_at
+            and GID in cog_rl._last_panel_state,
+            "_sync_panel 優先使用 PartialMessage 編輯（免 GET）並記錄編輯時間與狀態簽章",
+        )
+
+        now[0] += 2.0
+        await cog_rl._sync_panel(GID, player_rl)
+        check(
+            partial_msg.edit.await_count == 1,
+            "_sync_panel 相同狀態於最短編輯間隔內跳過重複 PATCH",
+        )
+
+        now[0] += 3.0  # 距上次編輯僅 5 秒（< PANEL_PROGRESS_MIN_INTERVAL）
+        player_rl.position = 40000
+        await cog_rl.progress_update_loop.coro(cog_rl)
+        check(
+            partial_msg.edit.await_count == 1,
+            "progress_update_loop 尊重 _sync_panel 編輯時間，最短間隔內即使進度條改變亦不 PATCH",
+        )
+
+        now[0] = base_mono + music_mod.PANEL_PROGRESS_MIN_INTERVAL + 1.0
+        await cog_rl.progress_update_loop.coro(cog_rl)
+        check(
+            partial_msg.edit.await_count == 2 and rl_ch.fetch_message.await_count == 0,
+            "超過 PANEL_PROGRESS_MIN_INTERVAL 後 progress_update_loop 透過 PartialMessage 正常更新",
+        )
+
+        # 10. 模擬 discord.py 內部因 429 retry_after 睡眠造成 edit 耗時 >= PANEL_EDIT_SLOW_THRESHOLD
+        async def slow_429_retry_edit(**kw):
+            now[0] += 5.7
+
+        partial_msg.edit = AsyncMock(side_effect=slow_429_retry_edit)
+        now[0] += music_mod.PANEL_PROGRESS_MIN_INTERVAL + 1.0
+        player_rl.position = 80000
+        await cog_rl.progress_update_loop.coro(cog_rl)
+        edit_done_at = now[0]
+        cooldown_until = cog_rl._rate_limit_until.get(GID, 0.0)
+        check(
+            partial_msg.edit.await_count == 1
+            and cooldown_until >= edit_done_at + music_mod.PANEL_RATE_LIMIT_BACKOFF - 0.01,
+            "edit 耗時達慢速閾值時自動偵測 Discord 內部 429 重試並設定退避冷卻",
+        )
+
+        # 退避期間內（即使已超過 PANEL_PROGRESS_MIN_INTERVAL）仍阻擋 progress_update_loop 與非互動 _sync_panel
+        now[0] = edit_done_at + music_mod.PANEL_PROGRESS_MIN_INTERVAL + 0.1
+        player_rl.position = 120000
+        cog_rl._panel_notices[GID] = "冷卻測試提示"
+        await cog_rl.progress_update_loop.coro(cog_rl)
+        await cog_rl._sync_panel(GID, player_rl)
+        check(
+            partial_msg.edit.await_count == 1,
+            "429 自動退避期間同時擋下 progress_update_loop 與非互動式 _sync_panel",
+        )
+
+        # 退避期間曲目結束看門狗仍可正常運作
+        cog_rl.on_wavelink_track_end = AsyncMock()
+        player_rl.position = 200000
+        await cog_rl.progress_update_loop.coro(cog_rl)
+        now[0] += 4.1  # 總計經過 14.2 秒，仍在 15 秒退避冷卻內
+        await cog_rl.progress_update_loop.coro(cog_rl)
+        check(
+            cog_rl.on_wavelink_track_end.await_count == 1 and partial_msg.edit.await_count == 1,
+            "429 自動退避期間曲目結束看門狗仍可觸發換歌且不送出面板 PATCH",
+        )
+    finally:
+        music_mod.time.monotonic = orig_monotonic
+
+    # 11. _play_user_playlist 閒置首播先掛佇列與通知再起播，避免與 on_wavelink_track_start 連續重複編輯
+    player_pl = FakePlayer()
+    player_pl.shuffle = False
+    target_ch = MagicMock()
+    target_ch.id = 88
+    sent_panel = MagicMock()
+    sent_panel.id = 999
+    target_ch.send = AsyncMock(return_value=sent_panel)
+    partial_pl = MagicMock()
+    partial_pl.edit = AsyncMock()
+    target_ch.get_partial_message = MagicMock(return_value=partial_pl)
+    player_pl.home_channel = target_ch
+
+    bot_pl = MagicMock()
+    bot_pl.user = SimpleNamespace(id=999)
+    guild_pl = SimpleNamespace(id=GID, voice_client=player_pl)
+    bot_pl.get_guild = lambda gid: guild_pl if gid == GID else None
+    bot_pl.get_channel = lambda cid: target_ch if cid == 88 else None
+    bot_pl.notify_owner_error = AsyncMock()
+
+    cog_pl = Music(bot_pl)
+    cog_pl._playlist_dict_to_playable = lambda item: fake_track(
+        item["title"], uri=item["uri"], identifier=item["identifier"]
+    )
+
+    seen_queue_len_on_play = None
+    seen_notice_on_play = None
+    orig_play = player_pl.play
+
+    async def play_and_trigger_start(trk):
+        nonlocal seen_queue_len_on_play, seen_notice_on_play
+        seen_queue_len_on_play = len(player_pl.song_queue)
+        seen_notice_on_play = cog_pl._panel_notices.get(GID)
+        await orig_play(trk)
+        await cog_pl._sync_panel(GID, player_pl)
+
+    player_pl.play = play_and_trigger_start
+    inter_pl = SimpleNamespace(
+        user=SimpleNamespace(id=55, display_name="測試用戶"),
+        guild=guild_pl,
+        delete_original_response=AsyncMock(),
+        followup=SimpleNamespace(send=AsyncMock()),
+    )
+    pl_data = {
+        "user_id": 55,
+        "owner_name": "測試用戶",
+        "name": "測試歌單",
+        "tracks": [
+            {"title": "Track1", "uri": "https://x/1", "identifier": "id1"},
+            {"title": "Track2", "uri": "https://x/2", "identifier": "id2"},
+            {"title": "Track3", "uri": "https://x/3", "identifier": "id3"},
+        ],
+    }
+    try:
+        await cog_pl._play_user_playlist(inter_pl, player_pl, pl_data)
+        check(
+            seen_queue_len_on_play == 2
+            and bool(seen_notice_on_play)
+            and "測試歌單" in seen_notice_on_play
+            and target_ch.send.await_count == 1
+            and partial_pl.edit.await_count == 0,
+            "_play_user_playlist 閒置首播合併送出通知與待播佇列，僅建置 1 次面板無重複 PATCH",
+        )
+    finally:
+        for t in list(cog_pl._panel_notice_tasks.values()):
+            if t and not t.done():
+                t.cancel()
+                try:
+                    await t
+                except asyncio.CancelledError:
+                    pass
+
+    # 12 & 13. _StableVoicePlayer 換歌重置進度、過濾舊歌殘留 playerUpdate、暫停/續播與 Seek 進度同步
+    orig_nodes_pos = dict(getattr(music_mod.wavelink.Pool, "nodes", {}))
+    try:
+        fake_pos_node = SimpleNamespace(
+            identifier="test_pos_node",
+            status=SimpleNamespace(name="CONNECTED"),
+            _session_id="sess_pos",
+            _players={},
+            players={},
+            _inactive_channel_tokens=3,
+            _inactive_player_timeout=300,
+            _update_player=AsyncMock(),
+            _destroy_player=AsyncMock(),
+        )
+        music_mod.wavelink.Pool.nodes = {"test_pos_node": fake_pos_node}
+
+        bot_pos = MagicMock()
+        bot_pos.user = SimpleNamespace(id=999)
+        cog_pos = Music(bot_pos)
+        cog_pos._sync_panel = AsyncMock()
+        guild_pos = SimpleNamespace(id=GID, voice_client=None, change_voice_state=AsyncMock())
+        voice_ch_pos = SimpleNamespace(
+            id=666, guild=guild_pos, members=[SimpleNamespace(id=1, bot=False)]
+        )
+
+        stable_cls = cog_pos._get_player_cls()
+        vp_pos = stable_cls(bot_pos, voice_ch_pos, nodes=[fake_pos_node])
+        vp_pos._guild = guild_pos
+        vp_pos.channel = voice_ch_pos
+        vp_pos._connected = True
+        vp_pos.song_queue = deque()
+        vp_pos.end_intent = None
+        vp_pos.loop_mode = "off"
+        guild_pos.voice_client = vp_pos
+        cog_pos.panel_messages[GID] = (10, 20)
+
+        def _mk_playable(title: str, identifier: str, length: int, encoded: str):
+            return music_mod.wavelink.Playable(
+                {
+                    "encoded": encoded,
+                    "info": {
+                        "identifier": identifier,
+                        "isSeekable": True,
+                        "author": "A",
+                        "length": length,
+                        "isStream": False,
+                        "position": 0,
+                        "title": title,
+                        "uri": f"https://x/{title}",
+                        "artworkUrl": None,
+                        "isrc": None,
+                        "sourceName": "youtube",
+                    },
+                    "pluginInfo": {},
+                    "userData": {},
+                }
+            )
+
+        t_prev = _mk_playable("PrevSong", "id_prev", 240000, "enc_prev")
+        t_next_short = _mk_playable("NextShort", "id_next_s", 180000, "enc_next_s")
+
+        cog_pos._last_panel_edit_at[GID] = music_mod.time.monotonic()
+
+        # 先播放 240 秒的前一首歌並收到 Lavalink 結尾進度回報（模擬已播放 240 秒）
+        await cog_pos._play_track(vp_pos, t_prev, "測試者", 7)
+        vp_pos._track_started_mono -= 240.0
+        prev_upd = SimpleNamespace(player=vp_pos, position=240000, ping=10)
+        await cog_pos.on_wavelink_player_update(prev_upd)
+        await vp_pos._update_event(prev_upd)
+        check(vp_pos._last_position == 240000, "前一首歌正常記錄結束位置 240,000 ms")
+
+        # 換成 180 秒的新歌：進度必須立刻歸零，且換歌 3 秒內若收到舊歌在途 playerUpdate (235,000 ms) 應忽略
+        await cog_pos._play_track(vp_pos, t_next_short, "測試者", 7)
+        check(
+            vp_pos._last_position == 0 and vp_pos.position < 5000 and vp_pos._last_lavalink_update_mono == 0.0,
+            "_StableVoicePlayer 換歌時重置 _last_position 與遙測時間戳，不沿用上一首進度",
+        )
+        stale_upd = SimpleNamespace(player=vp_pos, position=235000, ping=10)
+        await cog_pos.on_wavelink_player_update(stale_upd)
+        await vp_pos._update_event(stale_upd)
+        orig_track_end_fn = cog_pos.on_wavelink_track_end
+        cog_pos.on_wavelink_track_end = AsyncMock()
+        try:
+            await cog_pos.progress_update_loop.coro(cog_pos)
+        finally:
+            wd_called_on_stale = cog_pos.on_wavelink_track_end.await_count
+            cog_pos.on_wavelink_track_end = orig_track_end_fn
+        check(
+            vp_pos._last_position == 0
+            and vp_pos.position < 5000
+            and vp_pos._last_lavalink_update_mono == 0.0
+            and wd_called_on_stale == 0,
+            "換歌 3 秒內收到上一首殘留高進度 playerUpdate 會被攔截，不會讓看門狗誤切新歌",
+        )
+
+        # 模擬新歌正常播放 30 秒後收到 30,000 ms 回報，接著暫停 180 秒再續播：進度不可把暫停時間算進去而衝到 100%
+        vp_pos._track_started_mono -= 30.0
+        valid_upd = SimpleNamespace(player=vp_pos, position=30000, ping=10)
+        await cog_pos.on_wavelink_player_update(valid_upd)
+        await vp_pos._update_event(valid_upd)
+        await vp_pos.pause(True)
+        vp_pos._last_update -= 180_000_000_000  # 模擬暫停經過 180 秒
+        await vp_pos.pause(False)
+        check(
+            vp_pos.paused is False and 29000 <= vp_pos.position < 40000,
+            "_StableVoicePlayer Pause -> Resume 重置單調時鐘基準，長時間暫停後續播不會暴衝到 100%",
+        )
+
+        # 曲尾往回 Seek：同步更新進度並清除看門狗逾期紀錄
+        cog_pos._track_overdue_since[GID] = (t_next_short, music_mod.time.monotonic() - 3.5, 180000)
+        await vp_pos.seek(90000)
+        check(
+            GID not in cog_pos._track_overdue_since
+            and vp_pos._last_position == 90000
+            and vp_pos._last_raw_lavalink_pos == 90000
+            and 89000 <= vp_pos.position < 95000,
+            "_StableVoicePlayer seek 後同步更新進度基準並清除看門狗逾期紀錄",
+        )
+    finally:
+        music_mod.wavelink.Pool.nodes = orig_nodes_pos
+
+    # 14. 一般非直播歌曲中途異常結束（無意圖）自動從斷點續播 + 看門狗不誤切中途斷流
+    player_mid = RecoverablePlayer()
+    cog_mid = make_cog(player_mid)
+    cog_mid._last_panel_edit_at[GID] = music_mod.time.monotonic()
+    t_mid = fake_track("MidCut", identifier="id_cut", length=240000, is_seekable=True)
+    t_queued_nxt = fake_track("QueuedNext", identifier="id_q_nxt", length=180000)
+    await cog_mid._play_track(player_mid, t_mid, "測試者", 7)
+    player_mid.song_queue.append((t_queued_nxt, "測試者", 7))
+    player_mid._track_started_mono -= 60.0
+    await cog_mid.on_wavelink_player_update(SimpleNamespace(player=player_mid, position=60000))
+
+    # 若本地時鐘頂到結尾但 Lavalink 最後位置仍停在 60 秒（距離 240 秒 > 15 秒），看門狗不可當作播完切歌
+    player_mid.channel = SimpleNamespace(members=[SimpleNamespace(bot=False)])
+    player_mid.position = 240000
+    cog_mid._track_overdue_since[GID] = (t_mid, music_mod.time.monotonic() - 10.0, 240000)
+    await cog_mid.progress_update_loop.coro(cog_mid)
+    check(
+        player_mid.current is t_mid and len(player_mid.song_queue) == 1 and GID not in cog_mid._track_overdue_since,
+        "看門狗偵測到 Lavalink 實際進度停在中途（距結尾 > 15 秒）時不會誤切下一首",
+    )
+
+    # 模擬中途異常收到無意圖 finished（wavelink 會先清掉 _current）：自動從 ~60 秒續播，不跳到下一首
+    player_mid.current = None
+    await cog_mid.on_wavelink_track_end(SimpleNamespace(player=player_mid, reason="finished", track=t_mid))
+    last_start_arg = player_mid.play_calls[-1][1].get("start", 0) if player_mid.play_calls else 0
+    check(
+        player_mid.current is t_mid
+        and len(player_mid.song_queue) == 1
+        and 60000 <= last_start_arg < 65000,
+        "一般可跳轉曲目於播放中途異常結束時自動從斷點續播，不會提早切到下一首歌",
+    )
+
+    # 15. on_wavelink_track_end 重入防護還原 _current 與同名不同 ID 曲目區分
+    player_g = RecoverablePlayer()
+    cog_g = make_cog(player_g)
+    same_name_1 = fake_track("Amore", identifier="yt_amore_1", uri="https://www.youtube.com/watch?v=yt_amore_1", author="SingerA")
+    same_name_2 = fake_track("Amore", identifier="yt_amore_2", uri="https://www.youtube.com/watch?v=yt_amore_2", author="SingerB")
+    check(
+        Music._is_same_track(same_name_1, same_name_2) is False,
+        "_is_same_track: 同歌名但 identifier 不同時嚴格判定為不同曲目",
+    )
+    check(
+        Music._is_same_track(SimpleNamespace(title="TrackA", identifier=""), SimpleNamespace(title="TrackB", identifier="")) is False,
+        "_is_same_track: 皆為空字串 identifier 且標題不同時不會誤判同一首",
+    )
+
+    await cog_g._play_track(player_g, same_name_2, "測試者", 7)
+    # 情境 A：advancing=True 期間收到會把 _current 清為 None 的事件，必須還原 _current 防止誤判閒置
+    player_g.advancing = True
+    player_g._current = None
+    player_g.current = None
+    await cog_g.on_wavelink_track_end(SimpleNamespace(player=player_g, reason="finished", track=same_name_1))
+    player_g.advancing = False
+    check(
+        player_g.current is same_name_2 and cog_g._is_player_idle(player_g) is False,
+        "advancing 期間收到遲到 TrackEndEvent 時仍還原 current，避免誤判播放器閒置",
+    )
+    # 情境 B：同名但不同 ID 的上一首延遲 TrackEndEvent 不得切掉正在播放的新歌
+    player_g.current = None
+    await cog_g.on_wavelink_track_end(SimpleNamespace(player=player_g, reason="finished", track=same_name_1))
+    check(
+        player_g.current is same_name_2,
+        "同名但不同 identifier 的舊 TrackEndEvent 不會誤切當前正在播放的新歌",
+    )
+
 
 def test_youtube_playlist_helpers():
     pu = music_mod.parse_youtube_playlist_url
