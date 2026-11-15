@@ -1262,7 +1262,11 @@ def _looks_like_inline_latex(content: str, after_char: str) -> bool:
         return False
     if after_char.isdigit():
         return False
-    if re.fullmatch(r"\d[\d,]*(?:\.\d+)?(?:\s*[kKmMbB%])?", content):
+    # 含千分位逗號或金額/百分比單位後綴（如 "$1,000$"、"$10k$"、"$50%"）視為非公式；
+    # 單純被一對緊貼的 `$` 包夾的純數字常數（如 `$24$`、`$0$`、`$3.14$`）應正常格式化移除 `$`。
+    if re.fullmatch(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?(?:\s*[kKmMbB%])?", content):
+        return False
+    if re.fullmatch(r"\d[\d,]*(?:\.\d+)?\s*[kKmMbB%]", content):
         return False
 
     has_strong_tex = bool(

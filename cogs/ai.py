@@ -84,10 +84,50 @@ def _prepare_ai_output(raw_text: str) -> Tuple[str, List[discord.File]]:
     clean_response, table_files = extract_and_render_markdown_tables(raw_clean)
     clean_response, math_files = extract_and_render_latex_formulas(
         clean_response,
-        max_images=max(0, 9 - len(table_files)),
+        max_images=max(0, 40 - len(table_files)),
     )
     clean_response = format_latex_in_text(clean_response, escape_markdown=True)
     return clean_response, (table_files + math_files)
+
+
+def _is_forwarded_message(message: Any) -> bool:
+    """判定 Discord 訊息是否為「轉發（Forward）」訊息，避免與一般回覆（Reply）混淆。"""
+    if not message:
+        return False
+
+    flags = getattr(message, "flags", None)
+    if getattr(flags, "forwarded", False) is True:
+        return True
+
+    for attr in ("message_snapshots", "snapshots"):
+        snaps = getattr(message, attr, None)
+        if isinstance(snaps, (list, tuple, set)) and len(snaps) > 0:
+            return True
+
+    ref = getattr(message, "reference", None)
+    if ref is not None:
+        ref_type = getattr(ref, "type", None)
+        forward_enum = getattr(getattr(discord, "MessageReferenceType", None), "forward", None)
+        if forward_enum is not None and ref_type == forward_enum:
+            return True
+        if getattr(ref_type, "name", None) == "forward":
+            return True
+        if not isinstance(ref_type, bool) and (ref_type == 1 or getattr(ref_type, "value", None) == 1):
+            return True
+
+        # 一般回覆必位於同一頻道；跨頻道引用僅見於轉發訊息
+        ref_channel_id = getattr(ref, "channel_id", None)
+        msg_channel_id = getattr(getattr(message, "channel", None), "id", None)
+        if (
+            isinstance(ref_channel_id, (int, str))
+            and not isinstance(ref_channel_id, bool)
+            and isinstance(msg_channel_id, (int, str))
+            and not isinstance(msg_channel_id, bool)
+            and str(ref_channel_id) != str(msg_channel_id)
+        ):
+            return True
+
+    return False
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(BASE_DIR, '.env'))
@@ -323,6 +363,137 @@ def split_message_chunks(text: str, max_chars: int = 3500) -> List[str]:
     return chunks
 
 
+def split_ai_response_chunks(
+    text: str,
+    *,
+    max_chars: int = 3500,
+    max_images: int = 8,
+    max_components: int = 34,
+) -> List[str]:
+    """依字元上限、單則 Container 圖片附件數（Discord 上限 10）與 Components V2 元件數切分 AI 回覆。"""
+    if not text:
+        return []
+
+    total_images = len(MEDIA_IMAGE_TOKEN_RE.findall(text))
+    total_hrules = sum(
+        1 for ln in text.split("\n") if HORIZONTAL_RULE_PATTERN.match(ln)
+    )
+    if (
+        len(text) <= max_chars
+        and total_images <= max_images
+        and (6 + total_images * 3 + total_hrules * 2) <= max_components
+    ):
+        return [text]
+
+    chunks: List[str] = []
+    lines = text.split("\n")
+    current_chunk: List[str] = []
+    current_len = 0
+    current_images = 0
+    current_comp_est = 6  # Container + 預留縮圖 Section + 頁尾 Separator/TextDisplay
+    in_code_block = False
+    code_lang = ""
+
+    def _reset_with(carried_lines: List[str], *, reopen_code: bool = False) -> None:
+        nonlocal current_chunk, current_len, current_images, current_comp_est
+        current_chunk = []
+        if reopen_code:
+            current_chunk.append(f"```{code_lang}")
+        current_chunk.extend(carried_lines)
+        current_len = sum(len(x) + 1 for x in current_chunk)
+        current_images = 0
+        current_comp_est = 6
+
+    for line in lines:
+        line_len = len(line) + 1
+        stripped = line.strip()
+        is_fence_toggle = stripped.startswith("```")
+        will_be_in_code = in_code_block
+        if is_fence_toggle:
+            will_be_in_code = not in_code_block
+
+        line_images = 0 if (in_code_block or is_fence_toggle) else len(MEDIA_IMAGE_TOKEN_RE.findall(line))
+        is_hrule = False if (in_code_block or is_fence_toggle) else bool(HORIZONTAL_RULE_PATTERN.match(line))
+        line_comp = (line_images * 3) + (2 if is_hrule else 0)
+
+        # 單行長度本身超出限制的極端狀況
+        if line_len > max_chars:
+            if is_fence_toggle:
+                if not in_code_block:
+                    in_code_block = True
+                    code_lang = stripped[3:].strip()
+                else:
+                    in_code_block = False
+                    code_lang = ""
+            if current_chunk:
+                if in_code_block:
+                    current_chunk.append("```")
+                chunks.append("\n".join(current_chunk))
+                _reset_with([], reopen_code=False)
+            for start_idx in range(0, len(line), max_chars - 20):
+                chunks.append(line[start_idx:start_idx + max_chars - 20])
+            continue
+
+        needs_split = bool(current_chunk) and (
+            (current_len + line_len > max_chars)
+            or (line_images > 0 and current_images + line_images > max_images)
+            or (line_comp > 0 and current_comp_est + line_comp > max_components)
+        )
+
+        if needs_split:
+            carried: List[str] = []
+            # 若因附帶公式/表格圖片而切分，嘗試將圖片前方同段的簡短導言文字一併移往下一則 Container
+            if line_images > 0 and not in_code_block:
+                idx = len(current_chunk) - 1
+                while idx >= 0 and not current_chunk[idx].strip():
+                    idx -= 1
+                lead_end = idx
+                while (
+                    idx >= 0
+                    and current_chunk[idx].strip()
+                    and not MEDIA_IMAGE_TOKEN_RE.search(current_chunk[idx])
+                    and not HORIZONTAL_RULE_PATTERN.match(current_chunk[idx])
+                    and not current_chunk[idx].strip().startswith("```")
+                ):
+                    idx -= 1
+                if lead_end >= 0 and idx > 0 and not current_chunk[idx].strip():
+                    candidate = current_chunk[idx + 1 :]
+                    if sum(len(x) + 1 for x in candidate) <= 200:
+                        trim_to = idx
+                        while trim_to > 0 and not current_chunk[trim_to - 1].strip():
+                            trim_to -= 1
+                        if trim_to > 0:
+                            carried = list(candidate)
+                            current_chunk = current_chunk[:trim_to]
+
+            if in_code_block:
+                current_chunk.append("```")
+            emitted = "\n".join(current_chunk).strip("\n")
+            if emitted:
+                chunks.append(emitted)
+            _reset_with(carried, reopen_code=in_code_block)
+
+        if is_fence_toggle:
+            if not in_code_block:
+                in_code_block = True
+                code_lang = stripped[3:].strip()
+            else:
+                in_code_block = False
+                code_lang = ""
+
+        current_chunk.append(line)
+        current_len += line_len
+        current_images += line_images
+        current_comp_est += line_comp
+
+    if current_chunk:
+        emitted = "\n".join(current_chunk).strip("\n")
+        if emitted:
+            chunks.append(emitted)
+
+    return chunks
+
+
 class AIChannelActionView(discord.ui.View):
     """回覆下方的互動按鈕：控制面板連結 + 一鍵清除對話記憶。"""
 
@@ -492,8 +663,10 @@ class AI(commands.Cog):
         return False
 
     def _is_ai_generated_message(self, msg: discord.Message) -> bool:
-        """判定機器人發送的訊息是否為 AI 產生的訊息（排除自動回覆訊息、限時訊息與一般指令訊息）。"""
+        """判定機器人發送的訊息是否為 AI 產生的訊息（排除自動回覆訊息、限時訊息、轉發訊息與一般指令訊息）。"""
         if not msg or not self.bot.user or msg.author.id != self.bot.user.id:
+            return False
+        if _is_forwarded_message(msg):
             return False
 
         # 1. 明確排除：限時訊息 (temp_message) 與自動回覆訊息 (auto_reply)
@@ -762,15 +935,23 @@ class AI(commands.Cog):
         files: Optional[List[discord.File]] = None,
         is_interaction: bool = True,
     ) -> None:
-        """超出字數/Token上限自動切割訊息並分成多個 container 發送，footer 永遠放在最後一則 container，不打斷回答。"""
-        chunks = split_message_chunks(clean_response, max_chars=3500)
+        """超出字數、圖片數或元件上限時自動切割訊息並分成多個 Container 發送，footer 永遠放在最後一則 Container。"""
+        chunks = split_ai_response_chunks(
+            clean_response,
+            max_chars=3500,
+            max_images=8,
+            max_components=34,
+        )
         if not chunks:
             chunks = ["（無回覆內容）"]
 
         total_chunks = len(chunks)
 
-        # 建立檔名映射
+        # 建立檔名映射，並找出各 chunk 明確引用的檔案以免第一則誤搶後續 Container 的附件
         file_map = {f.filename: f for f in (files or [])}
+        all_chunk_referenced = {
+            fname for ch in chunks for fname in MEDIA_IMAGE_TOKEN_RE.findall(ch)
+        }
         allocated_files = set()
 
         for idx, chunk in enumerate(chunks):
@@ -784,14 +965,14 @@ class AI(commands.Cog):
             needed_filenames = MEDIA_IMAGE_TOKEN_RE.findall(chunk)
             chunk_files: List[discord.File] = []
             for fname in needed_filenames:
-                if fname in file_map and fname not in allocated_files:
+                if fname in file_map and fname not in allocated_files and len(chunk_files) < 10:
                     chunk_files.append(file_map[fname])
                     allocated_files.add(fname)
 
-            # 若是第一則訊息，且還有其他未在任何 chunk 中特別引用的檔案，一同帶入
+            # 若是第一則訊息，僅補入完全未被任何 chunk 引用的孤兒附件，絕不搶走後續 Container 的圖片
             if is_first:
                 for fname, f in file_map.items():
-                    if fname not in allocated_files:
+                    if fname not in allocated_files and fname not in all_chunk_referenced and len(chunk_files) < 10:
                         chunk_files.append(f)
                         allocated_files.add(fname)
 
@@ -1266,6 +1447,10 @@ class AI(commands.Cog):
         if message.author.bot:
             return
 
+        # 忽略 Discord 轉發（Forward）訊息，避免將轉發的 AI 訊息誤判為對機器人的回覆或提問
+        if _is_forwarded_message(message):
+            return
+
         bot_user = self.bot.user
         if not bot_user:
             return
@@ -1290,27 +1475,29 @@ class AI(commands.Cog):
 
         if message.reference and message.reference.message_id:
             ref_msg_id = message.reference.message_id
-            resolved = message.reference.resolved
-            if isinstance(resolved, discord.Message):
-                ref_msg = resolved
-            elif not resolved or not isinstance(resolved, discord.DeletedReferencedMessage):
-                try:
-                    ref_msg = await message.channel.fetch_message(ref_msg_id)
-                except Exception:
-                    ref_msg = None
+            ref_channel_id = getattr(message.reference, "channel_id", None)
+            if ref_channel_id in (None, message.channel.id):
+                resolved = message.reference.resolved
+                if isinstance(resolved, discord.Message):
+                    ref_msg = resolved
+                elif not resolved or not isinstance(resolved, discord.DeletedReferencedMessage):
+                    try:
+                        ref_msg = await message.channel.fetch_message(ref_msg_id)
+                    except Exception:
+                        ref_msg = None
 
-            if ref_msg and ref_msg.author.id == bot_user.id:
-                # 先判定用戶回覆的是 AI 產生的訊息還是一般訊息（如自動回覆訊息、限時訊息等）
-                # 若非 AI 訊息則無需呼叫 AI 的 API 進行回覆
-                if not self._is_ai_generated_message(ref_msg):
-                    return
-                is_reply_to_bot = True
-            elif ref_msg is None:
-                # 若被回覆的原訊息已被刪除（例如剛到期的限時訊息），檢查 ID 是否屬於已知的非 AI 訊息或 AI 訊息
-                if self._is_known_non_ai_message_id(ref_msg_id):
-                    return
-                if ref_msg_id in self._ai_message_ids:
+                if ref_msg and ref_msg.author.id == bot_user.id:
+                    # 先判定用戶回覆的是 AI 產生的訊息還是一般訊息（如自動回覆訊息、限時訊息等）
+                    # 若非 AI 訊息則無需呼叫 AI 的 API 進行回覆
+                    if not self._is_ai_generated_message(ref_msg):
+                        return
                     is_reply_to_bot = True
+                elif ref_msg is None:
+                    # 若被回覆的原訊息已被刪除（例如剛到期的限時訊息），檢查 ID 是否屬於已知的非 AI 訊息或 AI 訊息
+                    if self._is_known_non_ai_message_id(ref_msg_id):
+                        return
+                    if ref_msg_id in self._ai_message_ids:
+                        is_reply_to_bot = True
 
         dedicated_channel_id = cfg.get("channel_id")
         is_in_dedicated_channel = dedicated_channel_id and (message.channel.id == dedicated_channel_id)
@@ -1353,8 +1540,10 @@ class AI(commands.Cog):
                         img_url = emb.thumbnail.url
                         break
 
-        # 若僅標註卻無文字亦無圖片，發送親切引導問候
+        # 若僅標註卻無文字亦無圖片，發送親切引導問候；非明確 @機器人 標註（例如僅回覆貼圖或空白訊息）則不觸發罐頭訊息
         if not clean_content and not img_url:
+            if not is_mentioned:
+                return
             greeting = (
                 f"嗨 {message.author.mention}！有什麼我可以幫忙的嗎？\n"
                 "你可以直接在訊息中提及我並輸入問題、上傳圖片，或使用 `/ai` 指令開始智慧對話！\n"

@@ -450,6 +450,13 @@ class _TeXASTParser:
             if len(rows) == 1:
                 return rows[0][0]
 
+        # 若未使用 \\ 但頂層存在多行原始換行 \n（非包在 {...} 或環境內），同樣視為多行顯示算式
+        if "\n" in src:
+            nl_lines = [ln.strip() for ln in _split_top_level(src, "\n") if ln.strip()]
+            if len(nl_lines) > 1:
+                rows_nl: List[List[MathNode]] = [[self.parse(ln)] for ln in nl_lines]
+                return LinesNode(rows=rows_nl, aligned=False)
+
         infix = _split_top_level_over(src)
         if infix is not None:
             left_s, right_s = infix

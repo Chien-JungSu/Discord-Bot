@@ -2,22 +2,29 @@
 # pyright: reportMissingImports=false
 
 import asyncio
+import collections
 import os
 import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import tempfile
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import cogs.database as db_mod
 from cogs.ai import (
     AI,
+    AI_FOOTER_PATTERN,
     MEDIA_IMAGE_TOKEN_RE,
     RENDERED_MEDIA_FILENAME_PATTERN,
     _build_ai_model_choices,
+    _is_forwarded_message,
     _prepare_ai_output,
     _resolve_provider_and_model,
+    split_ai_response_chunks,
 )
-from cogs.database import AI_PROVIDER_MODELS, MODEL_TOKEN_RATES
+from cogs.database import AI_PROVIDER_MODELS
 from cogs.latex_formatter import format_latex_expression, format_latex_in_text
 from cogs.latex_renderer import extract_and_render_latex_formulas, render_latex_to_image
 from cogs.llm_router import (
@@ -195,17 +202,23 @@ def test_latex_in_text_blocks_currency_and_code_safety():
     code_sample = "行內 `$x^2$` 保留：\n```latex\n$$\\frac{a}{b}$$\n```"
     assert format_latex_in_text(code_sample) == code_sample
 
-    # 金額寫法嚴格不誤判為數學公式
+    # 金額寫法嚴格不誤判為數學公式，同時單純常數 `$24$` 可正常去除 `$` 符號
     money_samples = [
         "這本書售價 $100。",
         "Costs $10 to $20 per item.",
         "價格區間為 $10-$20 之間",
         r"跳脫錢字號 \$50 與 $x^2$",
+        "金額為 $1,000$、目標 $10k$、折扣 $50%",
     ]
     assert format_latex_in_text(money_samples[0]) == money_samples[0]
     assert format_latex_in_text(money_samples[1]) == money_samples[1]
     assert format_latex_in_text(money_samples[2]) == money_samples[2]
     assert format_latex_in_text(money_samples[3]) == r"跳脫錢字號 \$50 與 x²"
+    assert format_latex_in_text(money_samples[4]) == money_samples[4]
+
+    # 句中單獨以成對 `$` 包夾之純數字常數（例如 `$24$`）應平滑轉為純數字而不殘留 `$`
+    const_text = "且扣掉常數 $24$，右邊的 $24$ 相抵銷後只剩 $0$ 與 $3.14$。"
+    assert format_latex_in_text(const_text) == "且扣掉常數 24，右邊的 24 相抵銷後只剩 0 與 3.14。"
 
 
 def test_table_and_ai_output_pipeline_with_latex():
@@ -350,6 +363,304 @@ def test_latex_renderer_png_and_extraction():
     assert "attachment://math_1.png" in gallery_urls
 
 
+def test_forwarded_ai_message_does_not_trigger_canned_greeting():
+    """驗證轉發 AI 生成的訊息（同頻道／跨頻道／專屬頻道）不會誤觸發罐頭引導訊息或呼叫模型。"""
+    import discord
+
+    # 1. 單元驗證 _is_forwarded_message 識別規則，且不誤判一般同頻道回覆
+    same_channel_reply = SimpleNamespace(
+        channel=SimpleNamespace(id=200),
+        flags=SimpleNamespace(forwarded=False),
+        message_snapshots=[],
+        reference=SimpleNamespace(
+            type=discord.MessageReferenceType.default,
+            message_id=5001,
+            channel_id=200,
+        ),
+    )
+    assert not _is_forwarded_message(same_channel_reply)
+
+    by_ref_type = SimpleNamespace(
+        channel=SimpleNamespace(id=200),
+        flags=SimpleNamespace(forwarded=False),
+        message_snapshots=[],
+        reference=SimpleNamespace(
+            type=discord.MessageReferenceType.forward,
+            message_id=5001,
+            channel_id=200,
+        ),
+    )
+    assert _is_forwarded_message(by_ref_type)
+
+    by_snapshots = SimpleNamespace(
+        channel=SimpleNamespace(id=200),
+        flags=SimpleNamespace(forwarded=False),
+        message_snapshots=[SimpleNamespace(content="AI 回覆")],
+        reference=None,
+    )
+    assert _is_forwarded_message(by_snapshots)
+
+    by_flags = SimpleNamespace(
+        channel=SimpleNamespace(id=200),
+        flags=SimpleNamespace(forwarded=True),
+        message_snapshots=[],
+        reference=None,
+    )
+    assert _is_forwarded_message(by_flags)
+
+    by_cross_channel = SimpleNamespace(
+        channel=SimpleNamespace(id=300),
+        flags=SimpleNamespace(forwarded=False),
+        message_snapshots=[],
+        reference=SimpleNamespace(
+            type=discord.MessageReferenceType.default,
+            message_id=5001,
+            channel_id=200,
+        ),
+    )
+    assert _is_forwarded_message(by_cross_channel)
+
+    # 2. 模擬 AI.on_message 完整行為
+    bot_user = SimpleNamespace(id=999, bot=True)
+    human_user = SimpleNamespace(id=12345, bot=False, mention="<@12345>", display_name="測試員", name="tester")
+
+    cog = AI.__new__(AI)
+    cog.bot = SimpleNamespace(user=bot_user, get_cog=MagicMock(return_value=None))
+    cog._ai_message_ids = collections.deque([5001], maxlen=2000)
+    cog._settings_cache = {
+        "10": {
+            "is_enabled": True,
+            "channel_id": 200,
+            "model": "auto",
+            "instruction": "test",
+            "temperature": 0.7,
+            "max_tokens": 1000,
+        }
+    }
+
+    ai_ref_msg = SimpleNamespace(
+        id=5001,
+        author=bot_user,
+        content="",
+        embeds=[],
+        components=[],
+        attachments=[],
+        flags=SimpleNamespace(forwarded=False),
+        message_snapshots=[],
+        reference=None,
+        interaction=None,
+    )
+
+    def _make_msg(
+        *,
+        channel_id: int,
+        content: str = "",
+        mentions=None,
+        reference=None,
+        forwarded_flag: bool = False,
+        snapshots=None,
+        fetch_result=None,
+    ):
+        channel = SimpleNamespace(
+            id=channel_id,
+            fetch_message=AsyncMock(return_value=fetch_result),
+            typing=MagicMock(return_value=AsyncMock()),
+        )
+        return SimpleNamespace(
+            id=8001,
+            author=human_user,
+            guild=SimpleNamespace(id=10, name="測試伺服器"),
+            channel=channel,
+            content=content,
+            mentions=list(mentions or []),
+            attachments=[],
+            reference=reference,
+            flags=SimpleNamespace(forwarded=forwarded_flag),
+            message_snapshots=list(snapshots or []),
+            reply=AsyncMock(return_value=SimpleNamespace(id=9001)),
+        )
+
+    async def _run_cases():
+        with (
+            patch("cogs.ai.is_guild_ai_authorized", return_value=True),
+            patch("cogs.ai.router.generate_chat_completion", new_callable=AsyncMock) as mock_gen,
+        ):
+            # (a) 同頻道轉發 AI 訊息（在專屬 AI 頻道內）
+            fwd_same = _make_msg(
+                channel_id=200,
+                reference=SimpleNamespace(
+                    type=discord.MessageReferenceType.forward,
+                    message_id=5001,
+                    channel_id=200,
+                    resolved=None,
+                ),
+                forwarded_flag=True,
+                snapshots=[SimpleNamespace(content="歐拉恆等式")],
+                fetch_result=ai_ref_msg,
+            )
+            await cog.on_message(fwd_same)
+            fwd_same.reply.assert_not_called()
+
+            # (b) 跨頻道轉發 AI 訊息至一般頻道（即使無 snapshot、跨頻道 reference 亦不觸發）
+            fwd_cross = _make_msg(
+                channel_id=300,
+                reference=SimpleNamespace(
+                    type=discord.MessageReferenceType.forward,
+                    message_id=5001,
+                    channel_id=200,
+                    resolved=None,
+                ),
+                forwarded_flag=True,
+                snapshots=[SimpleNamespace(content="歐拉恆等式")],
+                fetch_result=None,
+            )
+            await cog.on_message(fwd_cross)
+            fwd_cross.reply.assert_not_called()
+
+            # (c) 一般回覆 AI 訊息但無文字無圖片（例如僅貼圖，未 @機器人）：不應觸發罐頭引導訊息
+            empty_reply = _make_msg(
+                channel_id=300,
+                content="",
+                mentions=[bot_user],  # Discord 回覆預設帶入被回覆者 mention，但內文無 <@999>
+                reference=SimpleNamespace(
+                    type=discord.MessageReferenceType.default,
+                    message_id=5001,
+                    channel_id=300,
+                    resolved=None,
+                ),
+                fetch_result=ai_ref_msg,
+            )
+            await cog.on_message(empty_reply)
+            empty_reply.reply.assert_not_called()
+
+            # (d) 單純 @機器人 且無文字／圖片：仍正常發送引導問候
+            plain_mention = _make_msg(
+                channel_id=300,
+                content="<@999>",
+                mentions=[bot_user],
+                reference=None,
+            )
+            await cog.on_message(plain_mention)
+            plain_mention.reply.assert_awaited_once()
+            greeting_arg = plain_mention.reply.await_args.args[0]
+            assert "使用 `/ai` 指令開始智慧對話" in greeting_arg
+
+            mock_gen.assert_not_called()
+
+    asyncio.run(_run_cases())
+
+
+def test_ai_multi_container_image_chunking_and_no_ai_currency():
+    """驗證多公式 (>10 張 PNG) 自動切割多 Container 不退化為引用粗體，且全面移除 AI 貨幣機制。"""
+    # 1. 驗證資料庫模組與每日簽到已完全移除 AI 貨幣機制
+    for removed_attr in ("MODEL_TOKEN_RATES", "calculate_ai_token_cost", "get_user_ai_points", "update_user_ai_points", "set_user_ai_points"):
+        assert not hasattr(db_mod, removed_attr), f"不應再匯出 AI 貨幣符號: {removed_attr}"
+
+    econ_cfg = db_mod.DEFAULT_ECONOMY_CONFIG
+    assert not any(k.startswith("ai_") for k in econ_cfg), f"不應包含 ai_* 設定鍵: {list(econ_cfg)}"
+
+    import shutil
+    tmp_dir = tempfile.mkdtemp(prefix="test_no_ai_currency_")
+    orig_db_file = db_mod.DB_FILE
+    orig_init = db_mod._db_initialized
+    orig_wal = db_mod._wal_initialized
+    try:
+        db_mod.DB_FILE = os.path.join(tmp_dir, "test_econ.db")
+        db_mod._db_initialized = False
+        db_mod._wal_initialized = False
+        db_mod.init_db()
+
+        res = db_mod.claim_economy_daily(
+            user_id=987654321,
+            now_ts=1760000000.0,
+            base_reward=150,
+            streak_bonus_per_day=20,
+            streak_bonus_max=200,
+            initial_balance=200,
+        )
+        assert res["ok"] is True
+        assert "ai_points" not in res and "new_ai_points" not in res and "total_ai_reward" not in res
+        user_info = db_mod.get_economy_user(987654321)
+        assert "ai_points" not in user_info
+        assert user_info["balance"] == 350
+
+        db_mod.save_guild_ai_settings("12345", {"is_enabled": True, "model": "auto", "instruction": "hi"})
+        guild_ai = db_mod.get_guild_ai_settings("12345")
+        assert "payer_user_id" not in guild_ai
+    finally:
+        db_mod.DB_FILE = orig_db_file
+        db_mod._db_initialized = orig_init
+        db_mod._wal_initialized = orig_wal
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    # 2. 驗證超過 9 個顯示公式時，不會因為舊版 max_images=9 限制而降級成 `> **...**`
+    equations = []
+    for k in range(1, 14):
+        equations.append(f"第 {k} 步推導，扣掉常數 $24$，整理如下：\n\n$$x_{k} + 24 = \\frac{{k}}{{2}}$$")
+    equations.append(
+        "最後整理如下：\n\n$$\n(2k - 48) \\log 2 + (48 - 3k) \\log 3 - 24 + 24 \\log 2\n= (2k - 24) \\log 2 + (48 - 3k) \\log 3 - 24\n$$"
+    )
+    long_math_reply = "\n\n".join(equations)
+
+    clean_text, rendered_files = _prepare_ai_output(long_math_reply)
+    try:
+        assert len(rendered_files) == 14, f"14 道顯示公式應全部渲染為 PNG，實際 {len(rendered_files)}"
+        assert [f.filename for f in rendered_files] == [f"math_{k}.png" for k in range(1, 15)]
+        assert "$24$" not in clean_text
+        assert "扣掉常數 24，" in clean_text
+        assert "> **" not in clean_text, f"不應觸發 blockquote fallback:\n{clean_text}"
+
+        chunks = split_ai_response_chunks(clean_text, max_chars=3500, max_images=8, max_components=34)
+        assert len(chunks) >= 2
+        for ch in chunks:
+            imgs = MEDIA_IMAGE_TOKEN_RE.findall(ch)
+            assert len(imgs) <= 8
+
+        cog = AI.__new__(AI)
+        cog._ai_message_ids = collections.deque(maxlen=100)
+        cog._settings_cache = {}
+        footer = cog._format_ai_footer(
+            {"model": "gemini:gemini-flash-lite-latest", "prompt_tokens": 395, "completion_tokens": 126, "total_tokens": 521, "thinking_time": 9.20}
+        )
+        assert footer == "Tokens: 521 (In 395 / Out 126) | gemini-flash-lite-latest | 9.20s"
+        assert "Pay " not in footer and "TC " not in footer and "/C" not in footer
+        assert AI_FOOTER_PATTERN.search(footer)
+
+        sent_payloads = []
+        msg_counter = [1000]
+
+        async def _fake_send(**kwargs):
+            msg_counter[0] += 1
+            sent_payloads.append(kwargs)
+            return SimpleNamespace(id=msg_counter[0])
+
+        fake_interaction = SimpleNamespace(
+            followup=SimpleNamespace(send=AsyncMock(side_effect=_fake_send)),
+        )
+
+        asyncio.run(
+            cog._send_ai_response_chunks(
+                target=fake_interaction,
+                clean_response=clean_text,
+                footer_text=footer,
+                files=rendered_files,
+                is_interaction=True,
+            )
+        )
+
+        assert len(sent_payloads) == len(chunks) >= 2
+        attached_names = []
+        for idx, payload in enumerate(sent_payloads):
+            assert "view" in payload and "embed" not in payload
+            files_in_msg = payload.get("files") or []
+            assert 1 <= len(files_in_msg) <= 8
+            attached_names.extend(f.filename for f in files_in_msg)
+        assert attached_names == [f"math_{k}.png" for k in range(1, 15)]
+    finally:
+        for f in rendered_files:
+            f.close()
+
+
 if __name__ == "__main__":
     test_gemini_models_split_and_defaults()
     test_ai_command_provider_and_model_resolution()
@@ -358,4 +669,6 @@ if __name__ == "__main__":
     test_latex_in_text_blocks_currency_and_code_safety()
     test_table_and_ai_output_pipeline_with_latex()
     test_latex_renderer_png_and_extraction()
+    test_forwarded_ai_message_does_not_trigger_canned_greeting()
+    test_ai_multi_container_image_chunking_and_no_ai_currency()
     print("✅ 所有 AI 模型與 LaTeX 格式化／圖片渲染測試皆通過！")
