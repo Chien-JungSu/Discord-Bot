@@ -2462,11 +2462,19 @@ class Music(commands.Cog):
             extra_info=f"Lavalink 節點連線失敗（{key}）：{lavalink_uri}\n🔍 診斷：{diagnosis}",
         )
 
+    @staticmethod
+    def _get_pool_nodes() -> dict[str, Any]:
+        """安全取得 wavelink.Pool.nodes（相容測試環境簡化 mock 物件）。"""
+        if wavelink is None:
+            return {}
+        pool = getattr(wavelink, "Pool", None)
+        if pool is None:
+            return {}
+        return getattr(pool, "nodes", None) or {}
+
     def _get_connected_nodes(self) -> list[Any]:
         """取得目前處於 CONNECTED 狀態的所有 Lavalink 節點清單。"""
-        if wavelink is None:
-            return []
-        pool_nodes = getattr(wavelink.Pool, "nodes", {}) or {}
+        pool_nodes = self._get_pool_nodes()
         return [
             n for n in pool_nodes.values()
             if getattr(getattr(n, "status", None), "name", None) == "CONNECTED"
@@ -2474,7 +2482,7 @@ class Music(commands.Cog):
 
     def _get_node_states(self) -> dict[str, dict[str, Any]]:
         """整理所有已設定與連線池中節點的標準化狀態字典，供選點與 /music_node_status 使用。"""
-        pool_nodes = dict(getattr(wavelink.Pool, "nodes", {}) or {}) if wavelink is not None else {}
+        pool_nodes = dict(self._get_pool_nodes())
         states: dict[str, dict[str, Any]] = {}
         matched_pool_ids: set[str] = set()
 
@@ -2518,9 +2526,7 @@ class Music(commands.Cog):
 
     def _pick_best_node(self, *, exclude: Iterable[str] = ()) -> Any | None:
         """透過純函式 pick_best_node() 挑選目前負載最低的 CONNECTED 節點物件。"""
-        if wavelink is None:
-            return None
-        pool_nodes = dict(getattr(wavelink.Pool, "nodes", {}) or {})
+        pool_nodes = dict(self._get_pool_nodes())
         if not pool_nodes:
             return None
         states = self._get_node_states()
@@ -2625,7 +2631,7 @@ class Music(commands.Cog):
         if not configs:
             return  # 沒設定節點 → 維持原本「略過連線」的行為，不重複印警告
 
-        pool_nodes = getattr(wavelink.Pool, "nodes", {}) or {}
+        pool_nodes = self._get_pool_nodes()
         pending: list[LavalinkNodeConfig] = []
         for cfg in configs:
             if cfg.identifier in self._manually_killed_nodes or cfg.identifier in self._node_connecting:
@@ -3477,7 +3483,7 @@ class Music(commands.Cog):
         """檢查目前是否有任何 Lavalink 節點處於可用狀態（CONNECTED）。"""
         if wavelink is None:
             return False, "語音模組尚未載入或安裝完成。"
-        nodes = getattr(wavelink.Pool, "nodes", {}) or {}
+        nodes = self._get_pool_nodes()
         connected = self._get_connected_nodes()
         if connected:
             return True, ""
@@ -8210,7 +8216,7 @@ class Music(commands.Cog):
 
         await interaction.response.defer(ephemeral=True, thinking=True)
         target_key = (node or "").strip()
-        pool_nodes = dict(getattr(wavelink.Pool, "nodes", {}) or {})
+        pool_nodes = dict(self._get_pool_nodes())
         target_node = pool_nodes.get(target_key)
         if target_node is None:
             cfg = self._find_configured_node_config(target_key)
@@ -8341,7 +8347,7 @@ class Music(commands.Cog):
         print(f"🔄 [/node_revive] 管理員 {interaction.user} ({interaction.user.id}) 嘗試重新連線節點 `{cfg.identifier}` ({cfg.uri})")
         ok = await self._connect_single_node(cfg)
         if ok:
-            pool_nodes = getattr(wavelink.Pool, "nodes", {}) or {}
+            pool_nodes = self._get_pool_nodes()
             node_obj = pool_nodes.get(cfg.identifier)
             if node_obj is not None:
                 await self._refresh_node_stats(node_obj, timeout=4.0)
