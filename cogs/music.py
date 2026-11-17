@@ -21,6 +21,14 @@ from discord import app_commands, ui
 from discord.ext import commands, tasks
 
 from cogs.sanitize import redact_secrets
+from utils.nodes import (
+    LavalinkNodeConfig,
+    compute_reconnect_backoff,
+    extract_node_state,
+    load_lavalink_node_configs,
+    pick_best_node,
+    stats_payload_to_dict,
+)
 
 from services.spotify import (
     SpotifyClient,
@@ -49,11 +57,18 @@ LAVALINK_CONNECT_TIMEOUT = float(os.getenv('LAVALINK_CONNECT_TIMEOUT', '15'))
 # 晃一下，就把佇列清空、把機器人踢出去。
 EMPTY_VOICE_CHANNEL_TIMEOUT = float(os.getenv('EMPTY_VOICE_CHANNEL_TIMEOUT', '60'))
 
-# 多久檢查一次 Lavalink 節點的連線狀態（秒），可用環境變數覆寫。
-NODE_HEALTH_CHECK_INTERVAL = float(os.getenv('NODE_HEALTH_CHECK_INTERVAL', '30'))
+# 多久檢查一次 Lavalink 節點的連線狀態（秒），低資源環境強制至少 30 秒，可用環境變數覆寫。
+NODE_HEALTH_CHECK_INTERVAL = max(30.0, float(os.getenv('NODE_HEALTH_CHECK_INTERVAL', '30')))
+
+# Lavalink 單次搜尋／解析逾時秒數，避免公開節點無回應時卡住互動
+LAVALINK_SEARCH_TIMEOUT = float(os.getenv('LAVALINK_SEARCH_TIMEOUT', '15'))
 
 # 連線失敗後對節點 /version 做一次快速探測的逾時秒數（診斷用；刻意比連線逾時短，避免失敗回報又拖很久）。
 LAVALINK_PROBE_TIMEOUT = 5.0
+
+# 雙節點全斷時背景指數退避重連的起始間隔與最大上限秒數（上限 60 秒）
+LAVALINK_BACKOFF_BASE = float(os.getenv('LAVALINK_BACKOFF_BASE', '5'))
+LAVALINK_BACKOFF_MAX = min(60.0, float(os.getenv('LAVALINK_BACKOFF_MAX', '60')))
 
 # Pool 為空時自動重連的冷卻秒數，可用環境變數覆寫。
 # 沒有冷卻的話，health check 每 NODE_HEALTH_CHECK_INTERVAL 秒就會重連一次，節點長時間故障時會變成洗版式重試。
@@ -1989,6 +2004,31 @@ class Music(commands.Cog):
         #   _lavalink_failure_notified    這次「故障期間」是否已 DM 開發者過；連線成功即重置，
         #                                  讓每次故障只通知一次，而不是每輪重連都洗一次版。
         #   _lavalink_last_reconnect_attempt 上次自動重連的時間戳（monotonic），用來冷卻。
+        # 雙節點管理與容錯追蹤狀態：
+        #   _configured_nodes          環境變數讀取到的節點設定（identifier -> LavalinkNodeConfig）
+        #   _node_stats_cache          各節點最新 CPU/記憶體/玩家統計（identifier -> dict）
+        #   _node_latencies            各節點最近一次量測之 REST 延遲毫秒數（identifier -> float | None）
+        #   _node_last_errors          各節點最近一次連線失敗／斷線摘要（供 /music_node_status 離線顯示）
+        #   _node_connecting           正在執行連線的節點識別集合（per-node 防重入）
+        #   _node_failure_notified     各節點目前故障期間是否已 DM 通知開發者
+        #   _manually_killed_nodes     透過 /node_kill 手動模擬斷線的節點集合（需 /node_revive 才恢復自動檢查）
+        #   _guild_failover_locks      per-guild asyncio.Lock，避免斷線事件重複觸發同伺服器故障轉移
+        #   _failing_over_guilds       正在執行節點故障轉移的伺服器集合，保護面板不被中繼斷線事件誤關
+        #   _active_guild_snapshots    各伺服器當前播放快照（供 Node.close 先斷玩家時仍可取回曲目與進度）
+        #   _guild_active_node         紀錄各伺服器目前所屬節點識別（guild_id -> node identifier）
+        self._configured_nodes: dict[str, LavalinkNodeConfig] = {}
+        self._node_stats_cache: dict[str, dict[str, Any]] = {}
+        self._node_latencies: dict[str, float | None] = {}
+        self._node_last_errors: dict[str, str] = {}
+        self._node_connecting: set[str] = set()
+        self._node_failure_notified: dict[str, bool] = {}
+        self._manually_killed_nodes: set[str] = set()
+        self._guild_failover_locks: dict[int, asyncio.Lock] = {}
+        self._failing_over_guilds: set[int] = set()
+        self._active_guild_snapshots: dict[int, dict[str, Any]] = {}
+        self._guild_active_node: dict[int, str] = {}
+        self._all_nodes_reconnect_task: asyncio.Task | None = None
+        self._reconnect_backoff_attempt: int = 0
         self._lavalink_connecting = False
         self._lavalink_failure_notified = False
         self._lavalink_last_reconnect_attempt = 0.0
@@ -2100,6 +2140,21 @@ class Music(commands.Cog):
         if self.node_health_check.is_running():
             self.node_health_check.cancel()
 
+        if self._all_nodes_reconnect_task is not None and not self._all_nodes_reconnect_task.done():
+            self._all_nodes_reconnect_task.cancel()
+        self._all_nodes_reconnect_task = None
+        self._reconnect_backoff_attempt = 0
+        self._failing_over_guilds.clear()
+        self._active_guild_snapshots.clear()
+        self._guild_active_node.clear()
+        self._guild_failover_locks.clear()
+        self._node_connecting.clear()
+        self._node_failure_notified.clear()
+        self._node_stats_cache.clear()
+        self._node_latencies.clear()
+        self._node_last_errors.clear()
+        self._manually_killed_nodes.clear()
+
         # 徹底清理 wavelink.Pool.nodes 中的節點與 session，避免模組重載（reload）時
         # 殘留幽靈節點或 session 衝突，解決「重啟機器人正常但重整模組無法解決」的問題。
         if wavelink is not None:
@@ -2134,26 +2189,66 @@ class Music(commands.Cog):
                   "請先執行 pip install wavelink 並設定 Lavalink 節點。")
             return
 
-        # 不論 LAVALINK_URI 現在有沒有設定，都先把健康檢查背景任務跑起來，
-        # 這樣之後如果補設定、重新連線，也能持續監控節點狀態。
+        # 不論目前是否有設定節點環境變數，都先把健康檢查背景任務跑起來，
+        # 這樣之後若補上設定或節點斷線，也能持續監控狀態與處理重連。
         if not self.node_health_check.is_running():
             self.node_health_check.start()
 
-        lavalink_uri = os.getenv('LAVALINK_URI')
-        lavalink_password = os.getenv('LAVALINK_PASSWORD')
-
-        if not lavalink_uri or not lavalink_password:
-            print("⚠️ 環境變數 LAVALINK_URI / LAVALINK_PASSWORD 未設定或為空，"
-                  "已略過 Lavalink 節點連線。請檢查 .env 內容，例如：\n"
-                  "   LAVALINK_URI=http://lavalink.jirayu.net:13592\n"
-                  "   LAVALINK_PASSWORD=youshallnotpass")
+        configs = load_lavalink_node_configs(log_warnings=True)
+        self._configured_nodes = {cfg.identifier: cfg for cfg in configs}
+        if not configs:
             return
 
-        # 不 await，丟到背景執行，讓 cog_load() 立刻返回
-        asyncio.create_task(self._connect_lavalink(lavalink_uri, lavalink_password))
-        print(f"⏳ 已在背景開始連線 Lavalink 節點：{lavalink_uri}（不會阻擋機器人其他功能啟動）")
+        # 不 await，丟到背景並發連線所有已設定節點，讓 setup_hook / cog_load 立刻返回
+        asyncio.create_task(self._connect_all_nodes(configs))
+        node_desc = ", ".join(f"{c.identifier} ({c.uri})" for c in configs)
+        print(f"⏳ 已在背景開始連線 Lavalink 節點：{node_desc}（不會阻擋機器人其他功能啟動）")
 
-    async def _connect_lavalink(self, lavalink_uri: str, lavalink_password: str):
+    async def _connect_all_nodes(self, configs: list[LavalinkNodeConfig] | None = None) -> None:
+        """啟動時並發連線所有已設定的 Lavalink 節點；單一節點失敗不影響其他節點與 Bot 啟動。"""
+        if configs is None:
+            configs = load_lavalink_node_configs(log_warnings=False)
+            self._configured_nodes = {cfg.identifier: cfg for cfg in configs}
+        if not configs or wavelink is None:
+            return
+
+        results = await asyncio.gather(
+            *(self._connect_single_node(cfg) for cfg in configs),
+            return_exceptions=True,
+        )
+        for cfg, res in zip(configs, results):
+            if isinstance(res, Exception):
+                print(f"❌ 連線節點 {cfg.identifier} ({cfg.uri}) 時發生未預期例外：{res}")
+
+        # 若啟動時所有節點都連線失敗，立即排程指數退避重連任務
+        connected_nodes = self._get_connected_nodes()
+        if not connected_nodes:
+            self._schedule_all_nodes_reconnect()
+
+    def _resolve_identifier_for_uri(self, uri: str, explicit_id: str | None = None) -> str | None:
+        """依據顯式 identifier 或已設定節點清單推導節點識別名稱。"""
+        if explicit_id and explicit_id.strip():
+            return explicit_id.strip()
+        target_norm = (uri or "").strip().rstrip("/")
+        for cfg in self._configured_nodes.values():
+            if cfg.uri.strip().rstrip("/") == target_norm:
+                return cfg.identifier
+        for cfg in load_lavalink_node_configs(log_warnings=False):
+            if cfg.uri.strip().rstrip("/") == target_norm:
+                return cfg.identifier
+        return None
+
+    async def _connect_single_node(self, cfg: LavalinkNodeConfig) -> bool:
+        """依 LavalinkNodeConfig 連線單一節點，回傳是否成功處於 CONNECTED。"""
+        return await self._connect_lavalink(cfg.uri, cfg.password, identifier=cfg.identifier)
+
+    async def _connect_lavalink(
+        self,
+        lavalink_uri: str,
+        lavalink_password: str,
+        *,
+        identifier: str | None = None,
+    ) -> bool:
         """連接單一 Lavalink 節點；失敗時診斷、清理並回報（同一故障期間只 DM 一次）。
 
         實測發現的三個坑，都在這個函式裡處理：
@@ -2165,14 +2260,23 @@ class Music(commands.Cog):
         3. 失敗的節點不會被 wavelink 清掉，可能殘留 DISCONNECTED 節點與沒關的
            aiohttp session → 主動 node.close() 清理。
         """
-        if self._lavalink_connecting:
+        resolved_id = self._resolve_identifier_for_uri(lavalink_uri, identifier)
+        lock_key = resolved_id or (lavalink_uri or "").strip().rstrip("/")
+
+        # 向下相容舊測試：若外部直接設定 _lavalink_connecting=True（單節點測試情境），不重入
+        if identifier is None and self._lavalink_connecting:
             print(f"ℹ️ 已有 Lavalink 連線程序在進行中，略過重複連線：{lavalink_uri}")
-            return
+            return False
+        if lock_key in self._node_connecting:
+            print(f"ℹ️ 節點 {lock_key} 已有連線程序在進行中，略過重複連線：{lavalink_uri}")
+            return False
 
-        self._lavalink_connecting = True
+        self._node_connecting.add(lock_key)
+        if identifier is None:
+            self._lavalink_connecting = True
 
-        # 檢查 Pool 是否已有同 URI（含自動降級後之 HTTP 備援 URI）且處於 CONNECTED 的健康節點，避免重複連線導致 session 衝突；
-        # 若有舊節點處於離線/異常狀態，先主動關閉並逐出 Pool，避免累積幽靈節點。
+        # 檢查 Pool 是否已有同 URI 或同 identifier 的節點：
+        # 若已有 CONNECTED 節點則略過；若為非連線狀態的殘留節點（例如 /node_kill 後），先清除再重連。
         candidate_uris = {
             (lavalink_uri or "").strip().rstrip("/"),
             *_build_http_fallback_uris(lavalink_uri),
@@ -2181,12 +2285,18 @@ class Music(commands.Cog):
             existing_nodes = getattr(wavelink.Pool, "nodes", {})
             for existing_id, existing_node in list(existing_nodes.items()):
                 existing_uri = str(getattr(existing_node, "uri", None) or "").strip().rstrip("/")
-                if existing_uri in candidate_uris:
+                same_id = resolved_id is not None and existing_id == resolved_id
+                same_uri = existing_uri in candidate_uris
+                if same_id or same_uri:
                     if getattr(getattr(existing_node, "status", None), "name", None) == "CONNECTED":
-                        print(f"ℹ️ 已有同 URI 且處於 CONNECTED 的節點（{existing_id}），略過重複建立。")
-                        self._lavalink_connecting = False
-                        self._lavalink_failure_notified = False
-                        return
+                        print(f"ℹ️ 已有處於 CONNECTED 的節點（{existing_id}），略過重複建立。")
+                        self._node_connecting.discard(lock_key)
+                        if identifier is None:
+                            self._lavalink_connecting = False
+                            self._lavalink_failure_notified = False
+                        self._node_failure_notified[existing_id] = False
+                        self._node_last_errors.pop(existing_id, None)
+                        return True
                     else:
                         print(f"🧹 清理處於非連線狀態的舊節點：{existing_id}")
                         await self._discard_failed_node(existing_node)
@@ -2197,7 +2307,10 @@ class Music(commands.Cog):
         try:
             if str(lavalink_uri).strip().lower().startswith("https://"):
                 connect_uri = await _resolve_lavalink_connect_uri(lavalink_uri, lavalink_password)
-            node = wavelink.Node(uri=connect_uri, password=lavalink_password)
+            node_kwargs: dict[str, Any] = {"uri": connect_uri, "password": lavalink_password}
+            if resolved_id:
+                node_kwargs["identifier"] = resolved_id
+            node = wavelink.Node(**node_kwargs)
             await asyncio.wait_for(
                 wavelink.Pool.connect(nodes=[node], client=self.bot),
                 timeout=LAVALINK_CONNECT_TIMEOUT,
@@ -2205,13 +2318,20 @@ class Music(commands.Cog):
             # 關鍵檢查：Pool.connect 不拋例外 ≠ 連線成功，節點真的被註冊進 Pool 才算數。
             if node.identifier in wavelink.Pool.nodes:
                 if connect_uri != lavalink_uri:
-                    print(f"🎧 已透過 HTTP 自動備援成功連線至 Lavalink 節點：{connect_uri}（原設定：{lavalink_uri}）")
+                    print(
+                        f"🎧 已透過 HTTP 自動備援成功連線至 Lavalink 節點「{node.identifier}」："
+                        f"{connect_uri}（原設定：{lavalink_uri}）"
+                    )
                 else:
-                    print(f"🎧 已成功連線至 Lavalink 節點：{connect_uri}")
+                    print(f"🎧 已成功連線至 Lavalink 節點「{node.identifier}」：{connect_uri}")
                 self._lavalink_failure_notified = False  # 恢復正常，下次故障才會重新通知
-                return
+                self._node_failure_notified[node.identifier] = False
+                self._node_last_errors.pop(node.identifier, None)
+                self._manually_killed_nodes.discard(node.identifier)
+                self._reconnect_backoff_attempt = 0
+                return True
             error = ConnectionError(
-                f"Lavalink 節點連線被 wavelink 拒絕（Pool.connect 未註冊節點）：{connect_uri}。"
+                f"Lavalink 節點（{node.identifier}）連線被 wavelink 拒絕（Pool.connect 未註冊節點）：{connect_uri}。"
                 "常見原因：密碼錯誤、節點不是 Lavalink v4、或反向代理未轉發 WebSocket 升級；"
                 "wavelink 只把細節寫進它自己的 logger，請一併查看後台日誌。"
             )
@@ -2219,24 +2339,29 @@ class Music(commands.Cog):
         except asyncio.TimeoutError:
             # 修正：先前直接丟原始 TimeoutError（無 args），DM 的「錯誤訊息」欄位是空白的。
             error = TimeoutError(
-                f"Lavalink 節點連線逾時（超過 {LAVALINK_CONNECT_TIMEOUT:.0f} 秒）：{connect_uri}"
+                f"Lavalink 節點（{resolved_id or connect_uri}）連線逾時（超過 {LAVALINK_CONNECT_TIMEOUT:.0f} 秒）：{connect_uri}"
             )
             print(
                 f"❌ 連線 Lavalink 節點逾時（超過 {LAVALINK_CONNECT_TIMEOUT:.0f} 秒）：{connect_uri}，"
-                "語音功能（/join /leave /play）可能暫時無法使用，但不影響機器人其他功能。"
+                "若另有可用節點將自動切換，否則語音功能暫時無法使用。"
             )
         except Exception as e:
             # Lavalink 節點若尚未啟動，這裡會失敗；先印出訊息，不讓整個 Bot 崩潰。
             error = e
-            print(f"❌ 連線 Lavalink 節點失敗：{e}")
-            print("   請確認 Lavalink 是否已啟動，以及 LAVALINK_URI / LAVALINK_PASSWORD 是否正確。")
+            print(f"❌ 連線 Lavalink 節點（{resolved_id or connect_uri}）失敗：{e}")
+            print("   請確認公開節點是否在線，以及環境變數 URI / PASSWORD 是否正確。")
         finally:
-            self._lavalink_connecting = False
+            self._node_connecting.discard(lock_key)
+            if identifier is None:
+                self._lavalink_connecting = False
 
         # 失敗路徑：清掉沒註冊成功的節點（WebSocket 退避重試、aiohttp session、Pool 殘留）。
         if node is not None:
             await self._discard_failed_node(node)
-        await self._report_lavalink_failure(error, connect_uri, lavalink_password)
+        fail_key = resolved_id or (getattr(node, "identifier", None) if node is not None else None) or connect_uri
+        self._node_last_errors[fail_key] = redact_secrets(str(error)) if error else "連線失敗"
+        await self._report_lavalink_failure(error, connect_uri, lavalink_password, node_identifier=fail_key)
+        return False
 
     async def _discard_failed_node(self, node: "wavelink_module.Node") -> None:
         """清理連線失敗的節點，避免殘留 DISCONNECTED 節點與沒關閉的 aiohttp session。
@@ -2259,7 +2384,12 @@ class Music(commands.Cog):
                 print(f"⚠️ 關閉 Lavalink aiohttp session 失敗：{type(exc).__name__}: {exc}")
 
     async def _report_lavalink_failure(
-        self, error: Exception, lavalink_uri: str, lavalink_password: str
+        self,
+        error: Exception,
+        lavalink_uri: str,
+        lavalink_password: str,
+        *,
+        node_identifier: str | None = None,
     ) -> None:
         """連線失敗的統一回報：後台 log + 節點探測診斷 + DM 開發者（每輪故障只 DM 一次）。
 
@@ -2274,34 +2404,213 @@ class Music(commands.Cog):
             diagnosis = f"（診斷過程發生錯誤：{type(exc).__name__}: {exc}）"
         print(f"🔍 Lavalink 連線診斷：{diagnosis}")
 
-        if self._lavalink_failure_notified:
+        key = node_identifier or (lavalink_uri or "").strip().rstrip("/")
+        already_notified = bool(self._node_failure_notified.get(key)) or (
+            not self._configured_nodes and self._lavalink_failure_notified
+        )
+        if already_notified:
             # 重連冷卻期間每輪都會走到這裡，只記 log，不重複 DM 開發者。
             print("ℹ️ 此次故障已通知過開發者，本次僅記錄後台日誌，不重複發送 DM。")
             return
+        self._node_failure_notified[key] = True
         self._lavalink_failure_notified = True
         await self.bot.notify_owner_error(
             error,
-            extra_info=f"Lavalink 節點連線失敗：{lavalink_uri}\n🔍 診斷：{diagnosis}",
+            extra_info=f"Lavalink 節點連線失敗（{key}）：{lavalink_uri}\n🔍 診斷：{diagnosis}",
         )
 
-    async def _reconnect_lavalink_if_needed(self) -> None:
-        """Pool 為空時自動重連（health check 呼叫；受 LAVALINK_RECONNECT_COOLDOWN 冷卻保護）。
+    def _get_connected_nodes(self) -> list[Any]:
+        """取得目前處於 CONNECTED 狀態的所有 Lavalink 節點清單。"""
+        if wavelink is None:
+            return []
+        pool_nodes = getattr(wavelink.Pool, "nodes", {}) or {}
+        return [
+            n for n in pool_nodes.values()
+            if getattr(getattr(n, "status", None), "name", None) == "CONNECTED"
+        ]
 
-        舊版 health check 只遍歷「已註冊」的節點，Pool 是空的（初次連線失敗、
-        節點被剔除）時等於完全沒監控，音樂功能會一路壞到重新啟動。
-        """
+    def _get_node_states(self) -> dict[str, dict[str, Any]]:
+        """整理所有已設定與連線池中節點的標準化狀態字典，供選點與 /music_node_status 使用。"""
+        pool_nodes = dict(getattr(wavelink.Pool, "nodes", {}) or {}) if wavelink is not None else {}
+        states: dict[str, dict[str, Any]] = {}
+        matched_pool_ids: set[str] = set()
+
+        for ident, cfg in self._configured_nodes.items():
+            matched_node = pool_nodes.get(ident)
+            if matched_node is None:
+                cfg_candidates = {cfg.uri.strip().rstrip("/"), *_build_http_fallback_uris(cfg.uri)}
+                for pid, pnode in pool_nodes.items():
+                    puri = str(getattr(pnode, "uri", None) or "").strip().rstrip("/")
+                    if puri in cfg_candidates:
+                        matched_node = pnode
+                        matched_pool_ids.add(pid)
+                        break
+            else:
+                matched_pool_ids.add(ident)
+
+            stats = self._node_stats_cache.get(ident)
+            latency = self._node_latencies.get(ident)
+            if matched_node is not None:
+                mid = str(getattr(matched_node, "identifier", ident) or ident)
+                stats = stats or self._node_stats_cache.get(mid)
+                latency = latency if latency is not None else self._node_latencies.get(mid)
+            states[ident] = extract_node_state(
+                ident,
+                matched_node,
+                cached_stats=stats,
+                latency_ms=latency,
+                configured_uri=cfg.uri,
+            )
+
+        for pid, pnode in pool_nodes.items():
+            if pid in matched_pool_ids or pid in states:
+                continue
+            states[pid] = extract_node_state(
+                pid,
+                pnode,
+                cached_stats=self._node_stats_cache.get(pid),
+                latency_ms=self._node_latencies.get(pid),
+            )
+        return states
+
+    def _pick_best_node(self, *, exclude: Iterable[str] = ()) -> Any | None:
+        """透過純函式 pick_best_node() 挑選目前負載最低的 CONNECTED 節點物件。"""
+        if wavelink is None:
+            return None
+        pool_nodes = dict(getattr(wavelink.Pool, "nodes", {}) or {})
+        if not pool_nodes:
+            return None
+        states = self._get_node_states()
+        best_id = pick_best_node(states, exclude=exclude)
+        if best_id is None:
+            return None
+        if best_id in pool_nodes:
+            return pool_nodes[best_id]
+        # 若識別名稱經 URI 對應，反查實際 Pool 中的 Node 物件
+        cfg = self._configured_nodes.get(best_id)
+        if cfg is not None:
+            cfg_candidates = {cfg.uri.strip().rstrip("/"), *_build_http_fallback_uris(cfg.uri)}
+            for pnode in pool_nodes.values():
+                if str(getattr(pnode, "uri", None) or "").strip().rstrip("/") in cfg_candidates:
+                    return pnode
+        return None
+
+    async def _refresh_node_stats(self, node: Any, *, timeout: float = 4.0) -> None:
+        """輕量量測單一 CONNECTED 節點的 REST 延遲與負載統計（有 timeout 保護）。"""
+        if node is None:
+            return
+        ident = str(getattr(node, "identifier", "") or "")
+        fetch_stats = getattr(node, "fetch_stats", None)
+        if callable(fetch_stats):
+            t0 = time.monotonic()
+            try:
+                maybe_coro = fetch_stats()
+                if inspect.isawaitable(maybe_coro):
+                    stats = await asyncio.wait_for(maybe_coro, timeout=timeout)
+                    self._node_latencies[ident] = round((time.monotonic() - t0) * 1000.0, 1)
+                    if stats is not None:
+                        self._node_stats_cache[ident] = stats_payload_to_dict(stats)
+            except Exception as exc:
+                print(f">>> 取得節點 {ident} 負載統計失敗（不影響播放）：{exc}")
+
+    def _schedule_all_nodes_reconnect(self) -> None:
+        """當所有節點皆不可用時，在背景啟動指數退避重連任務（上限 60 秒，避免重複啟動）。"""
+        if self._all_nodes_reconnect_task is not None and not self._all_nodes_reconnect_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        if not loop.is_running():
+            return
+        self._all_nodes_reconnect_task = asyncio.create_task(self._all_nodes_reconnect_loop())
+
+    async def _all_nodes_reconnect_loop(self) -> None:
+        """雙節點全斷時的背景指數退避重連迴圈（5s -> 10s -> 20s -> 40s -> 60s 上限）。"""
+        try:
+            while wavelink is not None:
+                configs = [
+                    cfg for cfg in load_lavalink_node_configs(log_warnings=False)
+                    if cfg.identifier not in self._manually_killed_nodes
+                ]
+                if not configs:
+                    return
+                if self._get_connected_nodes():
+                    self._reconnect_backoff_attempt = 0
+                    return
+
+                delay = compute_reconnect_backoff(
+                    self._reconnect_backoff_attempt,
+                    base=LAVALINK_BACKOFF_BASE,
+                    cap=LAVALINK_BACKOFF_MAX,
+                )
+                print(
+                    f"🔁 目前所有 Lavalink 節點皆離線，將在 {delay:.0f} 秒後進行指數退避重連"
+                    f"（第 {self._reconnect_backoff_attempt + 1} 輪）..."
+                )
+                await asyncio.sleep(delay)
+                self._reconnect_backoff_attempt += 1
+
+                if self._get_connected_nodes():
+                    self._reconnect_backoff_attempt = 0
+                    return
+
+                await asyncio.gather(
+                    *(
+                        self._connect_lavalink(cfg.uri, cfg.password, identifier=cfg.identifier)
+                        for cfg in configs
+                        if cfg.identifier not in self._manually_killed_nodes
+                    ),
+                    return_exceptions=True,
+                )
+                if self._get_connected_nodes():
+                    print("✅ 背景指數退避重連成功，至少已有一個 Lavalink 節點恢復在線！")
+                    self._reconnect_backoff_attempt = 0
+                    return
+        except asyncio.CancelledError:
+            return
+        finally:
+            self._all_nodes_reconnect_task = None
+
+    async def _reconnect_lavalink_if_needed(self) -> None:
+        """檢查未在連線池中之設定節點並自動重連（受 LAVALINK_RECONNECT_COOLDOWN 冷卻保護）。"""
         if wavelink is None or self._lavalink_connecting:
             return  # 連線中（例如 cog_load 的背景連線還沒結果），不要開第二條 WebSocket
-        lavalink_uri = os.getenv('LAVALINK_URI')
-        lavalink_password = os.getenv('LAVALINK_PASSWORD')
-        if not lavalink_uri or not lavalink_password:
+        configs = load_lavalink_node_configs(log_warnings=False)
+        if configs:
+            self._configured_nodes = {cfg.identifier: cfg for cfg in configs}
+        if not configs:
             return  # 沒設定節點 → 維持原本「略過連線」的行為，不重複印警告
+
+        pool_nodes = getattr(wavelink.Pool, "nodes", {}) or {}
+        pending: list[LavalinkNodeConfig] = []
+        for cfg in configs:
+            if cfg.identifier in self._manually_killed_nodes or cfg.identifier in self._node_connecting:
+                continue
+            cand_uris = {cfg.uri.strip().rstrip("/"), *_build_http_fallback_uris(cfg.uri)}
+            already_in_pool = cfg.identifier in pool_nodes or any(
+                str(getattr(n, "uri", None) or "").strip().rstrip("/") in cand_uris
+                for n in pool_nodes.values()
+            )
+            if not already_in_pool:
+                pending.append(cfg)
+
+        if not pending:
+            return
+
         now = time.monotonic()
         if now - self._lavalink_last_reconnect_attempt < LAVALINK_RECONNECT_COOLDOWN:
             return
         self._lavalink_last_reconnect_attempt = now
-        print(f"🔁 Lavalink 節點不在 Pool 中，嘗試自動重連（冷卻 {LAVALINK_RECONNECT_COOLDOWN:g} 秒）：{lavalink_uri}")
-        await self._connect_lavalink(lavalink_uri, lavalink_password)
+        for cfg in pending:
+            print(
+                f"🔁 Lavalink 節點「{cfg.identifier}」不在 Pool 中，嘗試自動重連"
+                f"（冷卻 {LAVALINK_RECONNECT_COOLDOWN:g} 秒）：{cfg.uri}"
+            )
+            if cfg.from_legacy_env and len(configs) == 1:
+                await self._connect_lavalink(cfg.uri, cfg.password)
+            else:
+                await self._connect_lavalink(cfg.uri, cfg.password, identifier=cfg.identifier)
 
     # ---------- Lavalink Session 失效自動復原 ----------
     # 症狀：歌曲播到一半（或剛好播完）後完全沒聲音、不會自動換下一首，所有面板按鈕都噴
@@ -2823,18 +3132,18 @@ class Music(commands.Cog):
         self._cached_player_cls = _StableVoicePlayer
         return _StableVoicePlayer
 
-    async def _ensure_node_session_ready(self, *, force_reset: bool = False, reason: str = "") -> bool:
+    async def _ensure_node_session_ready(
+        self, *, force_reset: bool = False, reason: str = "", target_node: Any = None
+    ) -> bool:
         """在加入語音頻道前驗證 Lavalink Session 是否有效，失效時自動重建並等待就緒。"""
         if wavelink is None:
             return False
-        pool_nodes = list(getattr(wavelink.Pool, "nodes", {}).values())
-        connected_nodes = [
-            n for n in pool_nodes if getattr(getattr(n, "status", None), "name", None) == "CONNECTED"
-        ]
+        connected_nodes = self._get_connected_nodes()
         if not connected_nodes:
             return False
 
-        target_node = connected_nodes[0]
+        if target_node is None or getattr(getattr(target_node, "status", None), "name", None) != "CONNECTED":
+            target_node = self._pick_best_node() or connected_nodes[0]
         session_resetting = getattr(self, "_session_resetting", None)
         if session_resetting is None:
             session_resetting = {}
@@ -2882,10 +3191,28 @@ class Music(commands.Cog):
                 return True
         return False
 
+    @staticmethod
+    def _make_player_cls_for_node(player_cls: Any, target_node: Any) -> Any:
+        """建立指定節點的 Player 工廠，讓 channel.connect(cls=...) 優先綁定 pick_best_node() 所選節點。"""
+        if player_cls is None or target_node is None:
+            return player_cls
+
+        def _factory(client: Any, channel: Any, **kwargs: Any):
+            try:
+                return player_cls(client, channel, nodes=[target_node], **kwargs)
+            except TypeError:
+                return player_cls(client, channel)
+
+        return _factory
+
     async def _connect_voice_channel(
-        self, guild: discord.Guild, channel: Any
+        self,
+        guild: discord.Guild,
+        channel: Any,
+        *,
+        target_node: Any = None,
     ) -> "wavelink_module.Player":
-        """安全連線至語音頻道：預檢 Lavalink Session 並於首次失敗時自動清理與重試。"""
+        """安全連線至語音頻道：以 pick_best_node() 選點、預檢 Session，首次失敗時自動切換備援節點重試。"""
         if not hasattr(self, "_connecting_guilds") or self._connecting_guilds is None:
             self._connecting_guilds = set()
 
@@ -2893,24 +3220,43 @@ class Music(commands.Cog):
         guild_id = guild.id
         self._connecting_guilds.add(guild_id)
         try:
-            await self._ensure_node_session_ready()
+            chosen_node = target_node or self._pick_best_node()
+            await self._ensure_node_session_ready(target_node=chosen_node)
 
             last_exc: Exception | None = None
+            tried_ids: set[str] = set()
             for attempt in range(2):
+                if attempt > 0 and target_node is None:
+                    chosen_node = self._pick_best_node(exclude=tried_ids) or self._pick_best_node()
+                if chosen_node is not None and getattr(chosen_node, "identifier", None):
+                    tried_ids.add(str(chosen_node.identifier))
+
+                connect_cls = self._make_player_cls_for_node(player_cls, chosen_node)
                 try:
-                    return await channel.connect(cls=player_cls)
+                    player = await channel.connect(cls=connect_cls)
+                    node_obj = getattr(player, "node", None) or chosen_node
+                    if node_obj is not None and getattr(node_obj, "identifier", None):
+                        self._guild_active_node[guild_id] = str(node_obj.identifier)
+                    return player
                 except Exception as exc:
                     last_exc = exc
                     if attempt >= 1:
                         break
                     print(f"⚠️ [語音連線] 第 1 次加入「{channel}」失敗，清理並重試 (guild_id={guild_id}): {exc}")
                     await self._cleanup_guild_voice_and_player(guild, reset_gateway=True)
+                    backup_node = (
+                        target_node
+                        or self._pick_best_node(exclude=tried_ids)
+                        or self._pick_best_node()
+                    )
                     if self._is_session_lost_error(exc):
                         await self._ensure_node_session_ready(
-                            force_reset=True, reason=f"首次語音連線遭遇 Session 失效：{exc}"
+                            force_reset=True,
+                            reason=f"首次語音連線遭遇 Session 失效：{exc}",
+                            target_node=backup_node,
                         )
                     else:
-                        await self._ensure_node_session_ready()
+                        await self._ensure_node_session_ready(target_node=backup_node)
                     await asyncio.sleep(0.6)
 
             assert last_exc is not None
@@ -3086,31 +3432,20 @@ class Music(commands.Cog):
         """檢查目前是否有任何 Lavalink 節點處於可用狀態（CONNECTED）。"""
         if wavelink is None:
             return False, "語音模組尚未載入或安裝完成。"
-        nodes = getattr(wavelink.Pool, "nodes", {})
-        if not nodes:
-            return False, "目前沒有已連線的 Lavalink 音訊節點（節點未設定或連線中斷）。"
-        connected = [
-            n for n in nodes.values()
-            if getattr(getattr(n, "status", None), "name", None) == "CONNECTED"
-        ]
-        if not connected:
+        nodes = getattr(wavelink.Pool, "nodes", {}) or {}
+        connected = self._get_connected_nodes()
+        if connected:
+            return True, ""
+        if not nodes and not self._configured_nodes:
+            return False, "目前沒有設定任何可用的 Lavalink 音訊節點，請聯絡管理員檢查環境變數。"
+        if nodes:
             status_desc = ", ".join(f"{n.identifier} ({self._describe_node_status(n)[1]})" for n in nodes.values())
-            return False, f"音訊伺服器目前離線中（狀態：{status_desc}），正在嘗試自動重連，請稍候再試！"
-        return True, ""
+            return False, f"目前沒有可用的 Lavalink 音訊節點（狀態：{status_desc}），正在背景以指數退避自動重連，請稍候再試！"
+        return False, "目前沒有已連線的 Lavalink 音訊節點，正在背景以指數退避自動重連，請稍候再試！"
 
     @tasks.loop(seconds=NODE_HEALTH_CHECK_INTERVAL)
     async def node_health_check(self):
-        """新增：定期檢查所有已註冊 Lavalink 節點的連線狀態，離線時通知開發者。
-
-        wavelink 本身斷線後會自動嘗試背景重連，不會丟一個明確的「節點斷線」
-        事件給我們，所以改用 `tasks.loop` 每隔 NODE_HEALTH_CHECK_INTERVAL 秒
-        主動檢查一次 `wavelink.Pool.nodes` 裡每個節點目前的 `status`。
-
-        用 `self._node_alert_sent` 這個字典記錄「這次離線有沒有通知過」：
-        狀態變成 DISCONNECTED 且還沒通知過，就 DM 開發者一次並把旗標設為
-        True；之後只要還是離線，就不會每 30 秒洗一次版。等狀態恢復成
-        CONNECTED，才把旗標重置回 False，下次再斷線才會重新觸發通知。
-        """
+        """定期檢查所有 Lavalink 節點的連線狀態、更新負載統計，並在離線時處理通知與自動重連（間隔 >= 30 秒）。"""
         if wavelink is None:
             return
 
@@ -3121,35 +3456,38 @@ class Music(commands.Cog):
             return
 
         if not nodes:
-            # Pool 是空的（初次連線失敗／節點被剔除）時，下面的遍歷什麼都不會做，
-            # 等於故障期間完全沒有監控 → 改成在這裡受冷卻保護地自動重連。
+            # Pool 是空的（初次連線失敗／節點被剔除）時，受冷卻保護地自動重連。
             await self._reconnect_lavalink_if_needed()
             return
 
-        for identifier, node in nodes.items():
+        for identifier, node in list(nodes.items()):
             status_name, _ = self._describe_node_status(node)
             uri = getattr(node, "uri", identifier)
 
             if status_name == "DISCONNECTED":
+                if identifier in self._manually_killed_nodes:
+                    continue
                 if not self._node_alert_sent.get(identifier):
                     self._node_alert_sent[identifier] = True
+                    self._node_last_errors[identifier] = "健康檢查偵測到節點離線"
                     print(f"❌ 健康檢查偵測到 Lavalink 節點離線：{uri}（identifier={identifier}）")
                     synthetic_error = RuntimeError(f"Lavalink 節點離線：{uri}")
                     await self.bot.notify_owner_error(
                         synthetic_error,
                         extra_info=(
                             f"node_health_check 偵測到節點離線 identifier={identifier} uri={uri}，"
-                            f"語音功能（/music_join /music_play 等）可能暫時無法使用。"
+                            f"若另有可用節點將自動容錯接管，否則語音功能暫時無法使用。"
                         ),
                     )
             elif status_name == "CONNECTED" and self._node_alert_sent.get(identifier):
                 # 節點恢復連線了，重置旗標，下次再斷線才會再通知一次。
                 self._node_alert_sent[identifier] = False
+                self._node_last_errors.pop(identifier, None)
                 print(f"✅ Lavalink 節點已恢復連線：{uri}（identifier={identifier}）")
 
-            # 主動探測 Session 是否仍然有效：即使目前沒有活躍播放器（閒置狀態），公開節點重啟或回收 Session
-            # 後仍可能留下失效的 session_id，若未事先探測重建，下一次點歌加入語音房就會立刻 404 並秒退。
+            # 主動探測 Session 是否仍然有效並更新負載／延遲統計
             if status_name == "CONNECTED":
+                await self._refresh_node_stats(node, timeout=4.0)
                 if hasattr(node, "_session_id") and getattr(node, "_session_id", None) is None:
                     await self._reset_lavalink_session(node, reason="health check 偵測節點無有效 session_id")
                     continue
@@ -3175,6 +3513,9 @@ class Music(commands.Cog):
                                 if gid not in remote_ids and getattr(local_player, "_current", None) is not None:
                                     print(f"🔄 Lavalink 端已找不到 guild_id={gid} 的播放器，嘗試恢復播放")
                                     asyncio.create_task(self._recover_player_after_session_reset(local_player))
+
+        # 若雙節點中另有節點未註冊於 Pool（例如啟動時離線），在冷卻結束後補連線
+        await self._reconnect_lavalink_if_needed()
 
     @node_health_check.before_loop
     async def before_node_health_check(self):
@@ -3464,9 +3805,16 @@ class Music(commands.Cog):
     # ---------- wavelink 自訂事件 ----------
     @commands.Cog.listener()
     async def on_wavelink_node_ready(self, payload: Any):
-        print(f"✅ Lavalink 節點已就緒：{payload.node.uri}（Session ID: {payload.session_id}）")
         node = payload.node
-        self._session_resetting.pop(str(getattr(node, "identifier", None) or id(node)), None)
+        ident = str(getattr(node, "identifier", None) or id(node))
+        print(f"✅ Lavalink 節點已就緒：{ident} ({payload.node.uri}，Session ID: {payload.session_id})")
+        self._session_resetting.pop(ident, None)
+        self._node_alert_sent[ident] = False
+        self._node_failure_notified[ident] = False
+        self._node_last_errors.pop(ident, None)
+        self._manually_killed_nodes.discard(ident)
+        self._reconnect_backoff_attempt = 0
+        asyncio.create_task(self._refresh_node_stats(node, timeout=4.0))
         if getattr(payload, "resumed", False):
             return  # Lavalink 成功恢復舊 Session，player 與播放狀態都還在，不需要處理
         # 模組重載後節點會被重建，但 guild.voice_client 仍綁在舊節點上 → 先把這些孤兒播放器轉移到新節點
@@ -3480,6 +3828,19 @@ class Music(commands.Cog):
             print(f"🔄 Lavalink 配發了新 Session，開始恢復 {len(players)} 個播放器的語音連線與播放狀態")
         for player in players:
             asyncio.create_task(self._recover_player_after_session_reset(player))
+
+    @commands.Cog.listener()
+    async def on_wavelink_stats_update(self, payload: Any):
+        """接收 Lavalink 週期推送的節點負載（因 wavelink 3.5.2 payload 不含 node，僅快取單一節點或同步更新）。"""
+        if wavelink is None or payload is None:
+            return
+        connected = self._get_connected_nodes()
+        # wavelink 3.5.2 StatsEventPayload 未附帶 node 識別；若目前僅一個節點在線可直接快取，
+        # 雙節點同時在線時避免寫錯節點，交由 node_health_check 透過 fetch_stats() 精確更新。
+        if len(connected) == 1:
+            ident = str(getattr(connected[0], "identifier", "") or "")
+            if ident:
+                self._node_stats_cache[ident] = stats_payload_to_dict(payload)
 
     @commands.Cog.listener()
     async def on_wavelink_track_start(self, payload: Any):
@@ -4372,13 +4733,55 @@ class Music(commands.Cog):
         await voice_client.disconnect()
         await interaction.response.send_message(f"👋 已離開 {channel_mention}。", ephemeral=True)
 
-    async def _fetch_tracks_with_fallback(self, query: str) -> Any:
-        """核心搜尋演算法：支援 URL、自帶前綴，並對純關鍵字進行多來源智慧 Fallback。
+    def _get_candidate_search_nodes(self, preferred_node: Any = None) -> list[Any]:
+        """取得依 pick_best_node() 排序的可用搜尋節點清單；無已連線節點時回傳 [None] 保持相容。"""
+        if preferred_node is not None:
+            return [preferred_node]
+        connected = self._get_connected_nodes()
+        if not connected:
+            return [None]
+        best = self._pick_best_node()
+        ordered: list[Any] = []
+        if best is not None:
+            ordered.append(best)
+        for node in connected:
+            if node not in ordered:
+                ordered.append(node)
+        return ordered
+
+    @staticmethod
+    async def _invoke_playable_search(query: str, *, source: str | None = None, node: Any = None) -> Any:
+        """封裝 wavelink.Playable.search，加入 timeout 並相容測試替身函式簽名。"""
+        search_fn = wavelink.Playable.search
+        try:
+            params = inspect.signature(search_fn).parameters
+        except (TypeError, ValueError):
+            params = {}
+        supports_node = "node" in params
+        supports_source = "source" in params or any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+        )
+
+        kwargs: dict[str, Any] = {}
+        if source is not None and supports_source:
+            kwargs["source"] = source
+        if node is not None and supports_node:
+            kwargs["node"] = node
+
+        try:
+            coro = search_fn(query, **kwargs)
+        except TypeError:
+            coro = search_fn(query)
+        return await asyncio.wait_for(coro, timeout=LAVALINK_SEARCH_TIMEOUT)
+
+    async def _fetch_tracks_with_fallback(self, query: str, *, node: Any = None) -> Any:
+        """核心搜尋演算法：支援 URL、自帶前綴、多節點容錯，並對純關鍵字進行多來源智慧 Fallback。
 
         - 修正問題：wavelink 3.x 預設使用 ytmsearch:（YouTube Music），但多數公開節點對 ytmsearch
           回傳空結果（empty）或錯誤，導致一般關鍵字搜尋完全無法找到歌曲。
         - 解決方案：純關鍵字優先使用「ytsearch:」（標準 YouTube 搜尋），並在無結果或失敗時
-          依序自動 fallback 到「scsearch:」（SoundCloud）與「ytmsearch:」（YouTube Music）。
+          依序自動 fallback 到「scsearch:」（SoundCloud）與「ytmsearch:」（YouTube Music）；
+          在雙節點均可用時，若單一節點失敗亦會自動嘗試備援節點。
         - 針對 URL 與自帶前綴（例如 ytsearch:、scsearch: 等）直接傳送，不重疊添加前綴。
         """
         clean_query = query.strip().strip("<>")
@@ -4387,24 +4790,37 @@ class Music(commands.Cog):
             clean_query.lower().startswith(p)
             for p in ("ytsearch:", "ytmsearch:", "scsearch:", "spsearch:", "amsearch:")
         )
+        candidate_nodes = self._get_candidate_search_nodes(preferred_node=node)
 
         if is_url or has_prefix:
-            return await wavelink.Playable.search(clean_query)
+            last_err: Exception | None = None
+            for cand_node in candidate_nodes:
+                try:
+                    tracks = await self._invoke_playable_search(clean_query, node=cand_node)
+                    if tracks:
+                        return tracks
+                    last_err = None
+                except Exception as exc:
+                    last_err = exc
+                    node_label = getattr(cand_node, "identifier", "default")
+                    print(f">>> 節點 [{node_label}] 搜尋網址／前綴失敗：{exc}")
+            if last_err is not None:
+                raise last_err
+            return []
 
         sources = ["ytsearch", "scsearch", "ytmsearch"]
-        last_error = None
+        last_error: Exception | None = None
         for src in sources:
-            try:
+            for cand_node in candidate_nodes:
                 try:
-                    tracks = await wavelink.Playable.search(clean_query, source=src)
-                except TypeError:
-                    # 相容性保護：若環境或測試 mock 未支援 source 參數，回退為單參數呼叫
-                    tracks = await wavelink.Playable.search(clean_query)
-                if tracks:
-                    return tracks
-            except Exception as e:
-                last_error = e
-                print(f">>> 來源 [{src}] 搜尋「{clean_query}」失敗，嘗試下一個來源：{e}")
+                    tracks = await self._invoke_playable_search(clean_query, source=src, node=cand_node)
+                    if tracks:
+                        return tracks
+                    last_error = None
+                except Exception as e:
+                    last_error = e
+                    node_label = getattr(cand_node, "identifier", "default")
+                    print(f">>> 節點 [{node_label}] 來源 [{src}] 搜尋「{clean_query}」失敗，嘗試下一備援：{e}")
 
         if last_error is not None:
             raise last_error
@@ -4482,6 +4898,33 @@ class Music(commands.Cog):
             print(f">>> yt-dlp 備援解析播放清單失敗：{e}")
             return YouTubeFetchResult(tracks=[], truncated=False, skipped=0)
 
+    @staticmethod
+    def _classify_search_exception(error: Exception) -> tuple[str, bool]:
+        """將搜尋／載入例外分類為 (友善繁體中文提示, 是否屬未知錯誤須通報開發者)。"""
+        if wavelink is not None and isinstance(error, getattr(wavelink, "InvalidNodeException", ())):
+            return "⚠️ 目前沒有可用的 Lavalink 音訊節點，正在自動重連，請稍候再試！", False
+        if isinstance(error, (asyncio.TimeoutError, TimeoutError)):
+            return "⏳ 搜尋音樂逾時（公開節點目前回應過慢），請稍後再試或改用其他關鍵字。", False
+        if isinstance(error, aiohttp.ClientError):
+            return "⚠️ 與音訊節點連線發生網路異常，請稍後再試。", False
+
+        lavalink_load_cls = getattr(wavelink, "LavalinkLoadException", None) if wavelink is not None else None
+        lavalink_exc_cls = getattr(wavelink, "LavalinkException", None) if wavelink is not None else None
+        if lavalink_load_cls is not None and isinstance(error, lavalink_load_cls):
+            detail = f"{getattr(error, 'error', '')} {getattr(error, 'cause', '')} {error}".lower()
+            if any(k in detail for k in ("country", "region", "not available", "geo", "blocked")):
+                return "🌏 此影片／音訊受到地區限制，目前節點無法載入，請改搜其他歌曲或使用 `scsearch:` 搜尋 SoundCloud。", False
+            if any(k in detail for k in ("sign in", "login", "bot", "age", "private", "unavailable", "copyright")):
+                return "🔒 來源需要登入驗證或影片為私人／已下架（公開節點常見限制），請改用關鍵字改搜 SoundCloud 或換一首歌。", False
+            if any(k in detail for k in ("invalid url", "malformed", "not a valid", "unsupported", "syntax")):
+                return "🔗 無效的網址或目前節點不支援此來源連結，請檢查連結格式後再試。", False
+            return "⚠️ 音訊節點回傳載入錯誤，請改用其他關鍵字或稍後再試。", False
+
+        if lavalink_exc_cls is not None and isinstance(error, lavalink_exc_cls):
+            return "⚠️ 音訊節點回傳異常狀態，請稍後再試。", False
+
+        return "❌ 搜尋音樂時發生錯誤，可能是來源網站暫時無法連線，或觸發了反爬蟲封鎖，已回報開發者。", True
+
     async def _search_one_track(
         self, interaction: discord.Interaction, query: str
     ) -> Any:
@@ -4494,11 +4937,10 @@ class Music(commands.Cog):
             tracks = await self._fetch_tracks_with_fallback(query)
         except Exception as e:
             print(f">>> wavelink 搜尋失敗：{e}")
-            await self.bot.notify_owner_error(e, interaction, extra_info=f"音樂搜尋失敗 query={query}")
-            await self._ephemeral_error(
-                interaction,
-                "❌ 搜尋音樂時發生錯誤，可能是來源網站暫時無法連線，或觸發了反爬蟲封鎖，已回報開發者。",
-            )
+            friendly_msg, is_unknown = self._classify_search_exception(e)
+            if is_unknown:
+                await self.bot.notify_owner_error(e, interaction, extra_info=f"音樂搜尋失敗 query={query}")
+            await self._ephemeral_error(interaction, friendly_msg)
             return None
 
         if not tracks:
