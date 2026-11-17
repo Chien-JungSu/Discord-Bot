@@ -19,7 +19,7 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 import discord
-from flask import Flask, jsonify, render_template, request, url_for as flask_url_for
+from flask import Flask, jsonify, redirect, render_template, request, url_for as flask_url_for
 from waitress import serve
 
 try:
@@ -341,6 +341,18 @@ def terms_page():
 @app.route('/privacy')
 def privacy_page():
     return render_template('privacy.html')
+
+
+DISCORD_INVITE_URL = os.getenv(
+    'DISCORD_INVITE_URL',
+    'https://discord.com/oauth2/authorize?client_id=1477930641944350952&permissions=8&integration_type=0&scope=bot+applications.commands',
+)
+
+
+@app.route('/invite')
+@app.route('/invite/')
+def invite_redirect():
+    return redirect(DISCORD_INVITE_URL, code=302)
 
 
 # ---------- GitHub 最新 Commit 紀錄快取與解析 ----------

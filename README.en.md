@@ -14,6 +14,7 @@ Supported features:
 - `/choice`: randomly select one option from user input
 - `/quotes`: show random quotes or jokes with interaction buttons
 - `/steal emoji:<emoji>`: download a Discord emoji reference or mention directly from the CDN and add it to the current guild as a custom emoji; supports multiple emoji in one call and replies with a friendly message when a source exceeds the 256 KB Discord limit
+- `/bot_steal emoji:<emoji>`: owner-only (`owner_guild_only`) command that works like `/steal`, but adds the emoji directly to the bot's application emojis instead of the current guild
 - `/weather <city>`: query real-time weather for Taiwan cities
 - `/bus`: query Taiwan bus arrivals through dropdown menus
 - `/server_info`: display detailed server information
@@ -61,6 +62,8 @@ Supported features:
 - `/shorten` (or `/reurl`): shorten URLs via Reurl.cc with optional UTM parameters and ephemeral mode, plus a right-click message context menu ("縮短訊息中的網址")
 - AI Smart Assistant suite: `/ai`, `/ai_reset` (`/reset`), `/ai_provider` (`/provider`), `/ai_persona` (`/persona`), `/ai_config`, `/ai_settings`, plus natural conversations via `@bot` mentions, direct replies, and dedicated channels (automatically ignores Discord forwarded messages and replies to non-AI messages); multi-provider free failover chain (Google AI Studio → NVIDIA NIM → Mistral AI) defaulting to `gemini-3.5-flash-lite` with individually selectable Gemini model options (including `gemini-4-hydrogen`) and zero AI currency restrictions; automatic inline LaTeX Unicode formatting and pure-black rounded PNG card rendering for block math & Markdown tables with automatic multi-Container chunking
 - `/幹話` (or `/ganhua`): take no parameters and randomly generate a Taiwanese banter/meme reply directly in the channel; also includes a right-click message context menu ("應用程式" → "用幹話回覆") to roast a specific message directly without leaving a private notification (use `/reload_cogs` on `cogs.ganhua` after editing `memes_data.json` to hot-reload without restarting)
+- **Server Management Suite (`/manage_*`)**: includes `/manage_kick`, `/manage_ban`, `/manage_unban`, `/manage_timeout`, `/manage_untimeout`, `/manage_warn`, `/manage_warnings`, `/manage_purge`, `/manage_slowmode`, `/manage_lock`, `/manage_unlock`, `/manage_channel_create`, `/manage_channel_edit`, `/manage_channel_delete`, `/manage_announce`, `/manage_pin`, `/manage_role`, `/manage_nick`, `/manage_voice`, and `/manage_member_info`, enforcing per-command Discord permissions, channel overwrites, role hierarchy guards, and confirmation prompts for high-risk actions
+- **Bot Status Message Rotation**: automatically rotates Discord presence messages on a configurable interval (default 30s) across Playing / Listening / Watching / Competing / Custom activity types with dynamic placeholders (`{guilds}`, `{users}`, `{commands}`, `{latency}`), manageable in real time by the Bot Owner from the Web Control Panel ("Admin Settings → Status Rotation")
 - `!sync` (owner-only): immediately sync global slash and context-menu commands, or use `!sync guild` / `!sync .` to sync commands for the current server
 
 ### Requester control lock
@@ -234,6 +237,7 @@ When launched, the bot starts the Flask background server from `cogs/web_server.
 - `/choice options:<text>`: enter options separated by spaces and the bot chooses one randomly
 - `/quotes`: show buttons for random quote or joke
 - `/steal emoji:<emoji string or reference>`: parse a Discord emoji string, download the asset from the CDN, and create it as a custom emoji in the current server; supports multiple emoji at once and prevents failed uploads from exposing raw HTTP error codes by returning a friendly message when the asset is too large
+- `/bot_steal emoji:<emoji string or reference>`: owner-only (`owner_guild_only` and restricted to the bot owner) command with the same parsing, download, and 256 KB validation logic as `/steal`, creating the emoji in the bot's own application emoji pool while automatically avoiding name collisions with existing bot emojis
 - `/weather city:<city name or English name>`: query weather, supports mappings like `臺北`, `Taichung`, `Matsu`
 - `/bus`: select a city, enter a bus route, choose a stop from a dropdown menu, and view real-time arrival information
 - `/server_info`: display the current server's details
@@ -292,6 +296,26 @@ When launched, the bot starts the Flask background server from `cogs/web_server.
 - `/ai_config`: inspect the server's current AI configuration (model, channel restriction, temperature, max tokens, and enabled status).
 - `/ai_settings [model] [instruction] [channel] [clear_channel] [temperature] [max_tokens] [enabled]`: update server AI defaults via slash command or the Web Control Panel (requires **Manage Server** permission).
 - `/幹話` (or `/ganhua`): take no parameters and randomly generate a Taiwanese banter/meme reply directly in the channel; also includes a right-click message context menu ("用幹話回覆").
+- **Server Management Suite (`/manage_*`, enforces Discord permissions, channel overwrites, role hierarchy, and confirmation buttons on high-risk actions)**:
+  - `/manage_kick member:<member> [reason]`: kick a member. Requires **Kick Members**.
+  - `/manage_ban user:<user> [reason] [delete_message_days:0~7]`: ban a member or user ID and optionally purge recent messages. Requires **Ban Members**.
+  - `/manage_unban user:<id_or_name> [reason]`: unban a user (with ban-list autocomplete). Requires **Ban Members**.
+  - `/manage_timeout member:<member> duration:<duration> [reason]`: timeout a member (5s–28d, e.g., `10m`, `1h`, `1d`). Requires **Moderate Members**.
+  - `/manage_untimeout member:<member> [reason]`: remove a member's timeout. Requires **Moderate Members**.
+  - `/manage_warn member:<member> reason:<reason>`: issue a persistent warning stored in SQLite. Requires **Moderate Members**.
+  - `/manage_warnings member:<member> [action] [warning_id]`: view, delete a single warning, or clear all warnings. Requires **Moderate Members**.
+  - `/manage_purge amount:<1~100> [member] [contains] [bots_only] [ignore_pinned]`: bulk-delete channel messages with filters (>25 requires confirmation). Requires **Manage Messages**.
+  - `/manage_slowmode seconds:<0~21600> [channel] [reason]`: set or disable slowmode. Requires **Manage Channels**.
+  - `/manage_lock [channel] [reason]` / `/manage_unlock [channel] [reason]`: lock or unlock a channel or thread. Requires **Manage Channels**.
+  - `/manage_channel_create name:<name> [channel_type] [category] [topic] [nsfw]`: create text, voice, category, announcement, forum, or stage channels. Requires **Manage Channels**.
+  - `/manage_channel_edit [channel] [name] [topic] [clear_topic] [nsfw] [category] [clear_category]`: edit channel name, topic, NSFW flag, or category. Requires **Manage Channels**.
+  - `/manage_channel_delete channel:<channel> [reason]`: permanently delete a channel. Requires **Manage Channels**.
+  - `/manage_announce [channel] [title] [content] [color] [mention_role] [edit_message_id]`: post or edit an embed announcement; opens a modal when title and content are omitted. Requires **Manage Messages**.
+  - `/manage_pin action:<pin/unpin> message_id:<id_or_url> [channel]`: pin or unpin a message. Requires **Manage Messages**.
+  - `/manage_role action:<add/remove> member:<member> role:<role> [reason]`: assign or remove a role. Requires **Manage Roles**.
+  - `/manage_nick member:<member> [nickname] [reason]`: update or reset a member's nickname. Requires **Manage Nicknames**.
+  - `/manage_voice action:<action> member:<member> [target_channel] [reason]`: disconnect, move, mute, or deafen a voice member. Requires corresponding voice permissions.
+  - `/manage_member_info member:<member>`: ephemerally inspect a member's roles, permissions, status, and warnings. Requires **Moderate Members**.
 
 ## Reaction Roles Feature
 
@@ -376,6 +400,7 @@ The bot also enables the `Message Content Intent` and voice-state intents for th
 - If a voice channel is left with only the bot (no human members) for more than `EMPTY_VOICE_CHANNEL_TIMEOUT` seconds (default 60), the bot automatically leaves and clears its queue, posting a notice to the text channel where it was last used. This listens to discord.py's `on_voice_state_update` event, checking the bot's channel every time someone joins, leaves, or switches channels; the countdown only starts once no humans remain, and is cancelled immediately if someone comes back, to avoid false positives from brief disconnects/reconnects.
 - `/music_play` reports search failures (source unreachable, anti-bot blocking, etc.) immediately. If a track is accepted but later fails to load in the background (e.g. YouTube requiring login, region restrictions, or a broken stream link on a public node), the bot reports the failure to the text channel where the command was last used via the `on_wavelink_track_exception` listener, instead of only logging it. Public Lavalink node instability is a known risk here; self-hosting a node is planned for later weeks.
 - `/steal` parses Discord emoji references such as `<:pepe_smile:123456789>` and `<a:cat:456789>`, builds the correct CDN path from the extracted `emoji_id`, and creates custom emoji in the current guild via `guild.create_custom_emoji()`. When a source exceeds Discord's 256 KB limit or cannot be fetched, it returns clear user-facing text instead of leaking the raw API error payload.
+- `/bot_steal` is an `owner_guild_only` and `owner_only` command that shares the same reference parsing, CDN download, and 256 KB validation pipeline as `/steal`, but registers the emoji in the bot's application emoji pool via `bot.create_application_emoji()` while automatically deduplicating against existing application emoji names.
 - `/tts` module converts text into MP3 audio via `gTTS` (Google Text-to-Speech), ported directly from `tts.py` (defaults to English `en` if language is omitted, and uses the first 10 characters of the text if filename is omitted); generation runs in an asynchronous thread to avoid blocking the event loop.
 - The bot syncs global slash commands in `setup_hook`. If that fails, it retries in `on_ready` as a fallback.
 - `cogs/web_server.py` runs a background Flask web service serving a modern Apple Liquid Glass dashboard (`templates/index.html`), a command documentation page (`templates/docs.html`) with modular CSS in `static/css/`, and the `/api/bot-stats` and `/api/uptime` endpoints.

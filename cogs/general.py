@@ -1,5 +1,8 @@
+import asyncio
 import datetime
 import importlib
+import inspect
+import math
 import os
 import random
 import re
@@ -14,11 +17,12 @@ load_dotenv()
 import aiohttp
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from cogs.database import (
     build_panel_link_button,
     build_panel_link_view,
+    get_bot_status_rotation_settings,
     get_panel_url,
 )
 
@@ -95,6 +99,33 @@ def sanitize_emoji_name(name: str):
     cleaned = re.sub(r'[^a-zA-Z0-9_]', '_', name.strip())
     cleaned = cleaned.strip('_') or 'stolen_emoji'
     return cleaned[:32]
+
+
+def resolve_unique_emoji_name(
+    raw_name: str,
+    used_names: set[str],
+    *,
+    min_length: int = 2,
+    start_index: int = 2,
+) -> str:
+    """清理表情符號名稱並確保長度合法且不與既有清單重複（2～32 字元）。"""
+    base_name = sanitize_emoji_name(raw_name)
+    if len(base_name) < min_length:
+        base_name = f"{base_name}_emoji"[:32]
+
+    candidate = base_name
+    if candidate in used_names:
+        counter = max(2, start_index)
+        while True:
+            suffix = f"_{counter}"
+            trimmed = base_name[: max(1, 32 - len(suffix))]
+            candidate = f"{trimmed}{suffix}"
+            if candidate not in used_names:
+                break
+            counter += 1
+
+    used_names.add(candidate)
+    return candidate
 
 
 async def sync_app_commands_after_reload(bot: commands.Bot) -> str:
@@ -302,9 +333,134 @@ class FunView(discord.ui.View):
             await interaction.response.send_message("❌ 發生未知錯誤，已回報開發者。", ephemeral=True)
 
 
+def format_status_template(text: str, bot: commands.Bot | None = None) -> str:
+    """將狀態訊息模板中的動態變數安全替換為即時統計數據（最多 128 字元）。"""
+    raw = str(text or '').strip()
+    if not raw:
+        return ''
+
+    guilds = getattr(bot, 'guilds', None) or [] if bot is not None else []
+    guilds_count = len(guilds)
+    users_count = sum(
+        (getattr(g, 'member_count', None) or len(getattr(g, 'members', None) or []) or 0)
+        for g in guilds
+    )
+
+    tree = getattr(bot, 'tree', None) if bot is not None else None
+    if tree is not None and hasattr(tree, 'get_commands'):
+        try:
+            commands_count = len(tree.get_commands())
+        except Exception:
+            commands_count = 0
+    else:
+        commands_count = 0
+
+    raw_latency = getattr(bot, 'latency', None) if bot is not None else None
+    if isinstance(raw_latency, (int, float)) and math.isfinite(raw_latency) and raw_latency >= 0:
+        latency_ms = round(raw_latency * 1000)
+    else:
+        latency_ms = 0
+
+    rendered = (
+        raw.replace('{guilds}', str(guilds_count))
+        .replace('{users}', str(users_count))
+        .replace('{commands}', str(commands_count))
+        .replace('{latency}', str(latency_ms))
+    )
+    return rendered[:128]
+
+
+def build_discord_activity(activity_type: str, text: str) -> discord.BaseActivity:
+    """根據活動類型與文字建立對應的 Discord Activity 物件。"""
+    kind = str(activity_type or 'playing').strip().lower()
+    clean_text = str(text or '').strip()[:128]
+    if kind == 'listening':
+        return discord.Activity(type=discord.ActivityType.listening, name=clean_text)
+    if kind == 'watching':
+        return discord.Activity(type=discord.ActivityType.watching, name=clean_text)
+    if kind == 'competing':
+        return discord.Activity(type=discord.ActivityType.competing, name=clean_text)
+    if kind == 'custom':
+        return discord.CustomActivity(name=clean_text)
+    return discord.Game(name=clean_text)
+
+
+def resolve_discord_status(online_status: str) -> discord.Status:
+    """將狀態字串對應為 discord.Status。"""
+    mapping = {
+        'online': discord.Status.online,
+        'idle': discord.Status.idle,
+        'dnd': discord.Status.dnd,
+        'invisible': discord.Status.invisible,
+    }
+    return mapping.get(str(online_status or 'online').strip().lower(), discord.Status.online)
+
+
 class General(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self._status_index = 0
+        self.status_settings = get_bot_status_rotation_settings()
+        interval = max(10, int(self.status_settings.get('interval', 30)))
+        self._status_rotation_loop.change_interval(seconds=interval)
+
+    async def cog_load(self):
+        if not self._status_rotation_loop.is_running():
+            self._status_rotation_loop.start()
+
+    def cog_unload(self):
+        if self._status_rotation_loop.is_running():
+            self._status_rotation_loop.cancel()
+
+    async def apply_next_status(self) -> bool:
+        """依序切換下一則機器人狀態訊息並更新 Discord Presence。"""
+        if self.bot is None or self.bot.is_closed() or not self.bot.is_ready():
+            return False
+
+        settings = self.status_settings or get_bot_status_rotation_settings()
+        discord_status = resolve_discord_status(settings.get('online_status', 'online'))
+        items = settings.get('items') or []
+
+        if not settings.get('enabled', True) or not items:
+            await self.bot.change_presence(status=discord_status, activity=None)
+            return True
+
+        idx = self._status_index % len(items)
+        current = items[idx]
+        self._status_index = (idx + 1) % len(items)
+
+        rendered_text = format_status_template(current.get('text', ''), self.bot)
+        if not rendered_text:
+            await self.bot.change_presence(status=discord_status, activity=None)
+            return True
+
+        activity = build_discord_activity(current.get('type', 'playing'), rendered_text)
+        await self.bot.change_presence(status=discord_status, activity=activity)
+        return True
+
+    @tasks.loop(seconds=30)
+    async def _status_rotation_loop(self):
+        try:
+            await self.apply_next_status()
+        except Exception as exc:
+            print(f"⚠️ [狀態輪替] 更新機器人狀態失敗: {exc}")
+
+    @_status_rotation_loop.before_loop
+    async def _before_status_rotation_loop(self):
+        if self.bot is not None:
+            await self.bot.wait_until_ready()
+
+    def reload_settings(self):
+        """從資料庫重新載入狀態訊息輪替設定，並立即套用最新狀態與輪替間隔。"""
+        self.status_settings = get_bot_status_rotation_settings()
+        self._status_index = 0
+        interval = max(10, int(self.status_settings.get('interval', 30)))
+        self._status_rotation_loop.change_interval(seconds=interval)
+
+        if self.bot is not None:
+            loop = getattr(self.bot, 'loop', None)
+            if loop is not None and loop.is_running() and self.bot.is_ready():
+                asyncio.run_coroutine_threadsafe(self.apply_next_status(), loop)
 
     @app_commands.command(name="ping", description="查看延遲")
     @app_commands.checks.cooldown(1, 10.0, key=lambda i: i.user.id)
@@ -405,18 +561,14 @@ class General(commands.Cog):
         view = FunView(self.bot)
         await interaction.response.send_message("請選擇你想要看的內容：", view=view)
 
-    @app_commands.command(name="steal", description="從其他伺服器偷表情符號")
-    @app_commands.describe(
-        emoji="要偷的表情符號(可填入多個)，也可直接填入含表情符號的字串",
-    )
-    @app_commands.default_permissions(manage_emojis_and_stickers=True)
-    @app_commands.checks.has_permissions(manage_emojis_and_stickers=True)  # H3: 執行期檢查，伺服器端覆寫權限也擋得住
-    @app_commands.guild_only()
-    async def steal(
+    async def _steal_emojis(
         self,
         interaction: discord.Interaction,
         emoji: str,
-    ):
+        *,
+        to_bot: bool = False,
+    ) -> None:
+        """共用偷表情符號流程：支援新增至目前伺服器或機器人應用程式表情符號。"""
         if interaction.guild is None:
             await interaction.response.send_message("這個指令只能在伺服器中使用。", ephemeral=True)
             return
@@ -431,11 +583,30 @@ class General(commands.Cog):
 
         await interaction.response.defer(ephemeral=True)
 
+        log_tag = "bot_steal" if to_bot else "steal"
+        extra_info = "General.bot_steal" if to_bot else "General.steal"
+
         try:
+            used_names: set[str] = set()
+            if to_bot:
+                fetch_fn = getattr(self.bot, 'fetch_application_emojis', None)
+                if callable(fetch_fn):
+                    try:
+                        existing_emojis = fetch_fn()
+                        if inspect.isawaitable(existing_emojis):
+                            existing_emojis = await existing_emojis
+                        used_names = {
+                            getattr(emoji_obj, 'name', '')
+                            for emoji_obj in (existing_emojis or [])
+                            if getattr(emoji_obj, 'name', None)
+                        }
+                    except Exception:
+                        used_names = set()
+
             created = []
-            for index, ref in enumerate(references):
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(ref['cdn_url'], timeout=30) as resp:
+            async with aiohttp.ClientSession() as session:
+                for index, ref in enumerate(references):
+                    async with session.get(ref['cdn_url'], timeout=aiohttp.ClientTimeout(total=30)) as resp:
                         if resp.status != 200:
                             await interaction.followup.send(
                                 f"❌ 無法下載第 {index + 1} 個 emoji，請確認它還能正常讀取。",
@@ -444,23 +615,41 @@ class General(commands.Cog):
                             return
                         source_bytes = await resp.read()
 
-                if len(source_bytes) > 262144:
-                    await interaction.followup.send(
-                        f"❌ 第 {index + 1} 個 emoji 檔案太大，Discord 自訂 emoji 上限為 256 KB，無法上傳。",
-                        ephemeral=True,
+                    if len(source_bytes) > 262144:
+                        await interaction.followup.send(
+                            f"❌ 第 {index + 1} 個 emoji 檔案太大，Discord 自訂 emoji 上限為 256 KB，無法上傳。",
+                            ephemeral=True,
+                        )
+                        return
+
+                    custom_name = resolve_unique_emoji_name(
+                        ref['emoji_name'],
+                        used_names,
+                        min_length=2,
+                        start_index=index + 1,
                     )
-                    return
 
-                custom_name = sanitize_emoji_name(ref['emoji_name'])
-                if custom_name in [emoji_obj.name for emoji_obj in created]:
-                    custom_name = f"{custom_name}_{index + 1}"
-
-                created_emoji = await interaction.guild.create_custom_emoji(
-                    name=custom_name,
-                    image=source_bytes,
-                    reason=f"/steal 指令由 {interaction.user} 建立",
-                )
-                created.append(created_emoji)
+                    try:
+                        if to_bot:
+                            created_emoji = await self.bot.create_application_emoji(
+                                name=custom_name,
+                                image=source_bytes,
+                            )
+                        else:
+                            created_emoji = await interaction.guild.create_custom_emoji(
+                                name=custom_name,
+                                image=source_bytes,
+                                reason=f"/steal 指令由 {interaction.user} 建立",
+                            )
+                    except ValueError as exc:
+                        if 'Unsupported image type' in str(exc):
+                            await interaction.followup.send(
+                                "❌ 不支援的圖片格式，僅支援 PNG、JPG、GIF 或 WebP 圖片。",
+                                ephemeral=True,
+                            )
+                            return
+                        raise
+                    created.append(created_emoji)
 
             formatted = []
             for emoji_obj in created:
@@ -470,25 +659,78 @@ class General(commands.Cog):
                     formatted.append(f'<:{emoji_obj.name}:{emoji_obj.id}>')
 
             preview = ' '.join(formatted)
-            message = f"✅ 成功偷到{len(created)}個表情符號: {preview}"
+            if to_bot:
+                message = f"✅ 成功偷到{len(created)}個機器人表情符號: {preview}"
+            else:
+                message = f"✅ 成功偷到{len(created)}個表情符號: {preview}"
 
             await interaction.followup.send(
                 message,
                 allowed_mentions=discord.AllowedMentions.none(),
                 ephemeral=False,
             )
-        except discord.Forbidden:
+        except discord.MissingApplicationID:
             await interaction.followup.send(
-                "❌ 機器人沒有權限建立自訂表情符號，請確認這個伺服器已授予「管理表情符號與貼圖」權限。",
+                "❌ 無法取得機器人的 Application ID，暫時無法建立機器人表情符號。",
                 ephemeral=True,
             )
-        except discord.HTTPException as exc:
-            await interaction.followup.send(f"❌ 建立表情符號失敗，請確認這個伺服器可建立自訂表情符號。", ephemeral=True)
+        except discord.Forbidden:
+            if to_bot:
+                await interaction.followup.send(
+                    "❌ 沒有權限建立機器人表情符號。",
+                    ephemeral=True,
+                )
+            else:
+                await interaction.followup.send(
+                    "❌ 機器人沒有權限建立自訂表情符號，請確認這個伺服器已授予「管理表情符號與貼圖」權限。",
+                    ephemeral=True,
+                )
+        except discord.HTTPException:
+            if to_bot:
+                await interaction.followup.send(
+                    "❌ 建立機器人表情符號失敗，請確認表情符號名稱未重複、圖片格式有效，且尚未達到機器人表情符號上限。",
+                    ephemeral=True,
+                )
+            else:
+                await interaction.followup.send("❌ 建立表情符號失敗，請確認這個伺服器可建立自訂表情符號。", ephemeral=True)
         except Exception as exc:
-            print(f"[steal] 發生未知錯誤: {exc}", file=sys.stderr)
+            print(f"[{log_tag}] 發生未知錯誤: {exc}", file=sys.stderr)
             traceback.print_exception(type(exc), exc, exc.__traceback__, file=sys.stderr)
-            await self.bot.notify_owner_error(exc, interaction, extra_info="General.steal")
+            await self.bot.notify_owner_error(exc, interaction, extra_info=extra_info)
             await interaction.followup.send("❌ 發生未知錯誤，已回報給開發者。", ephemeral=True)
+
+    @app_commands.command(name="steal", description="從其他伺服器偷表情符號")
+    @app_commands.describe(
+        emoji="要偷的表情符號(可填入多個)，也可直接填入含表情符號的字串",
+    )
+    @app_commands.default_permissions(manage_emojis_and_stickers=True)
+    @app_commands.checks.has_permissions(manage_emojis_and_stickers=True)  # H3: 執行期檢查，伺服器端覆寫權限也擋得住
+    @app_commands.guild_only()
+    async def steal(
+        self,
+        interaction: discord.Interaction,
+        emoji: str,
+    ):
+        await self._steal_emojis(interaction, emoji, to_bot=False)
+
+    @owner_guild_only
+    @app_commands.command(
+        name="bot_steal",
+        description="從其他伺服器偷表情符號並新增至機器人的表情符號（僅擁有者可用）",
+    )
+    @app_commands.describe(
+        emoji="要偷的表情符號(可填入多個)，也可直接填入含表情符號的字串",
+    )
+    @app_commands.check(owner_only)
+    async def steal_to_bot(
+        self,
+        interaction: discord.Interaction,
+        emoji: str,
+    ):
+        await self._steal_emojis(interaction, emoji, to_bot=True)
+
+    if OWNER_GUILD_ID is None:
+        steal_to_bot = app_commands.guild_only()(steal_to_bot)
 
 
 async def setup(bot: commands.Bot):

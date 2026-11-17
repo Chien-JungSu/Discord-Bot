@@ -190,6 +190,7 @@
     ai: null,
     ownerEconomy: null,
     ownerBotDefaults: null,
+    ownerStatusRotation: null,
     personalPlaylist: null,
   };
 
@@ -288,7 +289,8 @@
     } else if (isOwnerMode) {
       const fBotDef = document.getElementById('form-owner-bot-defaults');
       dirty = isFormDirty(fOwnerEcon, savedFormState.ownerEconomy) ||
-              isFormDirty(fBotDef, savedFormState.ownerBotDefaults);
+              isFormDirty(fBotDef, savedFormState.ownerBotDefaults) ||
+              isStatusRotationDirty();
     } else {
       dirty =
         isFormDirty(fWelcome, savedFormState.welcome) ||
@@ -408,6 +410,7 @@
       loadOwnerApiQuota();
       loadOwnerAiGuilds();
       loadOwnerBotDefaults();
+      loadOwnerStatusRotation();
     } else if (tabId === 'tab-personal') {
       loadPersonalPlaylistData();
     }
@@ -2036,6 +2039,9 @@
       if (targetSub === 'owner-sub-bot-defaults') {
         loadOwnerBotDefaults();
       }
+      if (targetSub === 'owner-sub-status-rotation') {
+        loadOwnerStatusRotation();
+      }
       if (targetSub === 'owner-sub-profile-auth') {
         loadOwnerProfileAuthData();
       }
@@ -2133,6 +2139,10 @@
         if (fBotDef && isFormDirty(fBotDef, savedFormState.ownerBotDefaults)) {
           submitFormSafely(fBotDef);
         }
+        const fStatusRot = document.getElementById('form-owner-status-rotation');
+        if (fStatusRot && isStatusRotationDirty()) {
+          submitFormSafely(fStatusRot);
+        }
         return;
       }
 
@@ -2164,6 +2174,9 @@
         const fBotDef = document.getElementById('form-owner-bot-defaults');
         if (fBotDef && savedFormState.ownerBotDefaults) {
           applyFormState(fBotDef, savedFormState.ownerBotDefaults);
+        }
+        if (savedFormState.ownerStatusRotation) {
+          applyStatusRotationSnapshot(savedFormState.ownerStatusRotation);
         }
       } else {
         if (formWelcome && savedFormState.welcome) {
@@ -2687,6 +2700,487 @@
         cancelText: '取消',
         onConfirm: async () => {
           await submitOwnerBotDefaults(true);
+        },
+      });
+    });
+  }
+
+  // 5-2. 機器人狀態訊息輪替設定 (Bot Status Rotation)
+  let statusRotationMaxItems = 20;
+  let statusDragFromIdx = null;
+  const STATUS_ACTIVITY_OPTIONS = [
+    { value: 'playing', label: '🎮 正在玩 (Playing)' },
+    { value: 'listening', label: '🎧 正在聽 (Listening)' },
+    { value: 'watching', label: '👀 正在觀看 (Watching)' },
+    { value: 'competing', label: '🏆 競爭中 (Competing)' },
+    { value: 'custom', label: '✨ 自訂狀態 (Custom)' },
+  ];
+
+  function getStatusRotationRowEls(listEl) {
+    if (!listEl) return [];
+    const queried = listEl.querySelectorAll('.status-rotation-item-row');
+    if (queried && queried.length > 0) {
+      return Array.from(queried);
+    }
+    if (Array.isArray(listEl.children)) {
+      return listEl.children.filter(
+        (el) => el && el.classList && el.classList.contains('status-rotation-item-row')
+      );
+    }
+    return [];
+  }
+
+  function createStatusRotationRowEl(item = { type: 'playing', text: '' }, index = 0, totalCount = 1) {
+    const row = document.createElement('div');
+    row.className = 'status-rotation-item-row';
+    row.setAttribute('draggable', 'true');
+    row.setAttribute('data-status-idx', String(index));
+
+    const dragHandle = document.createElement('span');
+    dragHandle.className = 'status-item-drag-handle';
+    dragHandle.title = '拖曳調整順序';
+    dragHandle.textContent = '☰';
+
+    const idxSpan = document.createElement('span');
+    idxSpan.className = 'status-item-index';
+    idxSpan.textContent = `#${index + 1}`;
+
+    const typeSel = document.createElement('select');
+    typeSel.className = 'form-control status-item-type';
+    const currentType = String(item?.type || 'playing').toLowerCase();
+    STATUS_ACTIVITY_OPTIONS.forEach((optData) => {
+      const opt = document.createElement('option');
+      opt.value = optData.value;
+      opt.textContent = optData.label;
+      if (optData.value === currentType) opt.selected = true;
+      typeSel.appendChild(opt);
+    });
+
+    const textInput = document.createElement('input');
+    textInput.type = 'text';
+    textInput.className = 'form-control status-item-text';
+    textInput.maxLength = 128;
+    textInput.autocomplete = 'off';
+    textInput.placeholder = '輸入狀態訊息，例如：服務 {guilds} 個伺服器 | /panel';
+    textInput.value = String(item?.text ?? '');
+
+    // 避免在文字框或下拉選單操作（如反白選取文字）時誤觸整列拖曳
+    [textInput, typeSel].forEach((ctrl) => {
+      ctrl.addEventListener('mousedown', () => {
+        row.setAttribute('draggable', 'false');
+      });
+      ctrl.addEventListener('mouseup', () => {
+        row.setAttribute('draggable', 'true');
+      });
+      ctrl.addEventListener('blur', () => {
+        row.setAttribute('draggable', 'true');
+      });
+      ctrl.addEventListener('mouseleave', () => {
+        row.setAttribute('draggable', 'true');
+      });
+    });
+
+    const actionsWrap = document.createElement('div');
+    actionsWrap.className = 'status-item-actions';
+
+    const upBtn = document.createElement('button');
+    upBtn.type = 'button';
+    upBtn.className = 'btn-icon-action btn-status-item-up';
+    upBtn.title = '上移一位';
+    upBtn.textContent = '⬆️';
+    upBtn.setAttribute('data-idx', String(index));
+    upBtn.disabled = index === 0;
+
+    const downBtn = document.createElement('button');
+    downBtn.type = 'button';
+    downBtn.className = 'btn-icon-action btn-status-item-down';
+    downBtn.title = '下移一位';
+    downBtn.textContent = '⬇️';
+    downBtn.setAttribute('data-idx', String(index));
+    downBtn.disabled = index >= totalCount - 1;
+
+    const moveBtn = document.createElement('button');
+    moveBtn.type = 'button';
+    moveBtn.className = 'btn-icon-action btn-status-item-move';
+    moveBtn.title = '輸入目標編號移動位置';
+    moveBtn.textContent = '🔢 排序';
+    moveBtn.setAttribute('data-idx', String(index));
+    moveBtn.disabled = totalCount <= 1;
+
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'btn-icon-action danger delete btn-remove-status-item';
+    removeBtn.title = '刪除此狀態訊息';
+    removeBtn.textContent = '🗑️';
+    removeBtn.setAttribute('data-idx', String(index));
+
+    actionsWrap.appendChild(upBtn);
+    actionsWrap.appendChild(downBtn);
+    actionsWrap.appendChild(moveBtn);
+    actionsWrap.appendChild(removeBtn);
+
+    row.appendChild(dragHandle);
+    row.appendChild(idxSpan);
+    row.appendChild(typeSel);
+    row.appendChild(textInput);
+    row.appendChild(actionsWrap);
+
+    row._statusRefs = {
+      idxSpan,
+      typeSel,
+      textInput,
+      actionsWrap,
+      upBtn,
+      downBtn,
+      moveBtn,
+      removeBtn,
+    };
+
+    upBtn.addEventListener('click', () => {
+      const idx = Number(row.getAttribute('data-status-idx'));
+      if (idx > 0) moveStatusRotationItem(idx, idx - 1);
+    });
+
+    downBtn.addEventListener('click', () => {
+      const idx = Number(row.getAttribute('data-status-idx'));
+      const total = getStatusRotationRowEls(document.getElementById('status-rotation-items-list')).length;
+      if (idx < total - 1) moveStatusRotationItem(idx, idx + 1);
+    });
+
+    moveBtn.addEventListener('click', () => {
+      const idx = Number(row.getAttribute('data-status-idx'));
+      const listContainer = document.getElementById('status-rotation-items-list');
+      const total = getStatusRotationRowEls(listContainer).length;
+      if (total <= 1) return;
+      const currentNum = idx + 1;
+      const currentText = String(textInput.value || '').trim();
+      const targetStr = window.prompt(
+        `請輸入要將第 #${currentNum} 則「${currentText || '未命名狀態'}」移往的目標編號（1 ~ ${total}）：`,
+        String(currentNum)
+      );
+      if (!targetStr) return;
+      const targetNum = parseInt(targetStr.trim(), 10);
+      if (Number.isNaN(targetNum) || targetNum < 1 || targetNum > total) {
+        showToast(`請輸入 1 到 ${total} 之間的有效編號`, 'error');
+        return;
+      }
+      if (targetNum - 1 !== idx) {
+        moveStatusRotationItem(idx, targetNum - 1);
+      }
+    });
+
+    removeBtn.addEventListener('click', () => {
+      const listContainer = document.getElementById('status-rotation-items-list');
+      const rows = getStatusRotationRowEls(listContainer);
+      if (rows.length <= 1) {
+        showToast('至少需保留 1 則狀態訊息', 'warning');
+        return;
+      }
+      row.remove();
+      renumberStatusRotationRows();
+      checkUnsavedChanges();
+    });
+
+    // 綁定 HTML5 拖曳重新排序
+    row.addEventListener('dragstart', (e) => {
+      statusDragFromIdx = Number(row.getAttribute('data-status-idx'));
+      row.classList.add('is-dragging');
+      if (e.dataTransfer) {
+        e.dataTransfer.effectAllowed = 'move';
+      }
+    });
+    row.addEventListener('dragend', () => {
+      row.classList.remove('is-dragging');
+      const listContainer = document.getElementById('status-rotation-items-list');
+      getStatusRotationRowEls(listContainer).forEach((r) => r.classList.remove('drag-over'));
+      statusDragFromIdx = null;
+    });
+    row.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      row.classList.add('drag-over');
+    });
+    row.addEventListener('dragleave', () => {
+      row.classList.remove('drag-over');
+    });
+    row.addEventListener('drop', (e) => {
+      e.preventDefault();
+      row.classList.remove('drag-over');
+      const toIdx = Number(row.getAttribute('data-status-idx'));
+      if (statusDragFromIdx !== null && statusDragFromIdx !== toIdx) {
+        moveStatusRotationItem(statusDragFromIdx, toIdx);
+      }
+      statusDragFromIdx = null;
+    });
+
+    return row;
+  }
+
+  function renumberStatusRotationRows() {
+    const listEl = document.getElementById('status-rotation-items-list');
+    if (!listEl) return;
+    const rows = getStatusRotationRowEls(listEl);
+    const total = rows.length;
+    rows.forEach((row, idx) => {
+      row.setAttribute('data-status-idx', String(idx));
+      const refs = row._statusRefs || {};
+      const idxSpan = refs.idxSpan || row.querySelector('.status-item-index');
+      if (idxSpan) idxSpan.textContent = `#${idx + 1}`;
+      const upBtn = refs.upBtn || row.querySelector('.btn-status-item-up');
+      if (upBtn) {
+        upBtn.disabled = idx === 0;
+        upBtn.setAttribute('data-idx', String(idx));
+      }
+      const downBtn = refs.downBtn || row.querySelector('.btn-status-item-down');
+      if (downBtn) {
+        downBtn.disabled = idx >= total - 1;
+        downBtn.setAttribute('data-idx', String(idx));
+      }
+      const moveBtn = refs.moveBtn || row.querySelector('.btn-status-item-move');
+      if (moveBtn) {
+        moveBtn.disabled = total <= 1;
+        moveBtn.setAttribute('data-idx', String(idx));
+      }
+      const removeBtn = refs.removeBtn || row.querySelector('.btn-remove-status-item');
+      if (removeBtn) {
+        removeBtn.setAttribute('data-idx', String(idx));
+      }
+    });
+  }
+
+  function renderStatusRotationItems(items = []) {
+    const listEl = document.getElementById('status-rotation-items-list');
+    if (!listEl) return;
+    listEl.innerHTML = '';
+    const list = Array.isArray(items) && items.length > 0 ? items : [{ type: 'playing', text: '' }];
+    list.forEach((item, idx) => {
+      listEl.appendChild(createStatusRotationRowEl(item, idx, list.length));
+    });
+    renumberStatusRotationRows();
+  }
+
+  function moveStatusRotationItem(fromIdx, toIdx) {
+    const snapshot = getStatusRotationSnapshotFromDom();
+    if (!snapshot || !Array.isArray(snapshot.items)) return;
+    const items = snapshot.items.slice();
+    if (
+      fromIdx < 0 ||
+      fromIdx >= items.length ||
+      toIdx < 0 ||
+      toIdx >= items.length ||
+      fromIdx === toIdx
+    ) {
+      return;
+    }
+    const [moved] = items.splice(fromIdx, 1);
+    items.splice(toIdx, 0, moved);
+    renderStatusRotationItems(items);
+    checkUnsavedChanges();
+  }
+
+  function getStatusRotationSnapshotFromDom() {
+    const form = document.getElementById('form-owner-status-rotation');
+    if (!form) return null;
+    const chkEnabled = document.getElementById('status-rotation-enabled');
+    const inInterval = document.getElementById('status-rotation-interval');
+    const selOnline = document.getElementById('status-rotation-online-status');
+    const listEl = document.getElementById('status-rotation-items-list');
+
+    const items = [];
+    if (listEl) {
+      getStatusRotationRowEls(listEl).forEach((row) => {
+        const refs = row._statusRefs || {};
+        const typeEl = refs.typeSel || row.querySelector('.status-item-type');
+        const textEl = refs.textInput || row.querySelector('.status-item-text');
+        items.push({
+          type: typeEl ? String(typeEl.value || 'playing') : 'playing',
+          text: textEl ? String(textEl.value ?? '') : '',
+        });
+      });
+    }
+
+    return {
+      enabled: chkEnabled ? Boolean(chkEnabled.checked) : true,
+      interval: inInterval ? String(inInterval.value ?? '30') : '30',
+      online_status: selOnline ? String(selOnline.value ?? 'online') : 'online',
+      items,
+    };
+  }
+
+  function applyStatusRotationSnapshot(snapshot) {
+    if (!snapshot) return;
+    const chkEnabled = document.getElementById('status-rotation-enabled');
+    const inInterval = document.getElementById('status-rotation-interval');
+    const selOnline = document.getElementById('status-rotation-online-status');
+
+    if (chkEnabled) chkEnabled.checked = Boolean(snapshot.enabled);
+    if (inInterval && snapshot.interval !== undefined) inInterval.value = String(snapshot.interval);
+    if (selOnline && snapshot.online_status) selOnline.value = String(snapshot.online_status);
+    renderStatusRotationItems(snapshot.items || []);
+  }
+
+  function isStatusRotationDirty() {
+    if (!savedFormState.ownerStatusRotation) return false;
+    const current = getStatusRotationSnapshotFromDom();
+    if (!current) return false;
+    return JSON.stringify(current) !== JSON.stringify(savedFormState.ownerStatusRotation);
+  }
+
+  async function loadOwnerStatusRotation() {
+    const form = document.getElementById('form-owner-status-rotation');
+    if (!form) return;
+    try {
+      const res = await fetch('/api/panel/owner/status-rotation');
+      if (res.status === 403) return;
+      const data = await res.json();
+      if (!res.ok || !data.settings) return;
+
+      if (typeof data.max_items === 'number' && data.max_items > 0) {
+        statusRotationMaxItems = data.max_items;
+      }
+      applyStatusRotationSnapshot(data.settings);
+      savedFormState.ownerStatusRotation = getStatusRotationSnapshotFromDom();
+      checkUnsavedChanges();
+    } catch (err) {
+      console.error('載入機器人狀態輪替設定失敗:', err);
+    }
+  }
+
+  const formOwnerStatusRotation = document.getElementById('form-owner-status-rotation');
+  const statusRotationListEl = document.getElementById('status-rotation-items-list');
+  const btnAddStatusItem = document.getElementById('btn-add-status-item');
+  const btnResetStatusRotation = document.getElementById('btn-reset-status-rotation');
+  let isSavingStatusRotation = false;
+
+  if (btnAddStatusItem && statusRotationListEl) {
+    btnAddStatusItem.addEventListener('click', () => {
+      const rows = getStatusRotationRowEls(statusRotationListEl);
+      if (rows.length >= statusRotationMaxItems) {
+        showToast(`狀態訊息最多只能設定 ${statusRotationMaxItems} 則`, 'warning');
+        return;
+      }
+      const newRow = createStatusRotationRowEl({ type: 'playing', text: '' }, rows.length, rows.length + 1);
+      statusRotationListEl.appendChild(newRow);
+      renumberStatusRotationRows();
+      const inputEl = (newRow._statusRefs && newRow._statusRefs.textInput) || newRow.querySelector('.status-item-text');
+      if (inputEl && inputEl.focus) inputEl.focus();
+      checkUnsavedChanges();
+    });
+  }
+
+  if (statusRotationListEl) {
+    statusRotationListEl.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      if (e.isComposing || e.keyCode === 229) {
+        e.preventDefault();
+        return;
+      }
+      if (e.target && e.target.classList && e.target.classList.contains('status-item-text')) {
+        e.preventDefault();
+        if (!isSavingStatusRotation) {
+          submitFormSafely(formOwnerStatusRotation);
+        }
+      }
+    });
+  }
+
+  if (formOwnerStatusRotation) {
+    formOwnerStatusRotation.addEventListener('input', checkUnsavedChanges);
+    formOwnerStatusRotation.addEventListener('change', checkUnsavedChanges);
+    formOwnerStatusRotation.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (isSavingStatusRotation) return;
+
+      const snapshot = getStatusRotationSnapshotFromDom();
+      if (!snapshot) return;
+
+      const intervalNum = parseInt(snapshot.interval, 10);
+      if (Number.isNaN(intervalNum) || intervalNum < 10 || intervalNum > 600) {
+        showToast('輪替間隔秒數必須介於 10 ~ 600 秒之間', 'error');
+        return;
+      }
+
+      const cleanedItems = (snapshot.items || [])
+        .map((it) => ({
+          type: String(it.type || 'playing'),
+          text: String(it.text || '').trim(),
+        }))
+        .filter((it) => it.text.length > 0);
+
+      if (cleanedItems.length === 0) {
+        showToast('請至少設定 1 則有效的狀態訊息內容', 'error');
+        return;
+      }
+
+      const saveBtn = document.getElementById('btn-save-status-rotation');
+      const origHtml = saveBtn ? saveBtn.innerHTML : '';
+      isSavingStatusRotation = true;
+      if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.innerHTML = '<span>儲存中...</span>';
+      }
+
+      try {
+        const res = await fetch('/api/panel/owner/status-rotation', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            enabled: snapshot.enabled,
+            interval: intervalNum,
+            online_status: snapshot.online_status,
+            items: cleanedItems,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok && data.status === 'ok') {
+          if (data.settings) {
+            applyStatusRotationSnapshot(data.settings);
+          }
+          savedFormState.ownerStatusRotation = getStatusRotationSnapshotFromDom();
+          checkUnsavedChanges();
+          showToast(data.message || '機器人狀態訊息輪替設定已儲存！', 'success');
+        } else {
+          showToast(data.message || '儲存狀態輪替設定失敗', 'error');
+        }
+      } catch (err) {
+        showToast('網路連線失敗，無法儲存狀態輪替設定', 'error');
+      } finally {
+        isSavingStatusRotation = false;
+        if (saveBtn) {
+          saveBtn.disabled = false;
+          saveBtn.innerHTML = origHtml;
+        }
+      }
+    });
+  }
+
+  if (btnResetStatusRotation) {
+    btnResetStatusRotation.addEventListener('click', () => {
+      showConfirmModal({
+        title: '⚠️ 確認重設狀態訊息輪替',
+        message: '確定要將狀態訊息輪替設定重設為系統預設清單嗎？目前自訂的狀態清單與輪替間隔將被覆蓋。',
+        confirmText: '確認重設',
+        cancelText: '取消',
+        onConfirm: async () => {
+          try {
+            const res = await fetch('/api/panel/owner/status-rotation', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'reset' }),
+            });
+            const data = await res.json();
+            if (res.ok && data.status === 'ok') {
+              if (data.settings) {
+                applyStatusRotationSnapshot(data.settings);
+              }
+              savedFormState.ownerStatusRotation = getStatusRotationSnapshotFromDom();
+              checkUnsavedChanges();
+              showToast(data.message || '已重設為預設狀態輪替清單！', 'success');
+            } else {
+              showToast(data.message || '重設失敗', 'error');
+            }
+          } catch (err) {
+            showToast('網路連線失敗，無法重設設定', 'error');
+          }
         },
       });
     });

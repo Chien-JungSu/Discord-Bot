@@ -103,6 +103,7 @@ INITIAL_EXTENSIONS = [
     'cogs.ai',            # /ai /ai_config 智慧對話 (OpenRouter 免費模型)
     'cogs.temp_message',  # /temp_message + 右鍵選單「限時訊息」
     'cogs.ganhua',        # /幹話 /ganhua + 右鍵選單「用幹話回覆」（輕量級 TF-IDF 台灣幹話產生器）
+    'cogs.manage',        # /manage_* 伺服器管理者專用管理指令（成員審核、頻道與訊息管理、身分組／暱稱／語音控制）
 ]
 
 

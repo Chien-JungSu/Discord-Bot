@@ -279,6 +279,19 @@ def init_db():
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_saved_playlists_user ON user_saved_playlists (user_id);")
 
+            # 20. 伺服器成員警告紀錄表 (供 cogs.manage 警告系統持久化儲存)
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS moderation_warnings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id TEXT NOT NULL,
+                user_id INTEGER NOT NULL,
+                moderator_id INTEGER NOT NULL,
+                reason TEXT NOT NULL,
+                created_at REAL NOT NULL
+            );
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_moderation_warnings_guild_user ON moderation_warnings (guild_id, user_id, created_at DESC);")
+
             conn.commit()
 
             # ---------- 自動遷移既有 JSON 資料 ----------
@@ -784,6 +797,149 @@ def save_bot_default_settings(data: dict, apply_to_all_guilds: bool = False) -> 
 
             conn.commit()
             return get_bot_default_settings()
+        finally:
+            conn.close()
+
+
+# ==============================================================================
+# Bot Status Rotation Settings API (機器人狀態訊息輪替設定)
+# ==============================================================================
+
+VALID_STATUS_ACTIVITY_TYPES = ('playing', 'listening', 'watching', 'competing', 'custom')
+VALID_ONLINE_STATUSES = ('online', 'idle', 'dnd', 'invisible')
+STATUS_ROTATION_MAX_ITEMS = 20
+DEFAULT_STATUS_ROTATION_INTERVAL = 30
+DEFAULT_STATUS_ROTATION_ITEMS = [
+    {"type": "playing", "text": "服務 {guilds} 個伺服器 | /panel 控制面板"},
+    {"type": "listening", "text": "高音質音樂 🎵 | /music_play"},
+    {"type": "watching", "text": "{users} 位成員的日常 | /ai 智慧助手"},
+    {"type": "playing", "text": "/economy_daily 每日簽到領金幣 💰"},
+    {"type": "custom", "text": "✨ 輸入 /ganhua 來點台灣幹話！"},
+]
+
+
+def _normalize_status_rotation_items(raw_items: Any) -> list[dict[str, str]]:
+    """清理與校驗狀態輪替項目清單（過濾空白、限制長度與數量）。"""
+    if not isinstance(raw_items, list):
+        return []
+    cleaned: list[dict[str, str]] = []
+    for entry in raw_items:
+        if not isinstance(entry, dict):
+            continue
+        act_type = str(entry.get('type') or 'playing').strip().lower()
+        if act_type not in VALID_STATUS_ACTIVITY_TYPES:
+            act_type = 'playing'
+        text = str(entry.get('text') or '').strip()[:128]
+        if not text:
+            continue
+        cleaned.append({'type': act_type, 'text': text})
+        if len(cleaned) >= STATUS_ROTATION_MAX_ITEMS:
+            break
+    return cleaned
+
+
+def get_bot_status_rotation_settings() -> dict[str, Any]:
+    """讀取機器人狀態訊息輪替設定（若尚未設定則回傳預設輪替清單）。"""
+    init_db()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT key, value FROM bot_default_settings
+                WHERE key IN (
+                    'status_rotation_enabled',
+                    'status_rotation_interval',
+                    'status_rotation_online_status',
+                    'status_rotation_items'
+                );
+                """
+            )
+            raw = {row['key']: row['value'] for row in cursor.fetchall()}
+
+            enabled_val = raw.get('status_rotation_enabled', '1')
+            enabled = (enabled_val == '1' or str(enabled_val).strip().lower() == 'true')
+
+            try:
+                interval = max(10, min(600, int(raw.get('status_rotation_interval', DEFAULT_STATUS_ROTATION_INTERVAL))))
+            except (ValueError, TypeError):
+                interval = DEFAULT_STATUS_ROTATION_INTERVAL
+
+            online_status = str(raw.get('status_rotation_online_status') or 'online').strip().lower()
+            if online_status not in VALID_ONLINE_STATUSES:
+                online_status = 'online'
+
+            items: list[dict[str, str]] = []
+            raw_items_json = raw.get('status_rotation_items')
+            if raw_items_json:
+                try:
+                    parsed = json.loads(raw_items_json)
+                    items = _normalize_status_rotation_items(parsed)
+                except (ValueError, TypeError):
+                    items = []
+            if not items:
+                items = copy.deepcopy(DEFAULT_STATUS_ROTATION_ITEMS)
+
+            return {
+                'enabled': enabled,
+                'interval': interval,
+                'online_status': online_status,
+                'items': items,
+            }
+        finally:
+            conn.close()
+
+
+def save_bot_status_rotation_settings(data: dict[str, Any]) -> dict[str, Any]:
+    """儲存機器人狀態訊息輪替設定（寫入 bot_default_settings 資料表）。"""
+    init_db()
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+
+            raw_enabled = data.get('enabled', True)
+            if isinstance(raw_enabled, str):
+                enabled_bool = raw_enabled.strip().lower() in ('1', 'true', 'yes', 'on')
+            else:
+                enabled_bool = bool(raw_enabled)
+            enabled_str = '1' if enabled_bool else '0'
+
+            try:
+                interval = max(10, min(600, int(data.get('interval', DEFAULT_STATUS_ROTATION_INTERVAL))))
+            except (ValueError, TypeError):
+                interval = DEFAULT_STATUS_ROTATION_INTERVAL
+
+            online_status = str(data.get('online_status') or 'online').strip().lower()
+            if online_status not in VALID_ONLINE_STATUSES:
+                online_status = 'online'
+
+            if data.get('reset_to_default'):
+                items = copy.deepcopy(DEFAULT_STATUS_ROTATION_ITEMS)
+            else:
+                items = _normalize_status_rotation_items(data.get('items'))
+                if not items:
+                    items = copy.deepcopy(DEFAULT_STATUS_ROTATION_ITEMS)
+
+            settings_to_save = {
+                'status_rotation_enabled': enabled_str,
+                'status_rotation_interval': str(interval),
+                'status_rotation_online_status': online_status,
+                'status_rotation_items': json.dumps(items, ensure_ascii=False),
+            }
+
+            for k, v in settings_to_save.items():
+                cursor.execute(
+                    """
+                    INSERT OR REPLACE INTO bot_default_settings (key, value)
+                    VALUES (?, ?);
+                    """,
+                    (k, v),
+                )
+
+            conn.commit()
+            return get_bot_status_rotation_settings()
         finally:
             conn.close()
 
@@ -3634,6 +3790,177 @@ def get_all_public_playlists(exclude_user_id: Optional[str | int] = None) -> lis
             return out
         finally:
             conn.close()
+
+
+# ==============================================================================
+# 伺服器成員警告紀錄 (Moderation Warnings) SQLite 資料存取層
+# ==============================================================================
+
+
+def _ensure_moderation_warnings_table(cursor: sqlite3.Cursor) -> None:
+    """確保 moderation_warnings 資料表已存在（支援熱重載時免重啟直接建表）。"""
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS moderation_warnings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id TEXT NOT NULL,
+            user_id INTEGER NOT NULL,
+            moderator_id INTEGER NOT NULL,
+            reason TEXT NOT NULL,
+            created_at REAL NOT NULL
+        );
+        """
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_moderation_warnings_guild_user "
+        "ON moderation_warnings (guild_id, user_id, created_at DESC);"
+    )
+
+
+def add_moderation_warning(
+    guild_id: str | int,
+    user_id: int,
+    moderator_id: int,
+    reason: str,
+    created_at: Optional[float] = None,
+) -> dict[str, Any]:
+    """新增一筆伺服器成員警告紀錄，並回傳完整紀錄字典。"""
+    init_db()
+    gid = str(guild_id).strip()
+    clean_reason = (reason or "").strip()[:500]
+    if not gid or not clean_reason:
+        raise ValueError("guild_id 與 reason 不可為空")
+    now_ts = float(created_at if created_at is not None else time.time())
+
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            _ensure_moderation_warnings_table(cursor)
+            cursor.execute(
+                """
+                INSERT INTO moderation_warnings (guild_id, user_id, moderator_id, reason, created_at)
+                VALUES (?, ?, ?, ?, ?);
+                """,
+                (gid, int(user_id), int(moderator_id), clean_reason, now_ts),
+            )
+            warning_id = int(cursor.lastrowid)
+            conn.commit()
+            return {
+                "id": warning_id,
+                "guild_id": gid,
+                "user_id": int(user_id),
+                "moderator_id": int(moderator_id),
+                "reason": clean_reason,
+                "created_at": now_ts,
+            }
+        finally:
+            conn.close()
+
+
+def get_moderation_warnings(guild_id: str | int, user_id: int) -> list[dict[str, Any]]:
+    """取得指定伺服器成員的所有警告紀錄（依時間由新到舊排序）。"""
+    init_db()
+    gid = str(guild_id).strip()
+    if not gid:
+        return []
+
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            _ensure_moderation_warnings_table(cursor)
+            cursor.execute(
+                """
+                SELECT id, guild_id, user_id, moderator_id, reason, created_at
+                FROM moderation_warnings
+                WHERE guild_id = ? AND user_id = ?
+                ORDER BY created_at DESC, id DESC;
+                """,
+                (gid, int(user_id)),
+            )
+            return [
+                {
+                    "id": int(r["id"]),
+                    "guild_id": r["guild_id"],
+                    "user_id": int(r["user_id"]),
+                    "moderator_id": int(r["moderator_id"]),
+                    "reason": r["reason"],
+                    "created_at": float(r["created_at"]),
+                }
+                for r in cursor.fetchall()
+            ]
+        finally:
+            conn.close()
+
+
+def get_moderation_warning_count(guild_id: str | int, user_id: int) -> int:
+    """查詢指定伺服器成員目前的警告總數。"""
+    init_db()
+    gid = str(guild_id).strip()
+    if not gid:
+        return 0
+
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            _ensure_moderation_warnings_table(cursor)
+            cursor.execute(
+                "SELECT COUNT(*) FROM moderation_warnings WHERE guild_id = ? AND user_id = ?;",
+                (gid, int(user_id)),
+            )
+            row = cursor.fetchone()
+            return int(row[0]) if row else 0
+        finally:
+            conn.close()
+
+
+def remove_moderation_warning(guild_id: str | int, user_id: int, warning_id: int) -> bool:
+    """刪除指定編號的單筆警告紀錄（限定所屬伺服器與目標成員）。"""
+    init_db()
+    gid = str(guild_id).strip()
+    if not gid:
+        return False
+
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            _ensure_moderation_warnings_table(cursor)
+            cursor.execute(
+                "DELETE FROM moderation_warnings WHERE id = ? AND guild_id = ? AND user_id = ?;",
+                (int(warning_id), gid, int(user_id)),
+            )
+            deleted = cursor.rowcount > 0
+            conn.commit()
+            return deleted
+        finally:
+            conn.close()
+
+
+def clear_moderation_warnings(guild_id: str | int, user_id: int) -> int:
+    """清空指定伺服器成員的所有警告紀錄，回傳被刪除的筆數。"""
+    init_db()
+    gid = str(guild_id).strip()
+    if not gid:
+        return 0
+
+    with _lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            _ensure_moderation_warnings_table(cursor)
+            cursor.execute(
+                "DELETE FROM moderation_warnings WHERE guild_id = ? AND user_id = ?;",
+                (gid, int(user_id)),
+            )
+            count = int(cursor.rowcount)
+            conn.commit()
+            return count
+        finally:
+            conn.close()
+
 
 
 

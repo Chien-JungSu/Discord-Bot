@@ -350,6 +350,33 @@
           <li><strong>LaTeX 自動排版與多 Container 卡片</strong>：行內公式（含純數值常數如 <code>$24$</code>）自動轉為高可讀性 Unicode 數學符號；獨立區塊公式（<code>$$...$$</code>、<code>\[...\]</code>、<code>\begin{...}</code>，支援多行公式）與 Markdown 表格自動渲染為純黑圓角高解析 PNG 卡片（內建 <code>STIX Two Math</code> 字型），超出圖數、元件數或字元上限時自動切割為多則 Container 卡片，避免回退純文字。</li>
         </ul>
       </article>
+
+      <article class="card" id="cog-manage">
+        <div class="tag">Manage</div>
+        <h2>伺服器管理</h2>
+        <ul>
+          <li><strong>權限與階層防護</strong>：所有 <code>/manage_*</code> 指令均依動作檢查對應權限、頻道覆寫與身分組階層，禁止操作自己、機器人、擁有者或高於／等於自身與機器人的對象；高風險操作附確認按鈕。</li>
+          <li><strong>/manage_kick</strong> <em>member:&lt;成員&gt; [reason]</em>：踢出成員。需「踢出成員」權限。</li>
+          <li><strong>/manage_ban</strong> <em>user:&lt;使用者&gt; [reason] [delete_message_days:0~7]</em>：封鎖成員或指定 ID 使用者並可刪除近期訊息。需「封鎖成員」權限。</li>
+          <li><strong>/manage_unban</strong> <em>user:&lt;ID或名稱&gt; [reason]</em>：解除封鎖（支援自動完成搜尋）。需「封鎖成員」權限。</li>
+          <li><strong>/manage_timeout</strong> <em>member:&lt;成員&gt; duration:&lt;時長&gt; [reason]</em>：禁言成員（5 秒～28 天，如 <code>10m</code>、<code>1h</code>、<code>1d</code>）。需「禁言成員」權限。</li>
+          <li><strong>/manage_untimeout</strong> <em>member:&lt;成員&gt; [reason]</em>：解除成員禁言。需「禁言成員」權限。</li>
+          <li><strong>/manage_warn</strong> <em>member:&lt;成員&gt; reason:&lt;原因&gt;</em>：給予成員警告並記錄於資料庫。需「禁言成員」權限。</li>
+          <li><strong>/manage_warnings</strong> <em>member:&lt;成員&gt; [action] [warning_id]</em>：查看、刪除單筆或清空警告紀錄。需「禁言成員」權限。</li>
+          <li><strong>/manage_purge</strong> <em>amount:&lt;1~100&gt; [member] [contains] [bots_only] [ignore_pinned]</em>：依條件批次清理當前頻道訊息（超過 25 則需確認）。需「管理訊息」權限。</li>
+          <li><strong>/manage_slowmode</strong> <em>seconds:&lt;0~21600&gt; [channel] [reason]</em>：設定或關閉慢速模式。需「管理頻道」權限。</li>
+          <li><strong>/manage_lock</strong> / <strong>/manage_unlock</strong> <em>[channel] [reason]</em>：鎖定或解鎖頻道／討論串發言。需「管理頻道」權限。</li>
+          <li><strong>/manage_channel_create</strong> <em>name:&lt;名稱&gt; [channel_type] [category] [topic] [nsfw]</em>：建立文字、語音、分類、公告、論壇或舞台頻道。需「管理頻道」權限。</li>
+          <li><strong>/manage_channel_edit</strong> <em>[channel] [name] [topic] [clear_topic] [nsfw] [category] [clear_category]</em>：編輯頻道名稱、主題、NSFW 與分類。需「管理頻道」權限。</li>
+          <li><strong>/manage_channel_delete</strong> <em>channel:&lt;頻道&gt; [reason]</em>：永久刪除頻道。需「管理頻道」權限。</li>
+          <li><strong>/manage_announce</strong> <em>[channel] [title] [content] [color] [mention_role] [edit_message_id]</em>：發布或編輯 Embed 公告；標題與內容留空時開啟多行輸入視窗。需「管理訊息」權限。</li>
+          <li><strong>/manage_pin</strong> <em>action:&lt;固定/取消固定&gt; message_id:&lt;ID或連結&gt; [channel]</em>：固定或取消固定訊息。需「管理訊息」權限。</li>
+          <li><strong>/manage_role</strong> <em>action:&lt;指派/移除&gt; member:&lt;成員&gt; role:&lt;身分組&gt; [reason]</em>：指派或移除身分組。需「管理身分組」權限。</li>
+          <li><strong>/manage_nick</strong> <em>member:&lt;成員&gt; [nickname] [reason]</em>：修改或重設成員暱稱。需「管理暱稱」權限。</li>
+          <li><strong>/manage_voice</strong> <em>action:&lt;動作&gt; member:&lt;成員&gt; [target_channel] [reason]</em>：語音斷線、移動、靜音或拒聽管理。需對應語音管理權限。</li>
+          <li><strong>/manage_member_info</strong> <em>member:&lt;成員&gt;</em>：私密查看成員身分組、權限、狀態與警告數。需「禁言成員」權限。</li>
+        </ul>
+      </article>
     </div>
 
     <!-- 下部居中放置文本“© 2026 炙彗JI器人”（16sp） -->

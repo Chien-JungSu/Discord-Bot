@@ -31,10 +31,15 @@ from services.spotify import looks_like_spotify
 
 from cogs.database import (
     AI_PROVIDER_MODELS,
+    DEFAULT_STATUS_ROTATION_ITEMS,
+    STATUS_ROTATION_MAX_ITEMS,
+    VALID_ONLINE_STATUSES,
+    VALID_STATUS_ACTIVITY_TYPES,
     authorize_guild_ai,
     delete_guild_ai_settings,
     get_ai_authorized_guilds,
     get_bot_default_settings,
+    get_bot_status_rotation_settings,
     get_daily_api_usage,
     get_economy_user,
     get_guild_ai_settings,
@@ -48,6 +53,7 @@ from cogs.database import (
     revoke_guild_ai,
     save_auto_reply_settings,
     save_bot_default_settings,
+    save_bot_status_rotation_settings,
     save_economy_config,
     save_guild_ai_settings,
     save_music_settings,
@@ -690,6 +696,26 @@ def get_guild_data(guild_id: str):
         {"name": "/ai_persona", "description": "設定或檢視當前頻道的專屬 AI 人設指令", "category": "AI", "permission": "所有成員"},
         {"name": "/ai_config", "description": "查看伺服器當前 AI 人設與多供應商配置", "category": "AI", "permission": "所有成員"},
         {"name": "/ai_settings", "description": "設定伺服器預設 AI 引擎與人設指令", "category": "AI", "permission": "管理員"},
+        {"name": "/manage_kick", "description": "踢出成員", "category": "Manage", "permission": "管理員"},
+        {"name": "/manage_ban", "description": "封鎖成員或使用者", "category": "Manage", "permission": "管理員"},
+        {"name": "/manage_unban", "description": "解除使用者封鎖", "category": "Manage", "permission": "管理員"},
+        {"name": "/manage_timeout", "description": "禁言成員", "category": "Manage", "permission": "管理員"},
+        {"name": "/manage_untimeout", "description": "解除成員禁言", "category": "Manage", "permission": "管理員"},
+        {"name": "/manage_warn", "description": "給予成員警告", "category": "Manage", "permission": "管理員"},
+        {"name": "/manage_warnings", "description": "管理成員警告紀錄", "category": "Manage", "permission": "管理員"},
+        {"name": "/manage_purge", "description": "批次清理頻道訊息", "category": "Manage", "permission": "管理員"},
+        {"name": "/manage_slowmode", "description": "設定頻道慢速模式", "category": "Manage", "permission": "管理員"},
+        {"name": "/manage_lock", "description": "鎖定頻道發言", "category": "Manage", "permission": "管理員"},
+        {"name": "/manage_unlock", "description": "解除頻道鎖定", "category": "Manage", "permission": "管理員"},
+        {"name": "/manage_channel_create", "description": "建立頻道", "category": "Manage", "permission": "管理員"},
+        {"name": "/manage_channel_edit", "description": "編輯頻道設定", "category": "Manage", "permission": "管理員"},
+        {"name": "/manage_channel_delete", "description": "刪除頻道", "category": "Manage", "permission": "管理員"},
+        {"name": "/manage_announce", "description": "發布或編輯公告", "category": "Manage", "permission": "管理員"},
+        {"name": "/manage_pin", "description": "固定或取消固定訊息", "category": "Manage", "permission": "管理員"},
+        {"name": "/manage_role", "description": "指派或移除身分組", "category": "Manage", "permission": "管理員"},
+        {"name": "/manage_nick", "description": "修改或重設成員暱稱", "category": "Manage", "permission": "管理員"},
+        {"name": "/manage_voice", "description": "管理語音頻道成員", "category": "Manage", "permission": "管理員"},
+        {"name": "/manage_member_info", "description": "查看成員管理資訊", "category": "Manage", "permission": "管理員"},
     ]
 
     # 關鍵防護：管理員專用指令 (owner_guild_only) 絕對不對一般使用者顯示，且僅在擁有者檢視專屬伺服器時附加
@@ -698,6 +724,7 @@ def get_guild_data(guild_id: str):
         commands_list.extend([
             {"name": "/reload_cogs", "description": "線上熱重載指定 Cog 模組並同步指令樹", "category": "Owner / System", "permission": "管理員", "owner_guild_only": True},
             {"name": "/economy_admin", "description": "開啟經濟系統參數控制面板與管理使用者金幣", "category": "Owner / Economy", "permission": "管理員", "owner_guild_only": True},
+            {"name": "/bot_steal", "description": "偷取表情符號並新增至機器人的表情符號", "category": "Owner / General", "permission": "管理員", "owner_guild_only": True},
         ])
 
     ai_cfg = get_guild_ai_settings(str(guild_id))
@@ -1733,6 +1760,86 @@ def owner_bot_defaults():
         'status': 'ok',
         'message': msg,
         'defaults': updated,
+    })
+
+
+@panel_bp.route('/api/panel/owner/status-rotation', methods=['GET', 'POST'])
+def owner_status_rotation():
+    """擁有者專屬：讀取或儲存機器人狀態訊息輪替設定。"""
+    if not is_current_user_owner():
+        return jsonify({'status': 'error', 'message': '權限不足'}), 403
+
+    if request.method == 'GET':
+        settings = get_bot_status_rotation_settings()
+        return jsonify({
+            'status': 'ok',
+            'settings': settings,
+            'defaults': DEFAULT_STATUS_ROTATION_ITEMS,
+            'max_items': STATUS_ROTATION_MAX_ITEMS,
+        })
+
+    payload = request.get_json(silent=True) or {}
+    if str(payload.get('action') or '').strip().lower() == 'reset':
+        updated = save_bot_status_rotation_settings({
+            'enabled': True,
+            'interval': 30,
+            'online_status': 'online',
+            'reset_to_default': True,
+        })
+        _sync_cog_settings('General')
+        return jsonify({
+            'status': 'ok',
+            'message': '已重設為預設狀態訊息輪替清單並立即套用！',
+            'settings': updated,
+        })
+
+    raw_items = payload.get('items')
+    if not isinstance(raw_items, list):
+        return jsonify({'status': 'error', 'message': '請至少設定 1 則有效的狀態訊息內容'}), 400
+
+    cleaned_items = []
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        act_type = str(item.get('type') or 'playing').strip().lower()
+        if act_type not in VALID_STATUS_ACTIVITY_TYPES:
+            act_type = 'playing'
+        text = str(item.get('text') or '').strip()[:128]
+        if text:
+            cleaned_items.append({'type': act_type, 'text': text})
+
+    if not cleaned_items:
+        return jsonify({'status': 'error', 'message': '請至少設定 1 則有效的狀態訊息內容'}), 400
+    if len(cleaned_items) > STATUS_ROTATION_MAX_ITEMS:
+        return jsonify({'status': 'error', 'message': f'狀態訊息最多只能設定 {STATUS_ROTATION_MAX_ITEMS} 則'}), 400
+
+    try:
+        interval_val = int(payload.get('interval', 30))
+    except (ValueError, TypeError):
+        return jsonify({'status': 'error', 'message': '輪替間隔秒數必須為整數（10 ~ 600 秒）'}), 400
+    interval_val = max(10, min(600, interval_val))
+
+    online_status = str(payload.get('online_status') or 'online').strip().lower()
+    if online_status not in VALID_ONLINE_STATUSES:
+        online_status = 'online'
+
+    raw_enabled = payload.get('enabled', True)
+    if isinstance(raw_enabled, str):
+        enabled_val = raw_enabled.strip().lower() in ('1', 'true', 'yes', 'on')
+    else:
+        enabled_val = bool(raw_enabled)
+
+    updated = save_bot_status_rotation_settings({
+        'enabled': enabled_val,
+        'interval': interval_val,
+        'online_status': online_status,
+        'items': cleaned_items,
+    })
+    _sync_cog_settings('General')
+    return jsonify({
+        'status': 'ok',
+        'message': '機器人狀態訊息輪替設定已成功儲存並立即套用！',
+        'settings': updated,
     })
 
 

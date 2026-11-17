@@ -591,6 +591,9 @@
                 <button class="owner-subtab-btn" data-subtab="owner-sub-bot-defaults" type="button">
                   <span>所有伺服器預設值</span>
                 </button>
+                <button class="owner-subtab-btn" data-subtab="owner-sub-status-rotation" type="button">
+                  <span>狀態訊息輪替</span>
+                </button>
               </div>
             </div>
 
@@ -926,6 +929,77 @@
                   </button>
                   <button type="button" id="btn-apply-defaults-all" class="btn warning" style="flex: 1 1 200px;">
                     <span>一鍵套用至所有伺服器</span>
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+
+          <!-- 子分頁 4-2: 機器人狀態訊息輪替設定 -->
+          <div id="owner-sub-status-rotation" class="owner-subpane">
+            <div class="user-manage-box">
+              <h4 class="subpane-group-title">機器人狀態訊息輪替 (Status Rotation)</h4>
+
+              <form id="form-owner-status-rotation" class="panel-form" autocomplete="off">
+                <div class="form-group checkbox-group">
+                  <label class="custom-checkbox-label">
+                    <input type="checkbox" id="status-rotation-enabled" checked />
+                    <span>啟用自動輪替機器人 Discord 狀態訊息</span>
+                  </label>
+                </div>
+
+                <div class="form-row-2">
+                  <div class="form-group">
+                    <label for="status-rotation-interval">輪替間隔秒數（10 ~ 600 秒）</label>
+                    <input
+                      type="number"
+                      id="status-rotation-interval"
+                      class="form-control"
+                      min="10"
+                      max="600"
+                      step="1"
+                      value="30"
+                      autocomplete="off"
+                      required
+                    />
+                  </div>
+
+                  <div class="form-group">
+                    <label for="status-rotation-online-status">機器人上線狀態</label>
+                    <select id="status-rotation-online-status" class="form-control">
+                      <option value="online">🟢 線上 (Online)</option>
+                      <option value="idle">🌙 閒置 (Idle)</option>
+                      <option value="dnd">⛔ 請勿打擾 (Do Not Disturb)</option>
+                      <option value="invisible">👻 隱身 (Invisible)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="status-vars-hint">
+                  <span>可用動態變數：</span>
+                  <code>{guilds}</code><span>伺服器數</span>
+                  <code>{users}</code><span>總成員數</span>
+                  <code>{commands}</code><span>指令數</span>
+                  <code>{latency}</code><span>延遲(ms)</span>
+                </div>
+
+                <div class="status-items-header">
+                  <label class="status-items-title">輪替狀態清單（最多 20 則）</label>
+                  <button type="button" id="btn-add-status-item" class="btn secondary btn-sm-pill">
+                    <span>＋ 新增狀態訊息</span>
+                  </button>
+                </div>
+
+                <div id="status-rotation-items-list" class="status-rotation-items-list">
+                  <!-- 動態渲染狀態訊息列 -->
+                </div>
+
+                <div class="form-actions" style="margin-top: 20px; flex-wrap: wrap;">
+                  <button type="submit" id="btn-save-status-rotation" class="btn btn-save-setting">
+                    <span>儲存設定</span>
+                  </button>
+                  <button type="button" id="btn-reset-status-rotation" class="btn btn-clear-setting danger">
+                    <span>重設為預設清單</span>
                   </button>
                 </div>
               </form>

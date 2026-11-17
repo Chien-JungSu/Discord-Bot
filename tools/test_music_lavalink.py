@@ -127,7 +127,53 @@ async def test_diagnose():
         msg = await music.diagnose_lavalink_node('https://node.example:2333', password)
         check('LAVALINK_PASSWORD' in msg, 'http:// 通但 401：診斷一併提醒密碼也錯了')
 
+        # https://...:443 憑證過期且 http://...:443 被踢斷，改探 http://...:80 成功
+        record4: list = []
+
+        async def _probe_443_expired_then_80(url, headers, timeout):
+            record4.append(url)
+            if url == 'https://lavalinkv4.serenetia.com:443/version':
+                return None, '', RuntimeError('certificate has expired')
+            if url == 'http://lavalinkv4.serenetia.com:443/version':
+                return None, '', aiohttp.ClientError('Server disconnected')
+            if url == 'http://lavalinkv4.serenetia.com:80/version':
+                return 200, '4.0.8', None
+            return None, '', AssertionError(f'unexpected url: {url}')
+
+        music._probe_lavalink_version = _probe_443_expired_then_80
+        msg443 = await music.diagnose_lavalink_node('https://lavalinkv4.serenetia.com:443', password)
+        check(
+            record4 == [
+                'https://lavalinkv4.serenetia.com:443/version',
+                'http://lavalinkv4.serenetia.com:443/version',
+                'http://lavalinkv4.serenetia.com:80/version',
+            ],
+            'https://...:443 與 http://...:443 失敗時會自動追加探測 http://...:80',
+        )
+        check(
+            'http://lavalinkv4.serenetia.com:80' in msg443 and '改成「http://lavalinkv4.serenetia.com:80」' in msg443,
+            'diagnose_lavalink_node 給出將 LAVALINK_URI 改為 http://...:80 的建議',
+        )
+
+        # https://...:443 與 :80 都失敗時，診斷明確列出各探測點失敗原因
+        async def _probe_all_fail(url, headers, timeout):
+            if url.startswith('https://'):
+                return None, '', RuntimeError('certificate has expired')
+            if ':443/' in url:
+                return None, '', aiohttp.ClientError('Server disconnected')
+            return None, '', TimeoutError()
+
+        music._probe_lavalink_version = _probe_all_fail
+        msg443_fail = await music.diagnose_lavalink_node('https://lavalinkv4.serenetia.com:443', password)
+        check(
+            'http://lavalinkv4.serenetia.com:443' in msg443_fail
+            and 'http://lavalinkv4.serenetia.com:80' in msg443_fail
+            and '同樣失敗' in msg443_fail,
+            '443 與 80 皆失敗時在診斷中同時列出兩邊的探測結果',
+        )
+
         check(password not in msg, '診斷訊息不包含密碼')
+        check(password not in msg443 and password not in msg443_fail, ':80 診斷訊息不包含密碼')
 
         # 診斷本身絕不拋例外（連 probe 丟未預期錯誤也要回一句話）
         async def evil(url, headers, timeout):
@@ -258,6 +304,58 @@ async def test_connect_lavalink():
         await cog4._connect_lavalink('http://node.example:2333', 'pw')
         check(len(called) == 0, '已有連線程序在跑時不會重入（避免開兩條 WebSocket）')
         cog4._lavalink_connecting = False
+
+        # 2-6 SSL 憑證過期自動降級連向 http://...:80 備援
+        pool_nodes.clear()
+        bot5 = FakeBot()
+        cog5 = music.Music(bot5)
+        probe_calls: list[str] = []
+
+        async def _probe_fallback_ok(url, headers, timeout):
+            probe_calls.append(url)
+            if url == 'https://lavalinkv4.serenetia.com:443/version':
+                return None, '', RuntimeError('certificate has expired')
+            if url == 'http://lavalinkv4.serenetia.com:80/version':
+                return 200, '4.0.8', None
+            return None, '', aiohttp.ClientError('unexpected')
+
+        orig_probe_connect = music._probe_lavalink_version
+        music._probe_lavalink_version = _probe_fallback_ok
+        connected_uris: list[str] = []
+
+        async def fake_register_capture(*, nodes, client=None, cache_capacity=None):
+            for n in nodes:
+                connected_uris.append(n.uri)
+                n._status = wavelink.NodeStatus.CONNECTED
+                pool_nodes[n.identifier] = n
+            return dict(pool_nodes)
+
+        wavelink.Pool.connect = fake_register_capture
+        try:
+            await cog5._connect_lavalink('https://lavalinkv4.serenetia.com:443', 'pw')
+            check(
+                probe_calls == [
+                    'https://lavalinkv4.serenetia.com:443/version',
+                    'http://lavalinkv4.serenetia.com:80/version',
+                ],
+                'SSL 失敗時優先探測 http://...:80 備援，不對 443 埠做無效明文嘗試',
+            )
+            check(
+                connected_uris == ['http://lavalinkv4.serenetia.com:80']
+                and len(pool_nodes) == 1
+                and len(bot5.notifications) == 0,
+                '_connect_lavalink 成功自動降級至 http://...:80 並註冊進 Pool（無錯誤通報）',
+            )
+            # 若已有降級後的 CONNECTED 節點，再次呼叫不應重複連線
+            await cog5._connect_lavalink('https://lavalinkv4.serenetia.com:443', 'pw')
+            check(len(connected_uris) == 1, '已透過 HTTP 備援連線成功時，後續重連檢查不重複建立節點')
+        finally:
+            music._probe_lavalink_version = orig_probe_connect
+            for leftover in list(pool_nodes.values()):
+                sess = getattr(leftover, '_session', None)
+                if sess is not None and not sess.closed:
+                    await sess.close()
+            pool_nodes.clear()
     finally:
         wavelink.Pool.connect = orig_connect
         wavelink.Node.close = orig_close

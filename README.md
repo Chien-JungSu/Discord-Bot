@@ -14,6 +14,7 @@
 - `/choice`：從使用者輸入的選項中隨機選一個
 - `/quotes`：顯示隨機名言或笑話，並支援互動按鈕
 - `/steal emoji:<emoji>`：從 Discord 表情符號字串或引用直接下載並複製到本伺服器；可一次處理多個 emoji，超過 256 KB 時會給出友善文字提示
+- `/bot_steal emoji:<emoji>`：後台專屬（`owner_guild_only` 且限機器人擁有者），運作原理與 `/steal` 相同，但會將表情符號直接新增至機器人的表情符號（Application Emojis）
 - `/weather <city>`：查詢全台各縣市即時天氣預報
 - `/bus`：使用下拉式選單查詢台灣公車即時到站資訊
 - `/server_info`：顯示目前伺服器詳細資訊
@@ -61,6 +62,8 @@
 - `/shorten`（或 `/reurl`）：透過 Reurl.cc 快速縮短網址（支援 UTM 追蹤參數與公開／私密回覆），亦支援右鍵訊息選單「縮短訊息中的網址」
 - AI 智慧問答系列：`/ai`、`/ai_reset`（`/reset`）、`/ai_provider`（`/provider`）、`/ai_persona`（`/persona`）、`/ai_config`、`/ai_settings`，支援圖文雙模態與 `@機器人`／回覆／專屬頻道自然對話（自動過濾轉發訊息與非 AI 訊息回覆）、多供應商免費自動容錯鏈（Google AI Studio → NVIDIA NIM → Mistral AI）、預設 `gemini-3.5-flash-lite` 與獨立拆分 Gemini 模型選單（含 `gemini-4-hydrogen` 等），完全免費無 AI 貨幣扣款；內建行內 LaTeX Unicode 自動排版與區塊公式／Markdown 表格純黑圓角 PNG 卡片渲染，並於超出上限時自動切割為多則 Container
 - `/幹話`（或 `/ganhua`）：無參數直接隨機生成一句道地台灣幹話吐槽；亦支援對任意訊息按右鍵「應用程式」→「用幹話回覆」直接於頻道針對該則訊息講幹話（修改 `memes_data.json` 後可使用 `/reload_cogs` 重載 `cogs.ganhua` 即時套用）
+- **伺服器管理套件（`/manage_*`）**：包含 `/manage_kick`、`/manage_ban`、`/manage_unban`、`/manage_timeout`、`/manage_untimeout`、`/manage_warn`、`/manage_warnings`、`/manage_purge`、`/manage_slowmode`、`/manage_lock`、`/manage_unlock`、`/manage_channel_create`、`/manage_channel_edit`、`/manage_channel_delete`、`/manage_announce`、`/manage_pin`、`/manage_role`、`/manage_nick`、`/manage_voice`、`/manage_member_info`，依指令分層嚴格驗證執行者與機器人權限、頻道覆寫、身分組階層及高風險二次確認按鈕
+- **機器人狀態訊息輪替**：自動定時輪替 Discord 狀態訊息（支援「正在玩／正在聽／正在觀看／競爭中／自訂狀態」與 `{guilds}`、`{users}`、`{commands}`、`{latency}` 動態變數），擁有者可於 Web 控制面板「管理員設定 → 狀態訊息輪替」即時增刪與調整秒數（預設 30 秒）
 - `!sync`（擁有者專用）：即時同步全域斜線／右鍵指令；`!sync guild` 或 `!sync .` 可立即同步目前伺服器指令
 
 ### 點歌者操作鎖
@@ -234,6 +237,7 @@ python main.py
 - `/choice options:<文字>`：輸入用空格分隔的選項，機器人會隨機選一個
 - `/quotes`：展示名言 / 笑話選擇按鈕
 - `/steal emoji:<表情符號字串或引用>`：從 Discord 的表情符號 CDN 直接下載，並建立為本伺服器自訂表情；支援多個 emoji 一次處理，超過 256 KB 會回覆友善提示，不會直接顯示原始錯誤代碼
+- `/bot_steal emoji:<表情符號字串或引用>`：後台專屬（`owner_guild_only` 且限機器人擁有者）指令，解析與下載流程與 `/steal` 相同，但會透過機器人應用程式介面將表情符號直接新增至機器人的表情符號庫（自動避免與既有機器人表情符號名稱重複）
 - `/weather city:<縣市名稱或英文>`：查詢天氣，支援如 `臺北`、`Taichung`、`Matsu` 等對照
 - `/bus`：先選擇縣市，再輸入公車號碼，接著從下拉式選單選擇站牌並查詢即時到站資訊
 - `/server_info`：顯示所在伺服器的詳細資訊
@@ -292,6 +296,26 @@ python main.py
 - `/ai_config`：檢視本伺服器目前的 AI 設定（預設引擎、限定頻道、創意度、最大長度與啟用狀態）。
 - `/ai_settings [model] [instruction] [channel] [clear_channel] [temperature] [max_tokens] [enabled]`：由管理員調整本伺服器 AI 預設模型、人設指令、專屬頻道與開關（亦可透過 `/panel` 網頁控制面板調整，需「管理伺服器」權限）。
 - `/幹話`（或 `/ganhua`）：無須參數直接隨機生成一句道地台灣幹話發佈到頻道；亦支援對任意訊息按右鍵「應用程式」→「用幹話回覆」。
+- **伺服器管理指令（`/manage_*` 系列，嚴格檢查權限、頻道覆寫與身分組階層，高風險操作附二次確認）**：
+  - `/manage_kick member:<成員> [reason]`：踢出成員。需「踢出成員」權限。
+  - `/manage_ban user:<使用者> [reason] [delete_message_days:0~7]`：封鎖成員或指定 ID 使用者並可刪除近期訊息。需「封鎖成員」權限。
+  - `/manage_unban user:<ID或名稱> [reason]`：解除封鎖（支援自動完成搜尋）。需「封鎖成員」權限。
+  - `/manage_timeout member:<成員> duration:<時長> [reason]`：禁言成員（5 秒～28 天，支援 `10m`、`1h`、`1d`）。需「禁言成員」權限。
+  - `/manage_untimeout member:<成員> [reason]`：解除成員禁言。需「禁言成員」權限。
+  - `/manage_warn member:<成員> reason:<原因>`：給予成員警告並記錄於資料庫。需「禁言成員」權限。
+  - `/manage_warnings member:<成員> [action] [warning_id]`：查看、刪除單筆或清空警告紀錄。需「禁言成員」權限。
+  - `/manage_purge amount:<1~100> [member] [contains] [bots_only] [ignore_pinned]`：依條件批次清理當前頻道訊息（超過 25 則需確認）。需「管理訊息」權限。
+  - `/manage_slowmode seconds:<0~21600> [channel] [reason]`：設定或關閉慢速模式。需「管理頻道」權限。
+  - `/manage_lock [channel] [reason]` / `/manage_unlock [channel] [reason]`：鎖定或解鎖頻道／討論串發言。需「管理頻道」權限。
+  - `/manage_channel_create name:<名稱> [channel_type] [category] [topic] [nsfw]`：建立文字、語音、分類、公告、論壇或舞台頻道。需「管理頻道」權限。
+  - `/manage_channel_edit [channel] [name] [topic] [clear_topic] [nsfw] [category] [clear_category]`：編輯頻道名稱、主題、NSFW 與分類。需「管理頻道」權限。
+  - `/manage_channel_delete channel:<頻道> [reason]`：永久刪除頻道。需「管理頻道」權限。
+  - `/manage_announce [channel] [title] [content] [color] [mention_role] [edit_message_id]`：發布或編輯 Embed 公告；標題與內容留空時開啟多行視窗。需「管理訊息」權限。
+  - `/manage_pin action:<固定/取消固定> message_id:<ID或連結> [channel]`：固定或取消固定訊息。需「管理訊息」權限。
+  - `/manage_role action:<指派/移除> member:<成員> role:<身分組> [reason]`：指派或移除身分組。需「管理身分組」權限。
+  - `/manage_nick member:<成員> [nickname] [reason]`：修改或重設成員暱稱。需「管理暱稱」權限。
+  - `/manage_voice action:<動作> member:<成員> [target_channel] [reason]`：語音斷線、移動、靜音或拒聽管理。需對應語音管理權限。
+  - `/manage_member_info member:<成員>`：私密查看成員身分組、權限、狀態與警告數。需「禁言成員」權限。
 
 ## 表符身份組功能說明
 
@@ -376,6 +400,7 @@ python main.py
 - 語音頻道裡只剩機器人自己（沒有真人成員）超過 `EMPTY_VOICE_CHANNEL_TIMEOUT` 秒（預設 60 秒）就會自動離開並清空佇列，並在最近一次下指令的文字頻道發一則通知。這個功能監聽 `discord.py` 的 `on_voice_state_update` 事件，每次有人加入/離開/切換頻道時檢查機器人所在頻道還有沒有真人；沒有的話才啟動倒數計時器，且倒數期間只要有人回來就會立刻取消，避免誤判暫時性的斷線重連。
 - `/music_play` 搜尋失敗（來源網站無回應、反爬蟲封鎖等）會立即回覆錯誤訊息。歌曲成功排入播放後，若 Lavalink 節點在背景載入音訊時才失敗（例如 YouTube 判定需要登入、影片地區限制，或公開節點的來源連結失效），機器人會透過 `on_wavelink_track_exception` 監聽器把失敗原因回報到下指令當下的文字頻道，而不是只留在後台 log。目前公開 Lavalink 節點偶爾不穩定是已知風險，後續計畫改為自架節點。
 - `/steal` 會解析 Discord 的 emoji 引用字串（如 `<:pepe_smile:123456789>`、`<a:cat:456789>`），依據 `emoji_id` 及是否動態組出對應 CDN 下載網址，下載圖片 bytes 後透過 `guild.create_custom_emoji()` 建立到目前伺服器；若來源超過 256 KB 或無法讀取，會回覆友善文字提示，而不是直接曝露原始錯誤代碼。
+- `/bot_steal` 為 `owner_guild_only` 且限機器人擁有者（`owner_only`）的伺服器專屬指令，沿用與 `/steal` 相同的解析、下載與 256 KB 容量檢查流程，改以 `bot.create_application_emoji()` 將表情符號建立至機器人的應用程式表情符號庫，並會先檢查既有機器人表情符號名稱以避免名稱衝突。
 - `/tts` 模組透過 `gTTS`（Google Text-to-Speech）將文字轉換為 MP3 音訊，運作邏輯完整移植自 `tts.py`（未指定語言預設為英文 `en`、未指定檔名預設以文字前 10 個字命名）；生成過程以非同步執行緒處理，不會阻塞機器人主事件循環。
 - 機器人在 `setup_hook` 內進行全域斜線指令同步，若同步失敗會在 `on_ready` 內再嘗試一次作為 fallback。
 - `cogs/web_server.py` 會在背景執行 Flask 網頁服務，首頁 `/` 顯示機器人狀態儀表板（`templates/index.html`），並提供 `/api/bot-stats`、`/api/uptime` 兩支 API。

@@ -39,7 +39,7 @@
 │   ├── bus.py                  # /bus 台灣公車即時動態查詢
 │   ├── database.py             # 核心資料庫層：所有 SQLite 表結構、CRUD 與資料遷移邏輯
 │   ├── economy.py              # /economy_* 全域經濟、簽到加成、轉帳與娛樂小遊戲
-│   ├── general.py              # /ping, /choice, /quotes, /steal, /reload_cogs
+│   ├── general.py              # /ping, /choice, /quotes, /steal, /reload_cogs 與狀態訊息輪替迴圈
 │   ├── llm_router.py           # 多模型 LLM 路由與 OpenRouter API 調度
 │   ├── memory.py               # AI 短期上下文對話記憶管理
 │   ├── music.py                # 音樂核心：Lavalink 播放器、Container 面板、歌單與置底機制
@@ -153,7 +153,7 @@
 ### 3.4 Web 控制面板與 API 架構 (`cogs/panel_bp.py`)
 - **OAuth2 驗證**：支援 Discord 官方授權登入，亦具備本機開發專用的 `dev-login` 模式。
 - **權限分級機制**：
-  - **Bot Owner**：最高管理者，可存取 Cog 熱重載、全域指令同步、經濟參數全域調整、AI 授權伺服器名單、API 呼叫額度監視、個人主頁審核等。
+  - **Bot Owner**：最高管理者，可存取 Cog 熱重載、全域指令同步、經濟參數全域調整、機器人全域預設值、狀態訊息輪替管理、AI 授權伺服器名單、API 呼叫額度監視、個人主頁審核等。
   - **Guild Administrator**：擁有「管理伺服器」權限之成員，可設定歡迎頻道、點歌限制頻道、自動回覆規則、表符身分組等。
   - **一般已登入用戶**：可存取「個人設定」，全權管理自己的個人專屬歌單、編輯歌曲順序、更換公開狀態、重新產生分享碼與管理收藏歌單。
 - **防禦設計**：

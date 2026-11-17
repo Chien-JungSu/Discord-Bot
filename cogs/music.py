@@ -591,6 +591,64 @@ async def _safe_probe_lavalink_version(
         return None, '', exc
 
 
+def _build_http_fallback_uris(lavalink_uri: str, *, prefer_port_80: bool = False) -> list[str]:
+    """從 https:// Lavalink URI 推導明文 HTTP 備援網址清單。
+
+    - same_port_http：直接將 https:// 替換為 http://（對應連接埠本身只跑明文 HTTP 的節點）。
+    - port80_http：若原網址使用 :443 或未明確指定連接埠，額外推導 :80 明文 HTTP 端點，
+      避免用明文 http:// 連向 443 埠而被反向代理直接踢斷連線。
+    """
+    base = (lavalink_uri or "").strip().rstrip("/")
+    if not base.lower().startswith("https://"):
+        return []
+    rest = base[len("https://"):]
+    if "/" in rest:
+        host_port, path = rest.split("/", 1)
+        suffix = f"/{path}"
+    else:
+        host_port, suffix = rest, ""
+
+    same_port_http = f"http://{host_port}{suffix}"
+    port80_http: str | None = None
+    if host_port.endswith(":443"):
+        port80_http = f"http://{host_port[:-4]}:80{suffix}"
+    elif host_port.startswith("[") and host_port.endswith("]"):
+        port80_http = f"http://{host_port}:80{suffix}"
+    elif host_port and ":" not in host_port.rsplit("]", 1)[-1]:
+        port80_http = f"http://{host_port}:80{suffix}"
+
+    candidates: list[str] = []
+    ordered = [port80_http, same_port_http] if prefer_port_80 else [same_port_http, port80_http]
+    for item in ordered:
+        if item and item not in candidates:
+            candidates.append(item)
+    return candidates
+
+
+async def _resolve_lavalink_connect_uri(
+    lavalink_uri: str, lavalink_password: str, timeout: float = LAVALINK_PROBE_TIMEOUT
+) -> str:
+    """連線前檢查 https:// 節點是否因 SSL 憑證過期或 TLS 失敗而無法握手，必要時自動降級明文 HTTP 備援。"""
+    base = (lavalink_uri or "").strip().rstrip("/")
+    if not base.lower().startswith("https://"):
+        return lavalink_uri
+
+    headers = {'Authorization': lavalink_password}
+    _, _, exc = await _safe_probe_lavalink_version(f'{base}/version', headers, timeout)
+    if exc is None:
+        return lavalink_uri
+
+    for cand in _build_http_fallback_uris(base, prefer_port_80=True):
+        c_status, _, c_exc = await _safe_probe_lavalink_version(f'{cand}/version', headers, timeout)
+        if c_exc is None and c_status == 200:
+            print(
+                f"⚠️ [Lavalink 自動備援] 原節點 {base} TLS/SSL 連線失敗（{exc}），"
+                f"偵測到明文 HTTP 端點 {cand} 可正常回應，自動降級改連：{cand}"
+            )
+            return cand
+    return lavalink_uri
+
+
 async def diagnose_lavalink_node(
     lavalink_uri: str, lavalink_password: str, timeout: float = LAVALINK_PROBE_TIMEOUT
 ) -> str:
@@ -599,17 +657,18 @@ async def diagnose_lavalink_node(
     呼叫端（_report_lavalink_failure）會把它印進後台 log，並附在 notify_owner_error
     的 extra_info 裡；回報前 main.py 還會再過一層 redact_secrets。
     """
-    base = lavalink_uri.rstrip('/')
+    base = (lavalink_uri or "").strip().rstrip('/')
     url = f'{base}/version'
     headers = {'Authorization': lavalink_password}
     status, body, exc = await _safe_probe_lavalink_version(url, headers, timeout)
     if exc is None:
         return _describe_lavalink_version(url, status, body)
 
-    if base.startswith('https://'):
-        # 本次故障的根因：https:// 指到只講明文 HTTP 的節點（TLS 握手必失敗）。
-        # 改探 http:// 並比對結果，直接在訊息裡告訴開發者要把 LAVALINK_URI 改成什麼。
-        http_base = 'http://' + base[len('https://'):]
+    if base.lower().startswith('https://'):
+        # 本次故障的根因：https:// 指到只講明文 HTTP 的節點，或 :443 的 SSL 憑證已過期。
+        # 先探測同連接埠的 http://，若失敗且有 :80 備援埠時再追加探測 http://...:80。
+        http_candidates = _build_http_fallback_uris(base, prefer_port_80=False)
+        http_base = http_candidates[0] if http_candidates else ('http://' + base[len('https://'):])
         h_status, _, h_exc = await _safe_probe_lavalink_version(f'{http_base}/version', headers, timeout)
         if h_exc is None:
             hint = '；另外 LAVALINK_PASSWORD 也不正確（401），請一併修正' if h_status == 401 else ''
@@ -617,6 +676,20 @@ async def diagnose_lavalink_node(
                 f'LAVALINK_URI 使用了 https://，但節點不支援 TLS（{exc}）。'
                 f'改用 http:// 可正常連線（{http_base}/version 回應 HTTP {h_status}）{hint}，'
                 f'請把 LAVALINK_URI 從「{base}」改成「{http_base}」。'
+            )
+        if len(http_candidates) > 1:
+            port80_http = http_candidates[1]
+            h80_status, _, h80_exc = await _safe_probe_lavalink_version(f'{port80_http}/version', headers, timeout)
+            if h80_exc is None:
+                hint = '；另外 LAVALINK_PASSWORD 也不正確（401），請一併修正' if h80_status == 401 else ''
+                return (
+                    f'LAVALINK_URI 使用了 https://，但節點 TLS/SSL 憑證驗證或握手失敗（{exc}）。'
+                    f'改用明文 HTTP 80 埠可正常連線（{port80_http}/version 回應 HTTP {h80_status}）{hint}，'
+                    f'請把 LAVALINK_URI 從「{base}」改成「{port80_http}」。'
+                )
+            return (
+                f'無法連線到 Lavalink 節點：{url}（{exc}），'
+                f'改用 {http_base}（{h_exc}）與 {port80_http}（{h80_exc}）探測同樣失敗。'
             )
         return f'無法連線到 Lavalink 節點：{url}（{exc}），改用 {http_base} 探測同樣失敗（{h_exc}）。'
 
@@ -2098,12 +2171,17 @@ class Music(commands.Cog):
 
         self._lavalink_connecting = True
 
-        # 檢查 Pool 是否已有同 URI 且處於 CONNECTED 的健康節點，避免重複連線導致 session 衝突；
+        # 檢查 Pool 是否已有同 URI（含自動降級後之 HTTP 備援 URI）且處於 CONNECTED 的健康節點，避免重複連線導致 session 衝突；
         # 若有舊節點處於離線/異常狀態，先主動關閉並逐出 Pool，避免累積幽靈節點。
+        candidate_uris = {
+            (lavalink_uri or "").strip().rstrip("/"),
+            *_build_http_fallback_uris(lavalink_uri),
+        }
         if wavelink is not None:
             existing_nodes = getattr(wavelink.Pool, "nodes", {})
             for existing_id, existing_node in list(existing_nodes.items()):
-                if getattr(existing_node, "uri", None) == lavalink_uri:
+                existing_uri = str(getattr(existing_node, "uri", None) or "").strip().rstrip("/")
+                if existing_uri in candidate_uris:
                     if getattr(getattr(existing_node, "status", None), "name", None) == "CONNECTED":
                         print(f"ℹ️ 已有同 URI 且處於 CONNECTED 的節點（{existing_id}），略過重複建立。")
                         self._lavalink_connecting = False
@@ -2113,20 +2191,27 @@ class Music(commands.Cog):
                         print(f"🧹 清理處於非連線狀態的舊節點：{existing_id}")
                         await self._discard_failed_node(existing_node)
 
-        node = wavelink.Node(uri=lavalink_uri, password=lavalink_password)
+        connect_uri = lavalink_uri
+        node = None
         error: Exception | None = None
         try:
+            if str(lavalink_uri).strip().lower().startswith("https://"):
+                connect_uri = await _resolve_lavalink_connect_uri(lavalink_uri, lavalink_password)
+            node = wavelink.Node(uri=connect_uri, password=lavalink_password)
             await asyncio.wait_for(
                 wavelink.Pool.connect(nodes=[node], client=self.bot),
                 timeout=LAVALINK_CONNECT_TIMEOUT,
             )
             # 關鍵檢查：Pool.connect 不拋例外 ≠ 連線成功，節點真的被註冊進 Pool 才算數。
             if node.identifier in wavelink.Pool.nodes:
-                print(f"🎧 已成功連線至 Lavalink 節點：{lavalink_uri}")
+                if connect_uri != lavalink_uri:
+                    print(f"🎧 已透過 HTTP 自動備援成功連線至 Lavalink 節點：{connect_uri}（原設定：{lavalink_uri}）")
+                else:
+                    print(f"🎧 已成功連線至 Lavalink 節點：{connect_uri}")
                 self._lavalink_failure_notified = False  # 恢復正常，下次故障才會重新通知
                 return
             error = ConnectionError(
-                f"Lavalink 節點連線被 wavelink 拒絕（Pool.connect 未註冊節點）：{lavalink_uri}。"
+                f"Lavalink 節點連線被 wavelink 拒絕（Pool.connect 未註冊節點）：{connect_uri}。"
                 "常見原因：密碼錯誤、節點不是 Lavalink v4、或反向代理未轉發 WebSocket 升級；"
                 "wavelink 只把細節寫進它自己的 logger，請一併查看後台日誌。"
             )
@@ -2134,10 +2219,10 @@ class Music(commands.Cog):
         except asyncio.TimeoutError:
             # 修正：先前直接丟原始 TimeoutError（無 args），DM 的「錯誤訊息」欄位是空白的。
             error = TimeoutError(
-                f"Lavalink 節點連線逾時（超過 {LAVALINK_CONNECT_TIMEOUT:.0f} 秒）：{lavalink_uri}"
+                f"Lavalink 節點連線逾時（超過 {LAVALINK_CONNECT_TIMEOUT:.0f} 秒）：{connect_uri}"
             )
             print(
-                f"❌ 連線 Lavalink 節點逾時（超過 {LAVALINK_CONNECT_TIMEOUT:.0f} 秒）：{lavalink_uri}，"
+                f"❌ 連線 Lavalink 節點逾時（超過 {LAVALINK_CONNECT_TIMEOUT:.0f} 秒）：{connect_uri}，"
                 "語音功能（/join /leave /play）可能暫時無法使用，但不影響機器人其他功能。"
             )
         except Exception as e:
@@ -2149,8 +2234,9 @@ class Music(commands.Cog):
             self._lavalink_connecting = False
 
         # 失敗路徑：清掉沒註冊成功的節點（WebSocket 退避重試、aiohttp session、Pool 殘留）。
-        await self._discard_failed_node(node)
-        await self._report_lavalink_failure(error, lavalink_uri, lavalink_password)
+        if node is not None:
+            await self._discard_failed_node(node)
+        await self._report_lavalink_failure(error, connect_uri, lavalink_password)
 
     async def _discard_failed_node(self, node: "wavelink_module.Node") -> None:
         """清理連線失敗的節點，避免殘留 DISCONNECTED 節點與沒關閉的 aiohttp session。

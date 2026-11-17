@@ -96,6 +96,7 @@ def test_panel_non_owner_isolation():
     commands = [c['name'] for c in res_guild.get_json().get('commands', [])]
     assert '/reload_cogs' not in commands
     assert '/economy_admin' not in commands
+    assert '/bot_steal' not in commands
 
 
 def test_panel_owner_access():
@@ -150,6 +151,7 @@ def test_panel_owner_access():
     commands = [c['name'] for c in res_guild.get_json().get('commands', [])]
     assert '/reload_cogs' in commands
     assert '/economy_admin' in commands
+    assert '/bot_steal' in commands
 
     # 4. 嚴格權限隔離：即便是機器人擁有者，若在該伺服器沒有管理伺服器權限，也絕對不可查看或修改
     res_unauth_guild = client.get('/api/panel/guild/222222222222222222/data')
@@ -689,6 +691,7 @@ class FakeElement {
     this.disabled = false;
     this.hidden = false;
     this.checked = false;
+    this.selected = false;
     this.dataset = {};
   }
   set className(val) {
@@ -711,6 +714,9 @@ class FakeElement {
   appendChild(child) {
     child.parentNode = this;
     this.children.push(child);
+    if (this.tagName === 'SELECT' && child.tagName === 'OPTION' && (child.selected || this.children.length === 1)) {
+      this.value = String(child.value ?? '');
+    }
     return child;
   }
   remove() {
@@ -759,11 +765,30 @@ const unsavedBar = reg('div', 'unsaved-changes-bar');
 const btnUnsavedSave = reg('button', 'btn-unsaved-save');
 const btnUnsavedReset = reg('button', 'btn-unsaved-reset');
 const btnDropdownPersonal = reg('button', 'btn-dropdown-personal');
+const btnDropdownOwner = reg('button', 'btn-dropdown-owner');
 const viewServerSelection = reg('div', 'view-server-selection');
 const viewServerSettings = reg('div', 'view-server-settings');
 viewServerSettings.style.display = 'none';
 reg('span', 'active-server-name');
 reg('span', 'active-server-id');
+
+// 擁有者 — 狀態訊息輪替 DOM 元素
+const formOwnerStatusRotation = reg('form', 'form-owner-status-rotation');
+const statusRotationEnabled = reg('input', 'status-rotation-enabled');
+statusRotationEnabled.type = 'checkbox';
+const statusRotationInterval = reg('input', 'status-rotation-interval');
+statusRotationInterval.type = 'number';
+const statusRotationOnlineStatus = reg('select', 'status-rotation-online-status');
+const btnAddStatusItem = reg('button', 'btn-add-status-item');
+const statusRotationItemsList = reg('div', 'status-rotation-items-list');
+const btnSaveStatusRotation = reg('button', 'btn-save-status-rotation');
+btnSaveStatusRotation.innerHTML = '<span>儲存設定</span>';
+const btnResetStatusRotation = reg('button', 'btn-reset-status-rotation');
+formOwnerStatusRotation.appendChild(statusRotationEnabled);
+formOwnerStatusRotation.appendChild(statusRotationInterval);
+formOwnerStatusRotation.appendChild(statusRotationOnlineStatus);
+formOwnerStatusRotation.appendChild(statusRotationItemsList);
+formOwnerStatusRotation.appendChild(btnSaveStatusRotation);
 
 reg('div', 'personal-playlist-empty');
 reg('div', 'personal-playlist-editor');
@@ -797,14 +822,17 @@ addStatusBox.hidden = true;
 
 const tabPersonal = new FakeElement('div', 'tab-personal');
 tabPersonal.classList.add('tab-pane');
+const tabOwner = new FakeElement('div', 'tab-owner');
+tabOwner.classList.add('tab-pane');
 
 const docListeners = {};
+let promptQueue = [];
 global.document = {
   body: new FakeElement('body', ''),
   getElementById: (id) => byId.get(id) || null,
   querySelector: () => null,
   querySelectorAll: (sel) => {
-    if (sel === '.tab-pane') return [tabPersonal];
+    if (sel === '.tab-pane') return [tabPersonal, tabOwner];
     return [];
   },
   createElement: (tag) => new FakeElement(tag),
@@ -817,6 +845,7 @@ global.window = {
   location: { pathname: '/panel', hash: '#personal' },
   scrollTo: () => {},
   addEventListener: () => {},
+  prompt: () => (promptQueue.length > 0 ? promptQueue.shift() : null),
 };
 global.history = { replaceState: () => {} };
 global.navigator = { clipboard: { writeText: async () => {} } };
@@ -829,6 +858,16 @@ let playlistState = {
   is_public: false,
   share_code: 'ABC123',
   tracks: [],
+};
+let statusRotationState = {
+  enabled: true,
+  interval: 30,
+  online_status: 'online',
+  items: [
+    { type: 'playing', text: '第一則狀態' },
+    { type: 'listening', text: '第二則狀態' },
+    { type: 'watching', text: '第三則狀態' },
+  ],
 };
 let pendingAddResolve = null;
 const fetchCalls = [];
@@ -856,6 +895,28 @@ global.fetch = (url, opts = {}) => {
       ok: true,
       json: async () => ({ status: 'ok', message: '歌單設定已儲存！', playlist: JSON.parse(JSON.stringify(playlistState)) }),
     });
+  }
+  if (url === '/api/panel/owner/status-rotation' && (!opts.method || opts.method === 'GET')) {
+    return Promise.resolve({
+      ok: true,
+      json: async () => ({ status: 'ok', max_items: 20, settings: JSON.parse(JSON.stringify(statusRotationState)) }),
+    });
+  }
+  if (url === '/api/panel/owner/status-rotation' && opts.method === 'POST') {
+    const body = JSON.parse(opts.body || '{}');
+    statusRotationState = {
+      enabled: Boolean(body.enabled),
+      interval: Number(body.interval || 30),
+      online_status: String(body.online_status || 'online'),
+      items: JSON.parse(JSON.stringify(body.items || [])),
+    };
+    return Promise.resolve({
+      ok: true,
+      json: async () => ({ status: 'ok', message: '機器人狀態訊息輪替設定已儲存！', settings: JSON.parse(JSON.stringify(statusRotationState)) }),
+    });
+  }
+  if (url.startsWith('/api/panel/owner/')) {
+    return Promise.resolve({ ok: false, status: 403, json: async () => ({ status: 'error' }) });
   }
   return Promise.resolve({ ok: true, json: async () => ({ status: 'ok' }) });
 };
@@ -1028,6 +1089,100 @@ async function run() {
   assert.strictEqual(countRenderedRows(), 1);
   assert.ok(personalTracksList.innerHTML.includes('#15</span>'));
   assert.deepStrictEqual(pageLabels(), ['上一頁', '1', '下一頁']);
+
+  // 6. 切換至擁有者狀態訊息輪替設定，驗證拖曳／上移／下移／指定編號排序與未儲存提示列
+  btnDropdownOwner.dispatchEvent({ type: 'click' });
+  await new Promise((r) => setTimeout(r, 30));
+
+  const getStatusRows = () => statusRotationItemsList.children;
+  const getStatusOrderTexts = () => getStatusRows().map((r) => r._statusRefs.textInput.value);
+  const getStatusIndexLabels = () => getStatusRows().map((r) => r._statusRefs.idxSpan.textContent);
+
+  assert.strictEqual(getStatusRows().length, 3);
+  assert.deepStrictEqual(getStatusOrderTexts(), ['第一則狀態', '第二則狀態', '第三則狀態']);
+  assert.deepStrictEqual(getStatusIndexLabels(), ['#1', '#2', '#3']);
+  assert.strictEqual(getStatusRows()[0].getAttribute('draggable'), 'true');
+  assert.strictEqual(getStatusRows()[0].children[0].className, 'status-item-drag-handle');
+  assert.strictEqual(getStatusRows()[0]._statusRefs.upBtn.disabled, true);
+  assert.strictEqual(getStatusRows()[0]._statusRefs.downBtn.disabled, false);
+  assert.strictEqual(getStatusRows()[0]._statusRefs.moveBtn.disabled, false);
+  assert.strictEqual(getStatusRows()[2]._statusRefs.upBtn.disabled, false);
+  assert.strictEqual(getStatusRows()[2]._statusRefs.downBtn.disabled, true);
+  assert.strictEqual(unsavedBar.classList.contains('is-visible'), false);
+
+  // 輸入框 mousedown 應暫停列拖曳，mouseup 後恢復
+  getStatusRows()[0]._statusRefs.textInput.dispatchEvent({ type: 'mousedown' });
+  assert.strictEqual(getStatusRows()[0].getAttribute('draggable'), 'false');
+  getStatusRows()[0]._statusRefs.textInput.dispatchEvent({ type: 'mouseup' });
+  assert.strictEqual(getStatusRows()[0].getAttribute('draggable'), 'true');
+
+  // 修改第一則文字（尚未儲存），再點擊下移應保留修改並跳出未儲存提示列
+  getStatusRows()[0]._statusRefs.textInput.value = '第一則已編輯';
+  getStatusRows()[0]._statusRefs.textInput.dispatchEvent({ type: 'input', bubbles: true });
+  assert.strictEqual(unsavedBar.classList.contains('is-visible'), true);
+
+  getStatusRows()[0]._statusRefs.downBtn.dispatchEvent({ type: 'click' });
+  assert.deepStrictEqual(getStatusOrderTexts(), ['第二則狀態', '第一則已編輯', '第三則狀態']);
+  assert.deepStrictEqual(getStatusIndexLabels(), ['#1', '#2', '#3']);
+  assert.strictEqual(getStatusRows()[0]._statusRefs.upBtn.disabled, true);
+  assert.strictEqual(getStatusRows()[1]._statusRefs.upBtn.disabled, false);
+  assert.strictEqual(getStatusRows()[1]._statusRefs.downBtn.disabled, false);
+  assert.strictEqual(getStatusRows()[2]._statusRefs.downBtn.disabled, true);
+  assert.strictEqual(unsavedBar.classList.contains('is-visible'), true);
+
+  // 點擊上移恢復順序，再點擊重設確認還原至已儲存快照
+  getStatusRows()[1]._statusRefs.upBtn.dispatchEvent({ type: 'click' });
+  assert.deepStrictEqual(getStatusOrderTexts(), ['第一則已編輯', '第二則狀態', '第三則狀態']);
+  btnUnsavedReset.dispatchEvent({ type: 'click' });
+  assert.deepStrictEqual(getStatusOrderTexts(), ['第一則狀態', '第二則狀態', '第三則狀態']);
+  assert.strictEqual(unsavedBar.classList.contains('is-visible'), false);
+
+  // 指定編號排序：無效編號不移動；有效編號「3」將第 1 則移至第 3 則
+  promptQueue.push('99');
+  getStatusRows()[0]._statusRefs.moveBtn.dispatchEvent({ type: 'click' });
+  assert.deepStrictEqual(getStatusOrderTexts(), ['第一則狀態', '第二則狀態', '第三則狀態']);
+  assert.strictEqual(unsavedBar.classList.contains('is-visible'), false);
+
+  promptQueue.push('3');
+  getStatusRows()[0]._statusRefs.moveBtn.dispatchEvent({ type: 'click' });
+  assert.deepStrictEqual(getStatusOrderTexts(), ['第二則狀態', '第三則狀態', '第一則狀態']);
+  assert.deepStrictEqual(getStatusIndexLabels(), ['#1', '#2', '#3']);
+  assert.strictEqual(unsavedBar.classList.contains('is-visible'), true);
+
+  // HTML5 拖曳排序：將第 3 則拖曳放至第 2 則位置 -> ['第二則狀態', '第一則狀態', '第三則狀態']
+  const dragRow = getStatusRows()[2];
+  const targetRow = getStatusRows()[1];
+  dragRow.dispatchEvent({ type: 'dragstart', dataTransfer: { effectAllowed: '' } });
+  assert.strictEqual(dragRow.classList.contains('is-dragging'), true);
+  targetRow.dispatchEvent({ type: 'dragover' });
+  assert.strictEqual(targetRow.classList.contains('drag-over'), true);
+  targetRow.dispatchEvent({ type: 'drop' });
+  dragRow.dispatchEvent({ type: 'dragend' });
+  assert.deepStrictEqual(getStatusOrderTexts(), ['第二則狀態', '第一則狀態', '第三則狀態']);
+  assert.strictEqual(unsavedBar.classList.contains('is-visible'), true);
+
+  // 透過底部懸浮提示列「儲存設定」，確認以新順序送出 POST 並收起提示列
+  btnUnsavedSave.dispatchEvent({ type: 'click' });
+  await new Promise((r) => setTimeout(r, 30));
+  const statusPosts = fetchCalls.filter((c) => c.url === '/api/panel/owner/status-rotation' && c.method === 'POST');
+  assert.strictEqual(statusPosts.length, 1);
+  assert.deepStrictEqual(
+    JSON.parse(statusPosts[0].body).items,
+    [
+      { type: 'listening', text: '第二則狀態' },
+      { type: 'playing', text: '第一則狀態' },
+      { type: 'watching', text: '第三則狀態' },
+    ]
+  );
+  assert.strictEqual(unsavedBar.classList.contains('is-visible'), false);
+
+  // 新增第 4 則後，原第 3 則的下移按鈕應即時解除停用
+  btnAddStatusItem.dispatchEvent({ type: 'click' });
+  assert.strictEqual(getStatusRows().length, 4);
+  assert.strictEqual(getStatusRows()[2]._statusRefs.downBtn.disabled, false);
+  assert.strictEqual(getStatusRows()[3]._statusRefs.downBtn.disabled, true);
+  assert.strictEqual(getStatusRows()[3]._statusRefs.moveBtn.disabled, false);
+  assert.strictEqual(unsavedBar.classList.contains('is-visible'), true);
 }
 
 run().catch((err) => {
@@ -1168,6 +1323,270 @@ def test_login_redirect_from_multiple_entry_points():
         res_bad_dev = c_bad.get('/api/auth/dev-login?role=admin')
         assert res_bad_dev.status_code == 302
         assert res_bad_dev.headers.get('Location', '').endswith('/panel')
+
+
+def test_status_rotation_db_and_cog_logic():
+    """驗證狀態訊息輪替的 SQLite 讀寫、模板變數替換、Activity 建構與 General Cog 輪替邏輯。"""
+    import os
+    import shutil
+    import tempfile
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    import discord
+    import cogs.database as db
+    from cogs.general import (
+        General,
+        build_discord_activity,
+        format_status_template,
+        resolve_discord_status,
+    )
+
+    def _run_coro(coro):
+        try:
+            while True:
+                yielded = coro.send(None)
+                if yielded is not None:
+                    raise RuntimeError(f'測試 coroutine 意外等待非同步物件: {yielded!r}')
+        except StopIteration as exc:
+            return exc.value
+
+    tmpdir = tempfile.mkdtemp()
+    orig_db_file = db.DB_FILE
+    orig_db_init = db._db_initialized
+    orig_wal_init = db._wal_initialized
+    try:
+        db.DB_FILE = os.path.join(tmpdir, 'test_status_rotation.db')
+        db._db_initialized = False
+        db._wal_initialized = False
+
+        # 1. 預設狀態讀取
+        defaults = db.get_bot_status_rotation_settings()
+        assert defaults['enabled'] is True
+        assert defaults['interval'] == 30
+        assert defaults['online_status'] == 'online'
+        assert defaults['items'] == db.DEFAULT_STATUS_ROTATION_ITEMS
+
+        # 2. 儲存自訂狀態與邊界夾限
+        saved = db.save_bot_status_rotation_settings({
+            'enabled': True,
+            'interval': 5,  # 低於 10 應夾限為 10
+            'online_status': 'dnd',
+            'items': [
+                {'type': 'watching', 'text': '測試 {guilds} 伺服器 / {users} 成員'},
+                {'type': 'custom', 'text': '指令 {commands} 個 | {latency}ms'},
+                {'type': 'invalid_type', 'text': '  空白項目不會影響合法項目  '},
+                {'type': 'playing', 'text': '   '},  # 空字串應被過濾
+            ],
+        })
+        assert saved['enabled'] is True
+        assert saved['interval'] == 10
+        assert saved['online_status'] == 'dnd'
+        assert len(saved['items']) == 3
+        assert saved['items'][0] == {'type': 'watching', 'text': '測試 {guilds} 伺服器 / {users} 成員'}
+        assert saved['items'][1] == {'type': 'custom', 'text': '指令 {commands} 個 | {latency}ms'}
+        assert saved['items'][2] == {'type': 'playing', 'text': '空白項目不會影響合法項目'}
+
+        # 3. 上限與重設預設驗證
+        too_many = [{'type': 'playing', 'text': f'item {i}'} for i in range(30)]
+        capped = db.save_bot_status_rotation_settings({
+            'enabled': False,
+            'interval': 999,  # 高於 600 應夾限為 600
+            'online_status': 'unknown',  # 應退回 online
+            'items': too_many,
+        })
+        assert capped['enabled'] is False
+        assert capped['interval'] == 600
+        assert capped['online_status'] == 'online'
+        assert len(capped['items']) == db.STATUS_ROTATION_MAX_ITEMS
+
+        reset_res = db.save_bot_status_rotation_settings({'reset_to_default': True})
+        assert reset_res['items'] == db.DEFAULT_STATUS_ROTATION_ITEMS
+
+        # 4. 動態變數與 Activity / Status 建構測試
+        fake_tree = SimpleNamespace(get_commands=lambda: [1, 2, 3, 4])
+        fake_guilds = [
+            SimpleNamespace(member_count=120, members=[]),
+            SimpleNamespace(member_count=None, members=[1, 2, 3]),
+        ]
+        fake_bot = SimpleNamespace(
+            guilds=fake_guilds,
+            tree=fake_tree,
+            latency=0.042,
+            is_closed=lambda: False,
+            is_ready=lambda: True,
+            loop=None,
+            change_presence=AsyncMock(),
+        )
+        rendered = format_status_template(
+            '服務 {guilds} 群 / {users} 人 / {commands} 指令 / {latency}ms / {unknown}',
+            fake_bot,
+        )
+        assert rendered == '服務 2 群 / 123 人 / 4 指令 / 42ms / {unknown}'
+
+        assert isinstance(build_discord_activity('playing', 'abc'), discord.Game)
+        assert build_discord_activity('listening', 'abc').type == discord.ActivityType.listening
+        assert build_discord_activity('watching', 'abc').type == discord.ActivityType.watching
+        assert build_discord_activity('competing', 'abc').type == discord.ActivityType.competing
+        assert isinstance(build_discord_activity('custom', 'abc'), discord.CustomActivity)
+        assert resolve_discord_status('idle') == discord.Status.idle
+        assert resolve_discord_status('dnd') == discord.Status.dnd
+        assert resolve_discord_status('invisible') == discord.Status.invisible
+        assert resolve_discord_status('invalid') == discord.Status.online
+
+        # 5. General Cog 依序輪替與停用清除測試
+        db.save_bot_status_rotation_settings({
+            'enabled': True,
+            'interval': 45,
+            'online_status': 'idle',
+            'items': [
+                {'type': 'playing', 'text': '第一則 {guilds}'},
+                {'type': 'listening', 'text': '第二則 {users}'},
+            ],
+        })
+        cog = General(fake_bot)
+        assert cog._status_rotation_loop.seconds == 45
+
+        async def _run_rotations():
+            ok1 = await cog.apply_next_status()
+            ok2 = await cog.apply_next_status()
+            ok3 = await cog.apply_next_status()
+            return ok1, ok2, ok3
+
+        r1, r2, r3 = _run_coro(_run_rotations())
+        assert (r1, r2, r3) == (True, True, True)
+        assert fake_bot.change_presence.await_count == 3
+
+        calls = fake_bot.change_presence.await_args_list
+        assert calls[0].kwargs['status'] == discord.Status.idle
+        assert isinstance(calls[0].kwargs['activity'], discord.Game)
+        assert calls[0].kwargs['activity'].name == '第一則 2'
+        assert calls[1].kwargs['activity'].type == discord.ActivityType.listening
+        assert calls[1].kwargs['activity'].name == '第二則 123'
+        assert calls[2].kwargs['activity'].name == '第一則 2'
+
+        # 停用狀態輪替並 reload_settings 後應清除 activity
+        db.save_bot_status_rotation_settings({
+            'enabled': False,
+            'interval': 30,
+            'online_status': 'dnd',
+            'items': [{'type': 'playing', 'text': '不會顯示'}],
+        })
+        cog.reload_settings()
+        assert cog._status_rotation_loop.seconds == 30
+        ok_disabled = _run_coro(cog.apply_next_status())
+        assert ok_disabled is True
+        last_call = fake_bot.change_presence.await_args_list[-1]
+        assert last_call.kwargs['status'] == discord.Status.dnd
+        assert last_call.kwargs['activity'] is None
+
+        # 尚未就緒時不可發送 presence 更新
+        fake_bot.is_ready = lambda: False
+        assert _run_coro(cog.apply_next_status()) is False
+    finally:
+        db.DB_FILE = orig_db_file
+        db._db_initialized = orig_db_init
+        db._wal_initialized = orig_wal_init
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def test_status_rotation_owner_api_and_ui():
+    """驗證狀態訊息輪替的擁有者 API 權限隔離、CRUD/重設與控制面板 HTML 結構。"""
+    import os
+    import shutil
+    import tempfile
+    from unittest.mock import MagicMock
+    import cogs.database as db
+
+    tmpdir = tempfile.mkdtemp()
+    orig_db_file = db.DB_FILE
+    orig_db_init = db._db_initialized
+    orig_wal_init = db._wal_initialized
+    orig_bot = app.config.get('BOT')
+    try:
+        db.DB_FILE = os.path.join(tmpdir, 'test_panel_status_rotation.db')
+        db._db_initialized = False
+        db._wal_initialized = False
+
+        fake_general_cog = MagicMock()
+        fake_bot = MagicMock()
+        fake_bot.get_cog.return_value = fake_general_cog
+        app.config['BOT'] = fake_bot
+
+        # 1. 未登入與一般管理員不可存取
+        anon_client = app.test_client()
+        assert anon_client.get('/api/panel/owner/status-rotation').status_code == 403
+        assert anon_client.post('/api/panel/owner/status-rotation', json={}).status_code == 403
+
+        admin_client = app.test_client()
+        admin_client.get('/api/auth/dev-login?role=admin')
+        assert admin_client.get('/api/panel/owner/status-rotation').status_code == 403
+        assert admin_client.post('/api/panel/owner/status-rotation', json={'enabled': False}).status_code == 403
+        admin_html = admin_client.get('/panel').data.decode('utf-8')
+        assert 'owner-sub-status-rotation' not in admin_html
+
+        # 2. 擁有者可讀取介面與設定
+        owner_client = app.test_client()
+        owner_client.get('/api/auth/dev-login?role=owner')
+        owner_html = owner_client.get('/panel').data.decode('utf-8')
+        assert 'owner-sub-status-rotation' in owner_html
+        assert 'form-owner-status-rotation' in owner_html
+        assert 'status-rotation-items-list' in owner_html
+        assert 'btn-add-status-item' in owner_html
+        assert 'btn-reset-status-rotation' in owner_html
+
+        res_get = owner_client.get('/api/panel/owner/status-rotation')
+        assert res_get.status_code == 200
+        data_get = res_get.get_json()
+        assert data_get['status'] == 'ok'
+        assert data_get['max_items'] == db.STATUS_ROTATION_MAX_ITEMS
+        assert data_get['settings']['interval'] == 30
+        assert len(data_get['settings']['items']) == len(db.DEFAULT_STATUS_ROTATION_ITEMS)
+
+        # 3. 空清單防呆校驗
+        res_empty = owner_client.post(
+            '/api/panel/owner/status-rotation',
+            json={'enabled': True, 'interval': 30, 'online_status': 'online', 'items': [{'type': 'playing', 'text': '   '}]},
+        )
+        assert res_empty.status_code == 400
+
+        # 4. 儲存自訂清單並確認觸發 General Cog 同步
+        res_save = owner_client.post(
+            '/api/panel/owner/status-rotation',
+            json={
+                'enabled': True,
+                'interval': 25,
+                'online_status': 'idle',
+                'items': [
+                    {'type': 'listening', 'text': '音樂模式 {guilds}'},
+                    {'type': 'custom', 'text': '自訂狀態測試'},
+                ],
+            },
+        )
+        assert res_save.status_code == 200
+        saved = res_save.get_json()['settings']
+        assert saved['interval'] == 25
+        assert saved['online_status'] == 'idle'
+        assert saved['items'] == [
+            {'type': 'listening', 'text': '音樂模式 {guilds}'},
+            {'type': 'custom', 'text': '自訂狀態測試'},
+        ]
+        fake_bot.get_cog.assert_called_with('General')
+        assert fake_general_cog.reload_settings.called
+
+        # 5. 重設為預設清單
+        res_reset = owner_client.post('/api/panel/owner/status-rotation', json={'action': 'reset'})
+        assert res_reset.status_code == 200
+        reset_settings = res_reset.get_json()['settings']
+        assert reset_settings['interval'] == 30
+        assert reset_settings['online_status'] == 'online'
+        assert reset_settings['items'] == db.DEFAULT_STATUS_ROTATION_ITEMS
+    finally:
+        app.config['BOT'] = orig_bot
+        db.DB_FILE = orig_db_file
+        db._db_initialized = orig_db_init
+        db._wal_initialized = orig_wal_init
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
 
 
 

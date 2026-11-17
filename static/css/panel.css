@@ -1489,10 +1489,16 @@ select.form-control option,
   transition: all 0.2s ease;
 }
 
-.btn-icon-action:hover {
+.btn-icon-action:hover:not(:disabled) {
   background: rgba(125, 211, 252, 0.16);
   border-color: rgba(125, 211, 252, 0.45);
   transform: translateY(-1px);
+}
+
+.btn-icon-action:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none;
 }
 
 .btn-icon-action.delete,
@@ -3870,6 +3876,127 @@ progress.loading-spinner::-moz-progress-bar {
     justify-content: flex-end;
     flex-wrap: wrap;
   }
+
+  .status-rotation-item-row {
+    grid-template-columns: auto auto 1fr;
+  }
+
+  .status-rotation-item-row .status-item-text,
+  .status-rotation-item-row .status-item-actions {
+    grid-column: 1 / -1;
+  }
+
+  .status-item-actions {
+    width: 100%;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+}
+
+/* ---------- 機器人狀態訊息輪替設定樣式 ---------- */
+.status-vars-hint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(56, 189, 248, 0.08);
+  border: 1px solid rgba(56, 189, 248, 0.2);
+  font-size: 0.82rem;
+  color: #cbd5e1;
+}
+
+.status-vars-hint code {
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.75);
+  border: 1px solid rgba(125, 211, 252, 0.35);
+  color: #7dd3fc;
+  font-family: monospace;
+  font-weight: 700;
+}
+
+.status-items-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.status-items-title {
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: #e2e8f0;
+  margin: 0;
+}
+
+.status-rotation-items-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.status-rotation-item-row {
+  display: grid;
+  grid-template-columns: auto auto 195px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.status-rotation-item-row:hover {
+  background: rgba(30, 41, 59, 0.65);
+  border-color: rgba(125, 211, 252, 0.3);
+}
+
+.status-rotation-item-row.is-dragging {
+  opacity: 0.45;
+  border-style: dashed;
+}
+
+.status-rotation-item-row.drag-over {
+  border-color: #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
+}
+
+.status-item-drag-handle {
+  cursor: grab;
+  color: #64748b;
+  font-size: 1.05rem;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.status-item-index {
+  font-family: monospace;
+  font-size: 0.84rem;
+  font-weight: 800;
+  color: #38bdf8;
+  min-width: 28px;
+  text-align: center;
+}
+
+.status-item-type,
+.status-item-text {
+  min-width: 0;
+}
+
+.status-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.btn-remove-status-item {
+  flex-shrink: 0;
+  padding: 6px 10px;
 }
 
 
