@@ -34,7 +34,14 @@ import wavelink
 from wavelink import NodeStatus
 
 import cogs.music as music_mod
-from cogs.music import Music, _owner_only_check
+from cogs.music import (
+    Music,
+    MusicControlView,
+    NodeStatusSwitchView,
+    _owner_only_check,
+    build_now_playing_container,
+    build_now_playing_embed,
+)
 from utils.nodes import (
     LavalinkNodeConfig,
     compute_reconnect_backoff,
@@ -71,19 +78,38 @@ class FakeBot:
         self.notifications.append({"error": error, "extra_info": extra_info})
 
 
-def make_interaction(user_id: int = 999001, guild_id: int | None = 1001, *, client=None):
+def make_interaction(
+    user_id: int = 999001,
+    guild_id: int | None = 1001,
+    *,
+    client=None,
+    guild=None,
+    voice=None,
+    manage_guild: bool = False,
+):
     it = MagicMock(spec=discord.Interaction)
     it.client = client or FakeBot(owner_id=999001)
-    it.user = SimpleNamespace(id=user_id, display_name="管理員")
+    it.user = SimpleNamespace(
+        id=user_id,
+        display_name="管理員",
+        voice=voice,
+        guild_permissions=SimpleNamespace(manage_guild=manage_guild),
+    )
     it.guild_id = guild_id
     it.channel_id = 5001
-    it.guild = SimpleNamespace(id=guild_id) if guild_id else None
+    it.guild = guild if guild is not None else (SimpleNamespace(id=guild_id) if guild_id else None)
     it.response = MagicMock()
     it.response.is_done = MagicMock(return_value=False)
-    it.response.defer = AsyncMock()
-    it.response.send_message = AsyncMock()
+
+    async def _defer(*args, **kwargs):
+        it.response.is_done.return_value = True
+
+    it.response.defer = AsyncMock(side_effect=_defer)
+    it.response.send_message = AsyncMock(side_effect=_defer)
+    it.response.edit_message = AsyncMock(side_effect=_defer)
     it.followup = MagicMock()
     it.followup.send = AsyncMock()
+    it.edit_original_response = AsyncMock()
     it.delete_original_response = AsyncMock()
     return it
 
@@ -303,6 +329,46 @@ def test_pick_best_node_and_backoff():
         "exclude 參數正確排除指定節點",
     )
 
+    check(
+        pick_best_node(
+            {
+                "n1": {"status": "CONNECTED", "players": 0, "cpu_load": 0.05, "latency_ms": None},
+                "n2": {"status": "CONNECTED", "players": 2, "cpu_load": 0.50, "latency_ms": 65.0},
+            }
+        ) == "n2",
+        "未偵測到延遲的節點（latency_ms=None）自動往後排，優先選有測得延遲的節點",
+    )
+
+    check(
+        pick_best_node(
+            {
+                "n1": {"status": "CONNECTED", "players": 0, "latency_ms": -5},
+                "n2": {"status": "CONNECTED", "players": 1, "latency_ms": 48.0},
+            }
+        ) == "n2",
+        "無效負延遲同樣視為未偵測延遲並往後排",
+    )
+
+    check(
+        pick_best_node(
+            {
+                "n1": {"status": "CONNECTED", "players": 1, "latency_ms": 140.0},
+                "n2": {"status": "CONNECTED", "players": 1, "latency_ms": 28.5},
+            }
+        ) == "n2",
+        "玩家數相同且無負載資料時，延遲較低者勝出",
+    )
+
+    check(
+        pick_best_node(
+            {
+                "n1": {"status": "CONNECTED", "players": 1, "cpu_load": 0.2, "latency_ms": 140.0},
+                "n2": {"status": "CONNECTED", "players": 1, "cpu_load": 0.2, "latency_ms": 28.5},
+            }
+        ) == "n2",
+        "玩家數與負載相同時，以較低延遲決勝",
+    )
+
     seq = [compute_reconnect_backoff(i, base=5.0, cap=60.0) for i in range(7)]
     check(seq == [5.0, 10.0, 20.0, 40.0, 60.0, 60.0, 60.0], f"指數退避計算正確且上限 60 秒 ({seq})")
 
@@ -462,6 +528,10 @@ async def test_failover_and_locks():
                 p.play_calls.append({"track": trk, "start": start, "volume": volume, "paused": paused})
                 p._current = trk
                 p._last_raw_lavalink_pos = start
+                if volume is not None:
+                    p._volume = volume
+                if paused is not None:
+                    p._paused = bool(paused)
                 return trk
 
             async def fake_disconnect(**kw):
@@ -663,6 +733,235 @@ async def test_status_permissions_and_intervals():
         pool_nodes.clear()
 
 
+# ---------- 7. 延遲失效清除、語音房節點顯示與手動切換節點按鈕 ----------
+async def test_voice_node_display_and_switch_buttons():
+    print("\n--- 測試 7: 延遲清除降權、語音房節點顯示與切換節點按鈕 ---")
+    pool_nodes = getattr(wavelink.Pool, "_Pool__nodes")
+    pool_nodes.clear()
+    orig_search = wavelink.Playable.search
+
+    bot = FakeBot(owner_id=999001)
+    cog = Music(bot)
+    cog._configured_nodes = {
+        "node1": LavalinkNodeConfig("node1", "http://n1.test:2333", "pw1", "node1"),
+        "node2": LavalinkNodeConfig("node2", "http://n2.test:2333", "pw2", "node2"),
+    }
+
+    text_ch = SimpleNamespace(id=5501, send=AsyncMock())
+    guild = SimpleNamespace(id=4001, voice_client=None, change_voice_state=AsyncMock(), me=None)
+    bot.guilds_map[4001] = guild
+    bot.channels_map[5501] = text_ch
+
+    class FakeSwitchVoiceChannel:
+        def __init__(self, cid=7801):
+            self.id = cid
+            self.name = "語音大廳"
+            self.mention = f"<#{cid}>"
+            self.guild = guild
+            self.members = [SimpleNamespace(id=123, bot=False)]
+
+        async def connect(self, *, cls=None):
+            p = cls(bot, self)
+            p._guild = guild
+            p.channel = self
+            p._connected = True
+            p._volume = 100
+            p._paused = False
+            p.play_calls = []
+
+            async def fake_play(trk, *, replace=True, start=0, end=None, volume=None, paused=None):
+                p.play_calls.append({"track": trk, "start": start, "volume": volume, "paused": paused})
+                p._current = trk
+                p._last_raw_lavalink_pos = start
+                if volume is not None:
+                    p._volume = volume
+                if paused is not None:
+                    p._paused = bool(paused)
+                return trk
+
+            async def fake_disconnect(**kw):
+                p._connected = False
+
+            p.play = fake_play
+            p.disconnect = fake_disconnect
+            guild.voice_client = p
+            return p
+
+    vc_ch = FakeSwitchVoiceChannel()
+    n1 = make_fake_node("node1", "http://n1.test:2333", total_players=0)
+    n2 = make_fake_node("node2", "http://n2.test:2333", total_players=2)
+    pool_nodes["node1"] = n1
+    pool_nodes["node2"] = n2
+
+    try:
+        # 1) 先讓兩個節點都測過延遲，再讓 node1 的 fetch_stats 逾時：應清除 node1 延遲並讓 node2 優先
+        cog._node_latencies["node1"] = 18.0
+        cog._node_latencies["node2"] = 62.0
+        n1.fetch_stats = AsyncMock(side_effect=asyncio.TimeoutError())
+        await cog._refresh_node_stats(n1, timeout=1.0)
+        check("node1" not in cog._node_latencies, "_refresh_node_stats 失敗／逾時會清除過期延遲")
+        check(
+            cog._pick_best_node() is n2,
+            "node1 未偵測到延遲時，即使玩家數較少也自動往後排（選出有延遲數據的 node2）",
+        )
+
+        # 恢復 n1.fetch_stats 與延遲數據供後續切換測試
+        n1.fetch_stats = make_fake_node("node1", "http://n1.test:2333", total_players=0).fetch_stats
+        cog._node_latencies["node1"] = 20.0
+        cog._node_latencies["node2"] = 60.0
+
+        track1 = make_fake_track(title="切換曲目一", uri="https://yt.example/watch?v=sw1", encoded="ENC_SW1")
+        track2 = make_fake_track(title="待播下一首", uri="https://yt.example/watch?v=sw2", encoded="ENC_SW2")
+        player_cls = cog._get_player_cls()
+        wrapped_n1_cls = cog._make_player_cls_for_node(player_cls, n1)
+        player = wrapped_n1_cls(bot, vc_ch)
+        player._guild = guild
+        player.channel = vc_ch
+        player._connected = True
+        player._volume = 75
+        player._paused = False
+        player._current = track1
+        player._active_track = track1
+        player._started_track = track1
+        player._last_raw_lavalink_pos = 32_500
+        player._last_lavalink_update_mono = time.monotonic()
+        player.song_queue = deque([(track2, "阿明", 55)])
+        player.loop_mode = "single"
+        player.shuffle = False
+        player.home_channel = text_ch
+        player.current_requester = "阿明"
+        player.current_requester_id = 55
+        player.disconnect = AsyncMock()
+        n1._players[4001] = player
+        guild.voice_client = player
+        cog._guild_active_node[4001] = "node1"
+
+        # 2) 控制面板 Container 與 Embed 顯示目前連接節點
+        embed_np = build_now_playing_embed(player)
+        check("節點：node1" in (embed_np.footer.text or ""), "build_now_playing_embed 頁尾顯示目前連接節點")
+
+        view_ctrl = MusicControlView(cog, player=player)
+        check(
+            hasattr(view_ctrl, "btn_switch_node") and view_ctrl.btn_switch_node in view_ctrl.row2.children,
+            "MusicControlView 第二列包含『🔄 切換節點』按鈕",
+        )
+        check(len(view_ctrl.row2.children) == 5, "MusicControlView 第二列總共 5 顆按鈕")
+        check(not view_ctrl.btn_switch_node.disabled, "播放時『🔄 切換節點』按鈕為啟用狀態")
+
+        container_texts = []
+        for child in view_ctrl.container.walk_children():
+            c_txt = getattr(child, "content", None)
+            if c_txt:
+                container_texts.append(str(c_txt))
+        check(
+            any("節點：node1" in t for t in container_texts),
+            "build_now_playing_container 底部資訊顯示目前連接節點 (node1)",
+        )
+
+        # 3) /music_node_status 在語音房內時顯示目前語音房節點並附帶切換視圖
+        inter_status = make_interaction(
+            user_id=55,
+            guild_id=4001,
+            client=bot,
+            guild=guild,
+            voice=SimpleNamespace(channel=vc_ch),
+        )
+        await cog.node_status.callback(cog, inter_status)
+        status_kwargs = inter_status.followup.send.await_args.kwargs
+        status_embed = status_kwargs.get("embed")
+        status_view = status_kwargs.get("view")
+        check(
+            status_embed is not None
+            and "目前語音頻道" in (status_embed.description or "")
+            and "node1" in (status_embed.description or ""),
+            "/music_node_status 在語音房內時顯示目前連接節點資訊",
+        )
+        check(
+            status_embed is not None and any("🎧 目前語音使用中" in f.name for f in status_embed.fields),
+            "/music_node_status 欄位標記目前語音房使用中節點",
+        )
+        check(isinstance(status_view, NodeStatusSwitchView), "/music_node_status 附帶 NodeStatusSwitchView 切換按鈕視圖")
+        check(not status_view.btn_switch.disabled, "雙節點同時在線時，切換節點按鈕可點擊")
+
+        # 4) 驗證目標節點重載失敗時，不中斷原播放
+        async def fail_search(query, *, source=None, node=None):
+            if getattr(node, "identifier", None) == "node2":
+                raise RuntimeError("node2 unsupported source")
+            return [make_fake_track(title=track1.title, uri=track1.uri, encoded="ENC_OK")]
+
+        wavelink.Playable.search = AsyncMock(side_effect=fail_search)
+        inter_bad_sw = make_interaction(
+            user_id=55,
+            guild_id=4001,
+            client=bot,
+            guild=guild,
+            voice=SimpleNamespace(channel=vc_ch),
+        )
+        await view_ctrl.switch_node(inter_bad_sw, view_ctrl.btn_switch_node)
+        check(guild.voice_client is player and guild.voice_client.node is n1, "目標節點載入失敗時維持原節點繼續播放")
+        check(
+            inter_bad_sw.followup.send.await_count == 1
+            and "維持原節點" in str(inter_bad_sw.followup.send.await_args.args[0]),
+            "目標節點載入失敗時以私人訊息通知並說明維持原節點",
+        )
+
+        # 5) 正常點按 NodeStatusSwitchView 切換按鈕：node1 -> node2，保持曲目、進度與佇列
+        async def ok_search(query, *, source=None, node=None):
+            return [make_fake_track(title=f"{track1.title}({getattr(node, 'identifier', '')})", uri=track1.uri, encoded="ENC_NEW")]
+
+        wavelink.Playable.search = AsyncMock(side_effect=ok_search)
+        inter_btn_sw = make_interaction(
+            user_id=55,
+            guild_id=4001,
+            client=bot,
+            guild=guild,
+            voice=SimpleNamespace(channel=vc_ch),
+        )
+        await status_view.switch_node(inter_btn_sw, status_view.btn_switch)
+        new_vc = guild.voice_client
+        check(new_vc is not player and getattr(new_vc, "node", None) is n2, "點按 NodeStatusSwitchView 切換按鈕成功轉移至 node2")
+        check(len(getattr(new_vc, "play_calls", [])) == 1, "切換後於新節點接續播放")
+        check(abs(new_vc.play_calls[0]["start"] - 32_500) <= 2000, "切換節點後保留接近原本播放進度")
+        check(
+            new_vc.volume == 75 and new_vc.loop_mode == "single" and len(new_vc.song_queue) == 1,
+            "切換節點後保留音量、循環模式與待播佇列",
+        )
+        updated_desc = inter_btn_sw.edit_original_response.await_args.kwargs["embed"].description
+        check("node2" in (updated_desc or ""), "/music_node_status 訊息就地更新為新節點 node2")
+
+        # 6) 透過 MusicControlView 的『🔄 切換節點』按鈕切回 node1，驗證控制面板同步刷新
+        inter_ctrl_sw = make_interaction(
+            user_id=55,
+            guild_id=4001,
+            client=bot,
+            guild=guild,
+            voice=SimpleNamespace(channel=vc_ch),
+        )
+        await view_ctrl.switch_node(inter_ctrl_sw, view_ctrl.btn_switch_node)
+        check(getattr(guild.voice_client, "node", None) is n1, "MusicControlView 切換節點按鈕成功將播放器切回 node1")
+        check(inter_ctrl_sw.edit_original_response.await_count >= 1, "MusicControlView 切換完成後立即刷新控制面板")
+
+        # 7) 僅剩單節點時按下『🔄 切換節點』安全提示而不斷線
+        pool_nodes.pop("node2", None)
+        inter_single = make_interaction(
+            user_id=55,
+            guild_id=4001,
+            client=bot,
+            guild=guild,
+            voice=SimpleNamespace(channel=vc_ch),
+        )
+        await view_ctrl.switch_node(inter_single, view_ctrl.btn_switch_node)
+        check(getattr(guild.voice_client, "node", None) is n1, "單節點時按切換節點不會中斷現有連線")
+        check(
+            inter_single.response.send_message.await_count == 1
+            and "尚無其他可用節點可切換" in str(inter_single.response.send_message.await_args.args[0]),
+            "單節點時正確以私人訊息告知無其他可用節點",
+        )
+    finally:
+        wavelink.Playable.search = orig_search
+        pool_nodes.clear()
+
+
 async def async_main():
     test_env_loading()
     test_pick_best_node_and_backoff()
@@ -670,6 +969,7 @@ async def async_main():
     await test_selection_and_search_failover()
     await test_failover_and_locks()
     await test_status_permissions_and_intervals()
+    await test_voice_node_display_and_switch_buttons()
 
 
 def main():

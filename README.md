@@ -273,7 +273,7 @@ python main.py
 - `/music_seek time:<90 | 1:30 | +10 | -15>`：跳轉到指定時間（秒數、`mm:ss`、`hh:mm:ss`，或以 `+`／`-` 開頭的相對秒數）。受「點歌者操作鎖」保護。
 - `/music_stop`：停止播放並清空佇列（會發起全員投票）。受「點歌者操作鎖」保護。
 - `/music_set_channel [channel]`：設定點歌頻道，音樂指令只在該頻道回應；不帶參數則取消限制。需「管理伺服器」權限。
-- `/music_node_status`：全域查看目前所有已設定與連線中 Lavalink 節點的詳細狀態（連線狀態、本機／總玩家數、延遲 ms、CPU／記憶體負載與 Session ID，離線節點亦會顯示）；僅使用者可見。
+- `/music_node_status`：全域查看目前所有已設定與連線中 Lavalink 節點的詳細狀態（連線狀態、本機／總玩家數、延遲 ms、CPU／記憶體負載與 Session ID，離線節點亦會顯示）；當機器人在語音頻道內時，同步顯示目前語音房連接的節點並附帶「🔄 切換節點」按鈕（音樂控制面板亦有快捷切換按鈕）；僅使用者可見。
 - `/node_kill node:<identifier>`：後台專屬（`owner_guild_only` 且限 `OWNER_ID`），呼叫節點斷線以模擬故障並立即觸發／記錄故障轉移結果。
 - `/node_revive node:<identifier>`：後台專屬（`owner_guild_only` 且限 `OWNER_ID`），重新連線指定的 Lavalink 節點。
 - `/music_playlist [member:<成員>]`：查看自己或指定成員的個人音樂歌單曲目（分頁檢視，每頁 10 首，附前往控制面板按鈕）。
@@ -408,7 +408,8 @@ python main.py
 - `/music_join`、`/music_leave`、`/music_play`、`/music_play_next`、`/music_queue`、`/music_queue_clear`、`/music_node_status` 需要已安裝 `wavelink>=3.5.0,<4.0.0` 並設定 `LAVALINK_NODE1_*` / `LAVALINK_NODE2_*`（或向下相容之 `LAVALINK_URI` / `LAVALINK_PASSWORD`）；未安裝或節點無法連線時，這些指令會回覆友善錯誤訊息，不影響機器人其他功能。
 - **雙 Lavalink 節點容錯與故障轉移（第 8 週新增）**：
   - 因免費託管（如 Render）資源有限且自架 YouTube `poToken`／OAuth2 維護門檻高，本專案採用**雙第三方公開 Lavalink v4 節點**而不自架；只設定單一節點時會自動降級運作並於 log 警告。
-  - 建立新播放器時透過純函式 `pick_best_node()`（實作於 `utils/nodes.py`）從 `CONNECTED` 節點中以「玩家數最低」為主、「CPU／記憶體負載最低」為輔挑選主力節點（無負載統計時自動退回只比玩家數）。
+  - 建立新播放器時透過純函式 `pick_best_node()`（實作於 `utils/nodes.py`）從 `CONNECTED` 節點中挑選主力節點：若有任何節點已偵測到延遲（`latency_ms`），未偵測到延遲的節點優先順序自動往後排；再依「玩家數最低」為主、「CPU／記憶體負載與延遲最低」為輔選出最佳節點（無負載統計時自動退回比較延遲或玩家數）。
+  - 機器人在語音頻道內時，`/music_join`、`/music_node_status` 與音樂控制面板均會顯示目前語音房連接的節點名稱，並可透過控制面板或 `/music_node_status` 上的「🔄 切換節點」按鈕手動切換至其他可用節點（切換前會先預載檢查，確認目標節點支援該曲目後再無縫接續原進度）。
   - 監聽 `on_wavelink_node_disconnected` 與 `on_wavelink_node_closed` 並以 per-guild `asyncio.Lock` 防重複觸發：任一節點斷線時，自動記下各伺服器當前曲目與播放進度，於另一在線節點重建 Player、重入原語音頻道、重新載入曲目並 `seek` 回原進度；若兩個節點同時離線，則通知文字頻道並於背景以指數退避（上限 60 秒）自動重連。
 - Music Cog 啟動後會在背景以 `LAVALINK_CONNECT_TIMEOUT`（預設 15 秒）為逾時限制並發嘗試連線所有已設定節點（任一節點失敗不阻擋其他節點與機器人啟動）；之後每隔 `NODE_HEALTH_CHECK_INTERVAL`（預設 30 秒，最低 30 秒）定期檢查節點狀態與負載統計，節點離線時 DM 通知 `DISCORD_OWNER_ID` 一次，恢復連線後重置旗標。
 - Lavalink 連線失敗時（連線逾時、TLS 握手失敗、密碼錯誤，或 wavelink 的 `Pool.connect` 靜默失敗沒把節點註冊進連線池），機器人會探測節點 `/version` 取得診斷、清理失敗的節點（WebSocket 退避重試與 aiohttp session），再把帶原因的 DM 送給 `DISCORD_OWNER_ID`（錯誤訊息欄位不再空白，同一輪故障只送一次）。若有未註冊節點不在連線池，健康檢查會在 `LAVALINK_RECONNECT_COOLDOWN`（預設 60 秒）冷卻後自動重連，不需重啟機器人。
