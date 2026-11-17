@@ -60,6 +60,9 @@
 ├── services/                   # 外部第三方 API 封裝服務
 │   └── spotify.py              # Spotify 外部歌單/專輯/單曲非同步解析服務
 │
+├── utils/                      # 無狀態共用演算法與設定解析工具
+│   └── nodes.py                # 雙 Lavalink 節點環境變數載入、pick_best_node() 與指數退避計算
+│
 ├── templates/                  # Flask Jinja2 前端網頁模板
 │   ├── index.html              # 官方首頁儀表板
 │   ├── panel.html              # 伺服器控制面板與個人設定專區
@@ -146,9 +149,11 @@
    - 系統配發一組獨一無二的 6 碼英數跨服分享碼，可在任何伺服器輸入 6 碼播放。
    - 支援歌曲 URL 去重（重複加入直接忽略並提示）。
    - 支援隨機播放模式（Shuffle Mode）：打亂佇列順序但不影響當前播放曲目。
-7. **Lavalink 斷線與直播自動復原**：
-   - 自動捕捉 Lavalink 404 Session Lost，自動關閉失效 WebSocket 並在重新建立 Session 後重送語音狀態與斷點續播。
-   - 直播串流（`is_stream=True`）長播斷流時自動重抓 URL 續播，防止直播中斷結束。
+7. **雙公開 Lavalink 節點容錯與斷線自動復原**：
+   - 使用兩個第三方公開 Lavalink v4 節點（`LAVALINK_NODE1_*`、`LAVALINK_NODE2_*`，並向下相容 `LAVALINK_URI`），不自架節點；單節點設定時自動降級運作。
+   - 建置播放器透過純函式 `utils.nodes.pick_best_node()` 從 `CONNECTED` 節點中依「玩家數最低」為主、「CPU／記憶體負載最低」為輔選點。
+   - 監聽 `on_wavelink_node_disconnected` 與 `on_wavelink_node_closed`，以 per-guild `asyncio.Lock` 鎖保護執行斷線故障轉移（在備援節點重建 Player、重入原語音頻道、重新載入曲目並 seek 回原位置）；雙節點全斷時啟動上限 60 秒之指數退避背景重連。
+   - 自動捕捉 Lavalink 404 Session Lost 與直播串流（`is_stream=True`）斷流，防止長播或 Session 回收導致中斷結束。
 
 ### 3.4 Web 控制面板與 API 架構 (`cogs/panel_bp.py`)
 - **OAuth2 驗證**：支援 Discord 官方授權登入，亦具備本機開發專用的 `dev-login` 模式。

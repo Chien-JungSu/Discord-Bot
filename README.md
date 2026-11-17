@@ -36,7 +36,9 @@
 - `/music_seek <time>`：跳轉到指定時間（支援秒數、`mm:ss`、`hh:mm:ss`，或 `+10`／`-15` 相對秒數）
 - `/music_stop`：停止播放並清空佇列（需全員投票同意）
 - `/music_set_channel [channel]`：設定點歌頻道，音樂指令只在該頻道回應；不帶參數則取消限制。需「管理伺服器」權限
-- `/music_node_status`：查看目前 Lavalink 節點的連線狀態（包含節點 URI、連線狀態、Session ID 及目前連線的伺服器數）
+- `/music_node_status`：全域查看所有已設定／註冊 Lavalink 節點的連線狀態、玩家數、延遲（ms）與 CPU／記憶體負載（包含離線節點）
+- `/node_kill node:<identifier>`：後台擁有者專屬（`owner_guild_only` 且檢查 `OWNER_ID`），模擬指定節點斷線以實測雙節點故障轉移
+- `/node_revive node:<identifier>`：後台擁有者專屬（`owner_guild_only` 且檢查 `OWNER_ID`），重新連線指定節點
 - `/music_playlist [member]`：查看自己或指定成員的個人專屬歌單（分頁檢視，附前往控制面板按鈕）
 - `/music_playlist_create <name> [is_public]`：建立個人專屬音樂歌單（上限 1 個歌單，最多 500 首；自動獲取 6 碼跨服分享碼）
 - `/music_playlist_add <query>`：搜尋歌曲或 YouTube 播放清單並新增至個人歌單（上限 500 首；自動攔截直播串流，內建 URL 去重判定，重複歌曲自動忽略）
@@ -174,14 +176,14 @@ pip install -r requirements.txt
 - waitress
 - certifi
 - aiohttp
-- wavelink
+- wavelink (>=3.5.0,<4.0.0)
 - gTTS
 - aiosqlite
 - openai (>=1.50.0)
 - Pillow
 - yt-dlp
 
-`wavelink`、`openai`（用於多供應商 AI 相容介面）與 `Pillow`（用於 LaTeX 公式與表格 PNG 卡片渲染）均已包含在 `requirements.txt` 中，執行 `pip install -r requirements.txt` 即可一併安裝。音樂功能另外需要準備可連線的 Lavalink 節點；未設定節點時，其他功能仍可正常啟動，但 `/music_join`、`/music_leave`、`/music_play` 系列指令無法使用。
+`wavelink>=3.5.0,<4.0.0`（對應 Lavalink v4 協定並提供 `Node.fetch_stats()`、多節點搜尋指定與 `on_wavelink_node_closed` / `on_wavelink_node_disconnected` 事件）、`openai`（用於多供應商 AI 相容介面）與 `Pillow`（用於 LaTeX 公式與表格 PNG 卡片渲染）均已包含在 `requirements.txt` 中，執行 `pip install -r requirements.txt` 即可一併安裝。音樂功能採用「**雙第三方公開 Lavalink v4 節點容錯**」（不自架節點）；即使完全未設定節點或僅設定單一節點，其他功能仍可正常啟動，雙節點中任一節點故障時會自動切換至備援節點續播。
 
 網頁儀表板與控制面板改以 production WSGI server `waitress` 啟動（已加入 `requirements.txt`），監聽 `0.0.0.0` 與 `PORT` 環境變數（未設定時預設 `20198`）。
 
@@ -204,24 +206,32 @@ DISCORD_CLIENT_ID=網頁控制面板 OAuth2 Client ID（選填）
 DISCORD_CLIENT_SECRET=網頁控制面板 OAuth2 Client Secret（選填）
 DISCORD_REDIRECT_URI=網頁控制面板 OAuth2 回呼網址（選填）
 FLASK_SECRET_KEY=Flask Session 加密金鑰（選填）
-LAVALINK_URI=Lavalink 節點網址
-LAVALINK_PASSWORD=Lavalink 節點密碼
+LAVALINK_NODE1_URI=第一組公開 Lavalink v4 節點網址
+LAVALINK_NODE1_PASSWORD=第一組節點密碼
+LAVALINK_NODE1_IDENTIFIER=node1
+LAVALINK_NODE2_URI=第二組公開 Lavalink v4 節點網址（選填，建議設定以啟用雙節點容錯）
+LAVALINK_NODE2_PASSWORD=第二組節點密碼（選填）
+LAVALINK_NODE2_IDENTIFIER=node2
+# 向下相容舊參數（僅在未設定 LAVALINK_NODE1_URI 時生效）
+# LAVALINK_URI=舊版單節點網址
+# LAVALINK_PASSWORD=舊版單節點密碼
 EMPTY_VOICE_CHANNEL_TIMEOUT=語音頻道空掉多久後自動離開（秒，選填，預設 60）
 LAVALINK_CONNECT_TIMEOUT=連線 Lavalink 節點的逾時秒數（選填，預設 15）
-NODE_HEALTH_CHECK_INTERVAL=定期健康檢查節點連線狀態的間隔秒數（選填，預設 30）
+LAVALINK_SEARCH_TIMEOUT=單次搜尋／解析曲目逾時秒數（選填，預設 15）
+NODE_HEALTH_CHECK_INTERVAL=定期健康檢查節點連線狀態的間隔秒數（選填，預設 30，最低 30 秒）
 LAVALINK_RECONNECT_COOLDOWN=節點未在連線池時自動重連的冷卻秒數（選填，預設 60）
 ```
 
 `GEMINI_API_KEY`（或 `GOOGLE_API_KEY`）、`NVIDIA_API_KEY`、`MISTRAL_API_KEY` 用於 `/ai` 多供應商免費問答閘道；`REURL_API_KEY` 用於 `/shorten`、`/reurl` 短網址功能；`DISCORD_CLIENT_ID`、`DISCORD_CLIENT_SECRET`、`DISCORD_REDIRECT_URI` 與 `FLASK_SECRET_KEY` 用於網頁控制面板與個人主頁 Discord OAuth2 登入驗證。
-`TDX_CLIENT_ID` 與 `TDX_CLIENT_SECRET` 用於 `/bus` 公車查詢。`DISCORD_OWNER_ID` 為選填，用來接收機器人錯誤通知與 AI 後備失敗通報。若未設定，錯誤通知會略過。
-也可以使用 `OWNER_ID` 作為 `DISCORD_OWNER_ID` 的替代名稱。`LAVALINK_URI` 與 `LAVALINK_PASSWORD` 用於音樂功能的 Lavalink 連線；這兩項未設定時會略過節點連線。
+`TDX_CLIENT_ID` 與 `TDX_CLIENT_SECRET` 用於 `/bus` 公車查詢。`DISCORD_OWNER_ID` 為選填，用來接收機器人錯誤通知與 AI 後備失敗通報（同時用於 `/node_kill`、`/node_revive` 權限檢查）。若未設定，錯誤通知會略過。
+也可以使用 `OWNER_ID` 作為 `DISCORD_OWNER_ID` 的替代名稱。`LAVALINK_NODE1_*` 與 `LAVALINK_NODE2_*` 用於設定雙公開 Lavalink v4 節點（若未設定 `LAVALINK_NODE1_URI` 會自動向下相容讀取 `LAVALINK_URI` / `LAVALINK_PASSWORD`）；只設定單一節點時會於後台 log 警告並降級為單節點模式，完全未設定時僅警告並略過節點連線，不影響其他功能啟動。
 `EMPTY_VOICE_CHANNEL_TIMEOUT` 為選填，設定語音頻道裡沒有真人成員（只剩機器人自己）超過幾秒後自動離開並清空佇列；未設定時預設為 60 秒。
-`LAVALINK_CONNECT_TIMEOUT` 為選填，設定連線 Lavalink 節點的逾時秒數；超時後會 DM 通知 `DISCORD_OWNER_ID`，未設定時預設為 15 秒。
-`NODE_HEALTH_CHECK_INTERVAL` 為選填，設定定期健康檢查 Lavalink 節點連線狀態的間隔秒數；節點離線時只 DM 通知一次，恢復連線後重置；未設定時預設為 30 秒。
-`LAVALINK_RECONNECT_COOLDOWN` 為選填，設定節點未在連線池（初次連線失敗、或節點被剔除）時，健康檢查自動重連的冷卻秒數；未設定時預設為 60 秒。
-Lavalink 連線失敗時，機器人會先對節點 `/version` 做一次快速探測，把 wavelink 刻意吞掉的真實原因（例如 `LAVALINK_URI` 誤用 `https://` 但節點只講明文 HTTP、`LAVALINK_PASSWORD` 錯誤、節點離線）翻譯成可行動的中文訊息再 DM 給 `DISCORD_OWNER_ID`，訊息不含密碼；同一輪故障只通知一次，連線恢復後才會在下次故障重新通知。
+`LAVALINK_CONNECT_TIMEOUT` 與 `LAVALINK_SEARCH_TIMEOUT` 為選填，分別設定連線與單次搜尋逾時（預設皆為 15 秒）。
+`NODE_HEALTH_CHECK_INTERVAL` 為選填，設定定期健康檢查 Lavalink 節點連線狀態與更新負載的間隔秒數（低資源限制最低 30 秒，預設 30 秒）；節點離線時只 DM 通知一次，恢復連線後重置。
+`LAVALINK_RECONNECT_COOLDOWN` 為選填，設定單一節點不在連線池時健康檢查自動重連的冷卻秒數；未設定時預設為 60 秒。
+Lavalink 連線失敗時，機器人會先對節點 `/version` 做一次快速探測，把 wavelink 刻意吞掉的真實原因（例如誤用 `https://` 但節點只講明文 HTTP、密碼錯誤、節點離線）翻譯成可行動的中文訊息再 DM 給 `DISCORD_OWNER_ID`，訊息不含密碼；同一輪故障只通知一次，連線恢復後才會在下次故障重新通知。
 
-若要啟用音樂功能，請確保已安裝 `wavelink`（已包含於 `requirements.txt`）並自行準備可連線的 Lavalink 節點，設定 `LAVALINK_URI` 與 `LAVALINK_PASSWORD` 環境變數。
+若要啟用音樂功能，請確保已安裝 `wavelink>=3.5.0,<4.0.0`，並在 `.env` 或託管平台設定兩個第三方公開 Lavalink v4 節點的 `LAVALINK_NODE1_*` 與 `LAVALINK_NODE2_*` 環境變數（切勿將公開節點主機或密碼寫入版本庫）。
 
 ## 啟動方式
 
@@ -263,7 +273,9 @@ python main.py
 - `/music_seek time:<90 | 1:30 | +10 | -15>`：跳轉到指定時間（秒數、`mm:ss`、`hh:mm:ss`，或以 `+`／`-` 開頭的相對秒數）。受「點歌者操作鎖」保護。
 - `/music_stop`：停止播放並清空佇列（會發起全員投票）。受「點歌者操作鎖」保護。
 - `/music_set_channel [channel]`：設定點歌頻道，音樂指令只在該頻道回應；不帶參數則取消限制。需「管理伺服器」權限。
-- `/music_node_status`：查看目前所有已註冊 Lavalink 節點的連線狀態（URI、連線狀態、Session ID、目前連線的伺服器數）；僅使用者可見。
+- `/music_node_status`：全域查看目前所有已設定與連線中 Lavalink 節點的詳細狀態（連線狀態、本機／總玩家數、延遲 ms、CPU／記憶體負載與 Session ID，離線節點亦會顯示）；僅使用者可見。
+- `/node_kill node:<identifier>`：後台專屬（`owner_guild_only` 且限 `OWNER_ID`），呼叫節點斷線以模擬故障並立即觸發／記錄故障轉移結果。
+- `/node_revive node:<identifier>`：後台專屬（`owner_guild_only` 且限 `OWNER_ID`），重新連線指定的 Lavalink 節點。
 - `/music_playlist [member:<成員>]`：查看自己或指定成員的個人音樂歌單曲目（分頁檢視，每頁 10 首，附前往控制面板按鈕）。
 - `/music_playlist_create name:<歌單名稱> [is_public:<公開/私人>]`：建立個人專屬音樂歌單（每位使用者上限 1 個歌單，最多 500 首歌曲；自動配發獨一無二的 6 碼跨服分享碼）。
 - `/music_playlist_add query:<關鍵字或網址>`：搜尋歌曲並新增至個人歌單（上限 500 首；自動攔截直播串流，內建 URL 去重判定，重複歌曲自動忽略並提示）。
@@ -393,12 +405,16 @@ python main.py
 - `/weather` 會呼叫中央氣象署公開資料 API，全程啟用 TLS 憑證驗證（沿用 `cogs/tls.py` 的共用 SSL context，相容舊式政府 CA 憑證鏈）；若憑證驗證失敗會直接回報連線異常，不會關閉驗證重試。
 - `/bus` 會呼叫交通部 TDX API 查詢公車路線站點與即時到站資訊。所有公車查詢訊息皆為僅使用者可見，避免干擾頻道版面。
 - `/bus` 若輸入不存在的公車號碼，會提示找不到站牌或到站資料；若發生未知錯誤，會自動嘗試 DM 通知 `DISCORD_OWNER_ID`。
-- `/music_join`、`/music_leave`、`/music_play`、`/music_play_next`、`/music_queue`、`/music_queue_clear`、`/music_node_status` 需要已安裝 `wavelink` 並設定 `LAVALINK_URI` / `LAVALINK_PASSWORD`；未安裝或節點無法連線時，這些指令會回覆友善錯誤訊息，不影響機器人其他功能。
-- Music Cog 啟動後會在背景以 `LAVALINK_CONNECT_TIMEOUT`（預設 15 秒）為逾時限制嘗試連線 Lavalink 節點（非同步，不阻擋機器人其他功能啟動）；連線成功後，每隔 `NODE_HEALTH_CHECK_INTERVAL`（預設 30 秒）定期檢查節點狀態，節點離線時 DM 通知 `DISCORD_OWNER_ID` 一次，恢復連線後重置旗標，避免重複通知。
-- Lavalink 連線失敗時（連線逾時、TLS 握手失敗、密碼錯誤，或 wavelink 的 `Pool.connect` 靜默失敗沒把節點註冊進連線池），機器人會探測節點 `/version` 取得診斷、清理失敗的節點（WebSocket 退避重試與 aiohttp session），再把帶原因的 DM 送給 `DISCORD_OWNER_ID`（錯誤訊息欄位不再空白，同一輪故障只送一次）。若連線池為空，健康檢查會在 `LAVALINK_RECONNECT_COOLDOWN`（預設 60 秒）冷卻後自動重連，不需重啟機器人。
+- `/music_join`、`/music_leave`、`/music_play`、`/music_play_next`、`/music_queue`、`/music_queue_clear`、`/music_node_status` 需要已安裝 `wavelink>=3.5.0,<4.0.0` 並設定 `LAVALINK_NODE1_*` / `LAVALINK_NODE2_*`（或向下相容之 `LAVALINK_URI` / `LAVALINK_PASSWORD`）；未安裝或節點無法連線時，這些指令會回覆友善錯誤訊息，不影響機器人其他功能。
+- **雙 Lavalink 節點容錯與故障轉移（第 8 週新增）**：
+  - 因免費託管（如 Render）資源有限且自架 YouTube `poToken`／OAuth2 維護門檻高，本專案採用**雙第三方公開 Lavalink v4 節點**而不自架；只設定單一節點時會自動降級運作並於 log 警告。
+  - 建立新播放器時透過純函式 `pick_best_node()`（實作於 `utils/nodes.py`）從 `CONNECTED` 節點中以「玩家數最低」為主、「CPU／記憶體負載最低」為輔挑選主力節點（無負載統計時自動退回只比玩家數）。
+  - 監聽 `on_wavelink_node_disconnected` 與 `on_wavelink_node_closed` 並以 per-guild `asyncio.Lock` 防重複觸發：任一節點斷線時，自動記下各伺服器當前曲目與播放進度，於另一在線節點重建 Player、重入原語音頻道、重新載入曲目並 `seek` 回原進度；若兩個節點同時離線，則通知文字頻道並於背景以指數退避（上限 60 秒）自動重連。
+- Music Cog 啟動後會在背景以 `LAVALINK_CONNECT_TIMEOUT`（預設 15 秒）為逾時限制並發嘗試連線所有已設定節點（任一節點失敗不阻擋其他節點與機器人啟動）；之後每隔 `NODE_HEALTH_CHECK_INTERVAL`（預設 30 秒，最低 30 秒）定期檢查節點狀態與負載統計，節點離線時 DM 通知 `DISCORD_OWNER_ID` 一次，恢復連線後重置旗標。
+- Lavalink 連線失敗時（連線逾時、TLS 握手失敗、密碼錯誤，或 wavelink 的 `Pool.connect` 靜默失敗沒把節點註冊進連線池），機器人會探測節點 `/version` 取得診斷、清理失敗的節點（WebSocket 退避重試與 aiohttp session），再把帶原因的 DM 送給 `DISCORD_OWNER_ID`（錯誤訊息欄位不再空白，同一輪故障只送一次）。若有未註冊節點不在連線池，健康檢查會在 `LAVALINK_RECONNECT_COOLDOWN`（預設 60 秒）冷卻後自動重連，不需重啟機器人。
 - 播放佇列是各伺服器獨立的 FIFO（先進先出）佇列，實作於 `cogs/music.py` 的 `player.song_queue`（`collections.deque`）。歌曲播完（或被跳過、發生錯誤）時會觸發 wavelink 的 `on_wavelink_track_end` 事件，由監聽器從佇列最前面取出下一首並自動播放；佇列空了則會發一次通知。`player.autoplay` 因此設為 `disabled`，改由這個監聽器完全接管「播完接下一首」的邏輯，避免跟 wavelink 內建的 autoplay 互相搶播。
 - 語音頻道裡只剩機器人自己（沒有真人成員）超過 `EMPTY_VOICE_CHANNEL_TIMEOUT` 秒（預設 60 秒）就會自動離開並清空佇列，並在最近一次下指令的文字頻道發一則通知。這個功能監聽 `discord.py` 的 `on_voice_state_update` 事件，每次有人加入/離開/切換頻道時檢查機器人所在頻道還有沒有真人；沒有的話才啟動倒數計時器，且倒數期間只要有人回來就會立刻取消，避免誤判暫時性的斷線重連。
-- `/music_play` 搜尋失敗（來源網站無回應、反爬蟲封鎖等）會立即回覆錯誤訊息。歌曲成功排入播放後，若 Lavalink 節點在背景載入音訊時才失敗（例如 YouTube 判定需要登入、影片地區限制，或公開節點的來源連結失效），機器人會透過 `on_wavelink_track_exception` 監聽器把失敗原因回報到下指令當下的文字頻道，而不是只留在後台 log。目前公開 Lavalink 節點偶爾不穩定是已知風險，後續計畫改為自架節點。
+- **已知限制（公開節點與音源）**：第三方公開 Lavalink 節點本質上不穩定，可能隨時重啟、限流或踢除連線，且許多公開節點因 YouTube 反爬蟲驗證而無法搜尋或載入 YouTube 來源。因此 `/music_play` 搜尋關鍵字時預設優先使用 YouTube，失敗會自動 fallback 到 SoundCloud（亦可使用 `scsearch:` 前綴指定）；若曲目在背景載入階段失敗（登入要求、地區限制、連結失效），`on_wavelink_track_exception` 會回報友善繁體中文原因至原文字頻道。
 - `/steal` 會解析 Discord 的 emoji 引用字串（如 `<:pepe_smile:123456789>`、`<a:cat:456789>`），依據 `emoji_id` 及是否動態組出對應 CDN 下載網址，下載圖片 bytes 後透過 `guild.create_custom_emoji()` 建立到目前伺服器；若來源超過 256 KB 或無法讀取，會回覆友善文字提示，而不是直接曝露原始錯誤代碼。
 - `/bot_steal` 為 `owner_guild_only` 且限機器人擁有者（`owner_only`）的伺服器專屬指令，沿用與 `/steal` 相同的解析、下載與 256 KB 容量檢查流程，改以 `bot.create_application_emoji()` 將表情符號建立至機器人的應用程式表情符號庫，並會先檢查既有機器人表情符號名稱以避免名稱衝突。
 - `/tts` 模組透過 `gTTS`（Google Text-to-Speech）將文字轉換為 MP3 音訊，運作邏輯完整移植自 `tts.py`（未指定語言預設為英文 `en`、未指定檔名預設以文字前 10 個字命名）；生成過程以非同步執行緒處理，不會阻塞機器人主事件循環。

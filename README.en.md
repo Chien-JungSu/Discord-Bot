@@ -36,7 +36,9 @@ Supported features:
 - `/music_seek <time>`: seek to a position (seconds, `mm:ss`, `hh:mm:ss`, or relative `+10` / `-15`)
 - `/music_stop`: stop playback and clear the queue (requires a group vote)
 - `/music_set_channel [channel]`: restrict music commands to a single text channel; run without arguments to lift the restriction. Requires **Manage Server** permission
-- `/music_node_status`: view the connection status of all registered Lavalink nodes (URI, status, Session ID, and connected guild count)
+- `/music_node_status`: globally inspect the connection status, player counts, REST latency (ms), and CPU/memory load of all configured and connected Lavalink nodes (including offline nodes)
+- `/node_kill node:<identifier>`: owner-only (`owner_guild_only` with `OWNER_ID` check), simulate a node disconnect to test automatic dual-node failover
+- `/node_revive node:<identifier>`: owner-only (`owner_guild_only` with `OWNER_ID` check), reconnect a disconnected Lavalink node
 - `/music_playlist [member]`: view your own or another user's personal playlist (paged view, with a button to open the web panel editor)
 - `/music_playlist_create <name> [is_public]`: create a personal music playlist (up to 1 playlist per user, 500 tracks max; automatically generates a 6-character cross-server share code)
 - `/music_playlist_add <query>`: search and add single tracks or YouTube playlists to your playlist (up to 500 tracks; live streams blocked; built-in URL deduplication to ignore duplicates)
@@ -174,14 +176,14 @@ pip install -r requirements.txt
 - waitress
 - certifi
 - aiohttp
-- wavelink
+- wavelink (>=3.5.0,<4.0.0)
 - gTTS
 - aiosqlite
 - openai (>=1.50.0)
 - Pillow
 - yt-dlp
 
-`wavelink`, `openai` (for the OpenAI-compatible multi-provider AI gateway), and `Pillow` (for LaTeX equation and Markdown table PNG card rendering) are already included in `requirements.txt`, so running `pip install -r requirements.txt` installs them together with all other dependencies. The music features also require a reachable Lavalink node configured via `LAVALINK_URI` and `LAVALINK_PASSWORD`. If Lavalink is unavailable, the bot still starts normally but music commands will not work.
+`wavelink>=3.5.0,<4.0.0` (compatible with Lavalink v4 and providing `Node.fetch_stats()`, per-node search, `Node.close(eject=...)`, and `on_wavelink_node_closed` / `on_wavelink_node_disconnected`), `openai` (for the OpenAI-compatible multi-provider AI gateway), and `Pillow` (for LaTeX equation and Markdown table PNG card rendering) are already included in `requirements.txt`, so running `pip install -r requirements.txt` installs them together with all other dependencies. Music playback uses **dual third-party public Lavalink v4 nodes** (no self-hosting required); if only one node is set or none are configured, the bot still starts normally and degrades gracefully.
 
 The web dashboard and control panel run on the production WSGI server `waitress` (also listed in `requirements.txt`), listening on `0.0.0.0` and the `PORT` environment variable (defaults to `20198` when unset).
 
@@ -204,24 +206,32 @@ DISCORD_CLIENT_ID=Web Panel Discord OAuth2 Client ID (optional)
 DISCORD_CLIENT_SECRET=Web Panel Discord OAuth2 Client Secret (optional)
 DISCORD_REDIRECT_URI=Web Panel Discord OAuth2 Redirect URI (optional)
 FLASK_SECRET_KEY=Flask session secret key (optional)
-LAVALINK_URI=your Lavalink node URL
-LAVALINK_PASSWORD=your Lavalink node password
+LAVALINK_NODE1_URI=first public Lavalink v4 node URL
+LAVALINK_NODE1_PASSWORD=first node password
+LAVALINK_NODE1_IDENTIFIER=node1
+LAVALINK_NODE2_URI=second public Lavalink v4 node URL (optional; recommended for dual-node failover)
+LAVALINK_NODE2_PASSWORD=second node password (optional)
+LAVALINK_NODE2_IDENTIFIER=node2
+# Legacy single-node fallback (optional; only used when LAVALINK_NODE1_URI is unset)
+# LAVALINK_URI=legacy single Lavalink node URL
+# LAVALINK_PASSWORD=legacy single Lavalink node password
 EMPTY_VOICE_CHANNEL_TIMEOUT=seconds of an empty voice channel before auto-leaving (optional, default 60)
-LAVALINK_CONNECT_TIMEOUT=seconds before the Lavalink connection attempt times out (optional, default 15)
-NODE_HEALTH_CHECK_INTERVAL=interval in seconds between Lavalink node health checks (optional, default 30)
-LAVALINK_RECONNECT_COOLDOWN=cooldown in seconds before an automatic reconnect when the node is not in the pool (optional, default 60)
+LAVALINK_CONNECT_TIMEOUT=seconds before a Lavalink node connection attempt times out (optional, default 15)
+LAVALINK_SEARCH_TIMEOUT=seconds before a single track search/resolve request times out (optional, default 15)
+NODE_HEALTH_CHECK_INTERVAL=interval in seconds between Lavalink node health checks (optional, default 30, minimum 30)
+LAVALINK_RECONNECT_COOLDOWN=cooldown in seconds before an automatic reconnect when a configured node is missing from the pool (optional, default 60)
 ```
 
 `GEMINI_API_KEY` (or `GOOGLE_API_KEY`), `NVIDIA_API_KEY`, and `MISTRAL_API_KEY` power the `/ai` multi-provider gateway; `REURL_API_KEY` enables `/shorten` and `/reurl`; `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `DISCORD_REDIRECT_URI`, and `FLASK_SECRET_KEY` configure Discord OAuth2 login for the Web Control Panel and User Profiles.
-`TDX_CLIENT_ID` and `TDX_CLIENT_SECRET` are required for `/bus`. `DISCORD_OWNER_ID` is optional and is used to receive bot error and AI fallback failure notifications. If it is not set, error notifications will be skipped.
-`OWNER_ID` can also be used as an alternative name for `DISCORD_OWNER_ID`. `LAVALINK_URI` and `LAVALINK_PASSWORD` configure the Lavalink connection for the music features. If either is missing, the bot skips the Lavalink connection.
+`TDX_CLIENT_ID` and `TDX_CLIENT_SECRET` are required for `/bus`. `DISCORD_OWNER_ID` is optional and is used to receive bot error/failover notifications and authorize `/node_kill` / `/node_revive`. If it is not set, error notifications will be skipped.
+`OWNER_ID` can also be used as an alternative name for `DISCORD_OWNER_ID`. `LAVALINK_NODE1_*` and `LAVALINK_NODE2_*` configure dual public Lavalink v4 nodes (falling back to `LAVALINK_URI` / `LAVALINK_PASSWORD` as Node 1 when `LAVALINK_NODE1_URI` is unset). Configuring only one node logs a warning and degrades cleanly to single-node mode; omitting all node variables skips Lavalink connections without blocking bot startup.
 `EMPTY_VOICE_CHANNEL_TIMEOUT` is optional: how many seconds a voice channel can have no human members (bot only) before the bot auto-leaves and clears its queue. Defaults to 60 seconds.
-`LAVALINK_CONNECT_TIMEOUT` is optional: timeout in seconds for the initial Lavalink connection attempt; if exceeded, the owner receives a DM notification. Defaults to 15 seconds.
-`NODE_HEALTH_CHECK_INTERVAL` is optional: interval in seconds between periodic Lavalink node health checks; the owner is notified once when a node goes offline and the flag resets upon recovery. Defaults to 30 seconds.
-`LAVALINK_RECONNECT_COOLDOWN` is optional: cooldown in seconds before the health check retries the connection when no node is registered in the pool (initial connection failed, or the node was ejected). Defaults to 60 seconds.
-When the Lavalink connection fails, the bot first probes the node's `/version` endpoint and turns the real cause that wavelink swallows (for example `LAVALINK_URI` using `https://` against a plain-HTTP node, a wrong `LAVALINK_PASSWORD`, or an offline node) into an actionable Chinese message and DMs it to `DISCORD_OWNER_ID`; the message never contains the password, and only one DM is sent per outage until the connection recovers.
+`LAVALINK_CONNECT_TIMEOUT` and `LAVALINK_SEARCH_TIMEOUT` are optional timeouts (both default to 15 seconds).
+`NODE_HEALTH_CHECK_INTERVAL` is optional: interval in seconds between periodic Lavalink node health checks and stats refreshes (enforced >= 30 seconds for low-resource hosts, default 30 seconds); the owner is notified once when a node goes offline and the flag resets upon recovery.
+`LAVALINK_RECONNECT_COOLDOWN` is optional: cooldown in seconds before the health check retries connecting a missing configured node. Defaults to 60 seconds.
+When a Lavalink connection fails, the bot first probes the node's `/version` endpoint and turns the real cause that wavelink swallows (for example using `https://` against a plain-HTTP node, a wrong password, or an offline node) into an actionable Chinese message and DMs it to `DISCORD_OWNER_ID`; the message never contains the password, and only one DM is sent per outage until the connection recovers.
 
-To enable the music features, ensure `wavelink` is installed (already included in `requirements.txt`) and set up a reachable Lavalink node with `LAVALINK_URI` and `LAVALINK_PASSWORD`.
+To enable the music features, ensure `wavelink>=3.5.0,<4.0.0` is installed and configure two third-party public Lavalink v4 nodes via `LAVALINK_NODE1_*` and `LAVALINK_NODE2_*` (never commit real node hosts or passwords into the repository).
 
 ## Run
 
@@ -263,7 +273,9 @@ When launched, the bot starts the Flask background server from `cogs/web_server.
 - `/music_seek time:<90 | 1:30 | +10 | -15>`: seek to an absolute position (seconds, `mm:ss`, `hh:mm:ss`) or a relative offset (`+10` / `-15`). Protected by the requester control lock described above.
 - `/music_stop`: stop playback and clear the queue (starts a group vote). Protected by the requester control lock described above.
 - `/music_set_channel [channel]`: restrict music commands to a single text channel; run without arguments to lift the restriction. Requires **Manage Server** permission.
-- `/music_node_status`: view the connection status of all registered Lavalink nodes (URL, connection state, Session ID, connected guild count). Ephemeral (only visible to you).
+- `/music_node_status`: globally inspect all configured and registered Lavalink nodes (connection state, local/total players, REST latency in ms, CPU/memory load, and Session ID — offline nodes are also shown). Ephemeral (only visible to you).
+- `/node_kill node:<identifier>`: owner-only (`owner_guild_only` with `OWNER_ID` check), disconnect the specified node to simulate failure and verify automatic failover.
+- `/node_revive node:<identifier>`: owner-only (`owner_guild_only` with `OWNER_ID` check), reconnect the specified Lavalink node.
 - `/music_playlist [member:<user>]`: view your own or another user's personal playlist (paged view, with a button to open the web panel editor).
 - `/music_playlist_create name:<name> [is_public:<public/private>]`: create a personal music playlist (up to 1 playlist per user, 500 tracks max; automatically generates a unique 6-character cross-server share code).
 - `/music_playlist_add query:<keywords or URL>`: search and add tracks to your playlist (up to 500 tracks; live streams blocked; built-in URL deduplication to ignore duplicates).
@@ -393,12 +405,16 @@ The bot also enables the `Message Content Intent` and voice-state intents for th
 - `/weather` calls the Taiwan Central Weather Administration API with TLS certificate verification always enabled (via the shared SSL context in `cogs/tls.py`, compatible with legacy government CA chains); if certificate verification fails, it reports a connection error instead of retrying with verification disabled.
 - `/bus` calls the Taiwan TDX API for route stops and real-time arrival estimates. Bus query messages are ephemeral, so only the user who started the query can see them.
 - `/bus` handles unknown route numbers with a clear not-found message. Unexpected errors trigger an owner DM when `DISCORD_OWNER_ID` is configured.
-- `/music_join`, `/music_leave`, `/music_play`, `/music_play_next`, `/music_queue`, `/music_queue_clear`, and `/music_node_status` use Wavelink and require a reachable Lavalink node configured with `LAVALINK_URI` and `LAVALINK_PASSWORD`. The music Cog is loaded without stopping the bot when Wavelink or Lavalink is unavailable.
-- On startup, the Music Cog connects to Lavalink in the background within `LAVALINK_CONNECT_TIMEOUT` seconds (default 15) without blocking other bot features. Once connected, a health-check loop runs every `NODE_HEALTH_CHECK_INTERVAL` seconds (default 30), DMing the owner once when a node goes offline and resetting the flag upon recovery to avoid repeated notifications.
-- When the Lavalink connection fails (timeout, TLS handshake failure, wrong password, or wavelink's `Pool.connect` silently failing to register the node), the bot probes the node's `/version` endpoint for a diagnosis, discards the failed node (its backoff-retry websocket and aiohttp session), and then DMs `DISCORD_OWNER_ID` an error whose message is no longer empty — one DM per outage. If the pool is empty, the health check automatically reconnects after the `LAVALINK_RECONNECT_COOLDOWN` cooldown (default 60 seconds), so no restart is required.
+- `/music_join`, `/music_leave`, `/music_play`, `/music_play_next`, `/music_queue`, `/music_queue_clear`, and `/music_node_status` use `wavelink>=3.5.0,<4.0.0` and require `LAVALINK_NODE1_*` / `LAVALINK_NODE2_*` (or legacy `LAVALINK_URI` / `LAVALINK_PASSWORD`). The music Cog loads without stopping the bot when Wavelink or Lavalink nodes are unavailable.
+- **Dual-Node Lavalink Failover (Week 8)**:
+  - Due to free-tier hosting memory constraints (e.g. Render) and the complexity of maintaining YouTube `poToken`/OAuth2 on self-hosted instances, the bot connects to **two third-party public Lavalink v4 nodes** instead of self-hosting; if only one node is configured, it logs a warning and degrades cleanly to single-node mode.
+  - New players select the optimal `CONNECTED` node via the pure function `pick_best_node()` in `utils/nodes.py` (primary key: fewest players; secondary key: lowest CPU/memory load; gracefully falls back to player count alone when stats are unavailable).
+  - Listening to both `on_wavelink_node_disconnected` and `on_wavelink_node_closed` with per-guild `asyncio.Lock` deduplication: when an active node disconnects, the bot snapshots the track and playback position, rebuilds the player on an alternate `CONNECTED` node in the same voice channel, reloads the track, and seeks back to the original position; if both nodes are down, it notifies the text channel and schedules background exponential-backoff reconnection (capped at 60 seconds).
+- On startup, the Music Cog concurrently connects configured nodes in the background within `LAVALINK_CONNECT_TIMEOUT` seconds (default 15) without blocking other bot features. A health-check loop runs every `NODE_HEALTH_CHECK_INTERVAL` seconds (default 30, minimum 30), refreshing node stats and DMing the owner once when a node goes offline (resetting upon recovery).
+- When a Lavalink connection fails (timeout, TLS handshake failure, wrong password, or wavelink's `Pool.connect` silently failing to register the node), the bot probes the node's `/version` endpoint for a diagnosis, discards the failed node (its backoff-retry websocket and aiohttp session), and DMs `DISCORD_OWNER_ID` an actionable Chinese error message without leaking passwords (once per outage until recovery). Missing configured nodes automatically reconnect after `LAVALINK_RECONNECT_COOLDOWN` (default 60 seconds).
 - The playback queue is a per-server FIFO queue, implemented as `player.song_queue` (a `collections.deque`) in `cogs/music.py`. When a track ends (finishes, is skipped, or errors out), wavelink fires `on_wavelink_track_end`; the listener pops the next track off the front of the queue and plays it automatically, and sends a one-time notice once the queue is empty. `player.autoplay` is set to `disabled` so this listener fully owns the "advance to next track" logic instead of racing with wavelink's built-in autoplay.
 - If a voice channel is left with only the bot (no human members) for more than `EMPTY_VOICE_CHANNEL_TIMEOUT` seconds (default 60), the bot automatically leaves and clears its queue, posting a notice to the text channel where it was last used. This listens to discord.py's `on_voice_state_update` event, checking the bot's channel every time someone joins, leaves, or switches channels; the countdown only starts once no humans remain, and is cancelled immediately if someone comes back, to avoid false positives from brief disconnects/reconnects.
-- `/music_play` reports search failures (source unreachable, anti-bot blocking, etc.) immediately. If a track is accepted but later fails to load in the background (e.g. YouTube requiring login, region restrictions, or a broken stream link on a public node), the bot reports the failure to the text channel where the command was last used via the `on_wavelink_track_exception` listener, instead of only logging it. Public Lavalink node instability is a known risk here; self-hosting a node is planned for later weeks.
+- **Known Limitations (Public Nodes & Sources)**: Third-party public Lavalink nodes are inherently unstable (they may restart, rate-limit, or reject connections at any time), and many public nodes cannot search or stream YouTube due to bot/login checks. `/music_play` therefore tries YouTube first and automatically falls back to SoundCloud (or accepts explicit prefixes like `scsearch:`); background load failures (login prompts, region locks, or dead stream links) are reported cleanly to the text channel via `on_wavelink_track_exception`.
 - `/steal` parses Discord emoji references such as `<:pepe_smile:123456789>` and `<a:cat:456789>`, builds the correct CDN path from the extracted `emoji_id`, and creates custom emoji in the current guild via `guild.create_custom_emoji()`. When a source exceeds Discord's 256 KB limit or cannot be fetched, it returns clear user-facing text instead of leaking the raw API error payload.
 - `/bot_steal` is an `owner_guild_only` and `owner_only` command that shares the same reference parsing, CDN download, and 256 KB validation pipeline as `/steal`, but registers the emoji in the bot's application emoji pool via `bot.create_application_emoji()` while automatically deduplicating against existing application emoji names.
 - `/tts` module converts text into MP3 audio via `gTTS` (Google Text-to-Speech), ported directly from `tts.py` (defaults to English `en` if language is omitted, and uses the first 10 characters of the text if filename is omitted); generation runs in an asynchronous thread to avoid blocking the event loop.

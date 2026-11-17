@@ -265,7 +265,9 @@
           <li><strong>/music_loop</strong> <em>[mode]</em>：切換循環模式（關閉、單曲、佇列），留空則依序切換。</li>
           <li><strong>/music_skip</strong>：跳到下一首。</li>
           <li><strong>/music_stop</strong>：停止並清空佇列，需全員投票同意。</li>
-          <li><strong>/music_node_status</strong>：查看 Lavalink 節點狀態，僅自己可見。</li>
+          <li><strong>/music_node_status</strong>：全域查看所有已設定／連線中 Lavalink 節點的狀態、玩家數、延遲與 CPU／記憶體負載（包含離線節點），僅自己可見。</li>
+          <li><strong>/node_kill</strong> <em>node:&lt;identifier&gt;</em>：（擁有者專用）模擬指定節點斷線，實測雙節點故障轉移。</li>
+          <li><strong>/node_revive</strong> <em>node:&lt;identifier&gt;</em>：（擁有者專用）重新連線指定節點。</li>
           <li><strong>/music_set_channel</strong> <em>[channel]</em>：限定點歌頻道，留空則取消限制。需「管理伺服器」權限。</li>
           <li><strong>/music_playlist</strong> <em>[member:&lt;成員&gt;]</em>：查看個人歌單，每頁 10 首。</li>
           <li><strong>/music_playlist_create</strong> <em>name:&lt;歌單名稱&gt; [is_public:&lt;公開/私人&gt;]</em>：建立歌單（每人 1 個、最多 500 首），並配發 6 碼跨服分享碼。</li>
@@ -273,7 +275,7 @@
           <li><strong>/music_playlist_edit</strong> <em>[name] [is_public] [move_from] [move_to] [delete_index] [regenerate_share_code]</em>：改名、切換公開／私人、調整順序、刪除曲目，或重產分享碼（舊碼立即失效）。</li>
           <li><strong>/music_playlist_remove</strong>：刪除個人歌單，需確認。</li>
           <li><strong>/music_playlist_sync</strong>：將目前佇列非直播歌曲全部加入個人歌單。</li>
-          <li><strong>控制面板</strong>：Container 面板附封面縮圖與即時按鈕（暫停／續播、切歌、停止、音量、循環、隨機）。點歌頻道有人發言時，面板會自動置底；Lavalink 斷線與直播中斷會自動復原。</li>
+          <li><strong>控制面板與雙節點容錯</strong>：Container 面板附封面縮圖與即時按鈕（暫停／續播、切歌、停止、音量、循環、隨機），點歌頻道有人發言時會自動置底；支援雙公開 Lavalink v4 節點自動選點（玩家數＋負載最低）與斷線無縫故障轉移續播，雙節點全斷時自動以指數退避重連。</li>
           <li><strong>點歌者操作鎖</strong>（<code>/music_pause</code>、<code>/music_resume</code>、<code>/music_skip</code>、<code>/music_stop</code>、<code>/music_seek</code>）：點歌者還在語音頻道時，只有他能直接操作該曲，離開後任何人都能操作。
             <ul>
               <li><strong>暫停／續播／跳過／跳轉</strong>：非點歌者會被拒絕。暫停與續播會公開發送「允許／拒絕」按鈕給點歌者，30 秒未決定視為拒絕。</li>
