@@ -468,10 +468,13 @@ def build_now_playing_container(
             str(source_raw).lower(), str(source_raw).capitalize() if source_raw else "Lavalink"
         )
 
-        # 底部資訊：左側為點播者，右側為音訊來源（使用全形空格推至右側，無分隔點，完全貼合手繪 wireframe 架構）
+        # 底部資訊：左側為點播者，右側為音訊來源與連接節點
+        node_obj = getattr(player, "node", None) if player is not None else None
+        node_id = str(getattr(node_obj, "identifier", "") or "").strip() if node_obj is not None else ""
+        node_suffix = f"　｜　節點：{node_id}" if node_id else ""
         footer_text = (
             f"**📜 下一首預告**：{next_preview}\n"
-            f"-# 由 {requester_name} 點播　　　　　　　　　　　　　　來源：{source_display}"
+            f"-# 由 {requester_name} 點播　　　　　　　　　　　　　來源：{source_display}{node_suffix}"
         )
         children.append(ui.TextDisplay(footer_text))
 
@@ -581,6 +584,10 @@ def build_now_playing_embed(player: Any) -> discord.Embed:
     if requester_name:
         footer_parts.append(f"由 {requester_name} 點播")
     footer_parts.append(f"來源：{source_display}")
+    node_obj = getattr(player, "node", None) if player is not None else None
+    node_id = str(getattr(node_obj, "identifier", "") or "").strip() if node_obj is not None else ""
+    if node_id:
+        footer_parts.append(f"節點：{node_id}")
     embed.set_footer(text=" • ".join(footer_parts))
 
     return embed
@@ -986,6 +993,7 @@ class MusicControlView(ui.LayoutView):
     CUSTOM_ID_VOL_UP = "music:vol_up"
     CUSTOM_ID_LOOP = "music:loop"
     CUSTOM_ID_SHUFFLE = "music:shuffle"
+    CUSTOM_ID_SWITCH_NODE = "music:switch_node"
 
     def __init__(
         self,
@@ -1069,7 +1077,15 @@ class MusicControlView(ui.LayoutView):
         )
         self.btn_shuffle.callback = self.toggle_shuffle
 
-        # 組裝成兩列 ActionRow：Row 1 (5 顆)，Row 2 (4 顆：音量 - / 音量 + / 循環 / 隨機)
+        self.btn_switch_node = ui.Button(
+            label="切換節點",
+            emoji="🔄",
+            style=discord.ButtonStyle.secondary,
+            custom_id=self.CUSTOM_ID_SWITCH_NODE,
+        )
+        self.btn_switch_node.callback = self.switch_node
+
+        # 組裝成兩列 ActionRow：Row 1 (5 顆)，Row 2 (5 顆：音量 - / 音量 + / 循環 / 隨機 / 切換節點)
         self.row1 = ui.ActionRow(
             self.btn_toggle,
             self.btn_rewind,
@@ -1077,7 +1093,13 @@ class MusicControlView(ui.LayoutView):
             self.btn_skip,
             self.btn_stop,
         )
-        self.row2 = ui.ActionRow(self.btn_vol_down, self.btn_vol_up, self.btn_loop, self.btn_shuffle)
+        self.row2 = ui.ActionRow(
+            self.btn_vol_down,
+            self.btn_vol_up,
+            self.btn_loop,
+            self.btn_shuffle,
+            self.btn_switch_node,
+        )
 
         # 組裝 Container
         self.container = build_now_playing_container(
@@ -1116,6 +1138,9 @@ class MusicControlView(ui.LayoutView):
             self.btn_shuffle.label = "隨機：關閉"
             self.btn_shuffle.emoji = "🔀"
             self.btn_shuffle.style = discord.ButtonStyle.secondary
+            self.btn_switch_node.label = "切換節點"
+            self.btn_switch_node.emoji = "🔄"
+            self.btn_switch_node.style = discord.ButtonStyle.secondary
             return
 
         track = player.current
@@ -1180,6 +1205,12 @@ class MusicControlView(ui.LayoutView):
             self.btn_shuffle.label = "隨機：關閉"
             self.btn_shuffle.emoji = "🔀"
             self.btn_shuffle.style = discord.ButtonStyle.secondary
+
+        # 切換節點按鈕：播放期間維持啟用，讓成員可即時切換備援節點
+        self.btn_switch_node.disabled = False
+        self.btn_switch_node.label = "切換節點"
+        self.btn_switch_node.emoji = "🔄"
+        self.btn_switch_node.style = discord.ButtonStyle.secondary
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         """統一權限與狀態防呆：
@@ -1473,6 +1504,187 @@ class MusicControlView(ui.LayoutView):
             await cog._sync_panel(interaction.guild.id, player, interaction=interaction)
         elif not interaction.response.is_done():
             await interaction.response.defer()
+
+    async def switch_node(self, interaction: discord.Interaction, button: ui.Button | None = None):
+        """在音樂控制面板手動將目前伺服器的語音連線切換至其他可用 Lavalink 節點。"""
+        player: "wavelink_module.Player" = interaction.guild.voice_client
+        cog: "Music | None" = self.cog or interaction.client.get_cog("Music")
+
+        if getattr(player, "advancing", False):
+            await interaction.response.send_message("⏳ 目前正在切換曲目中，請稍後再試！", ephemeral=True)
+            return
+
+        if cog is None or wavelink is None:
+            await interaction.response.send_message("❌ 語音節點切換功能目前無法使用。", ephemeral=True)
+            return
+
+        current_node_id = (
+            str(getattr(getattr(player, "node", None), "identifier", "") or "").strip()
+            or cog._guild_active_node.get(interaction.guild.id)
+            or ""
+        )
+        candidate = cog._pick_best_node(exclude={current_node_id} if current_node_id else ())
+        if candidate is None:
+            cur_label = current_node_id or "未知"
+            await interaction.response.send_message(
+                f"ℹ️ 目前僅有節點 `{cur_label}` 在線，尚無其他可用節點可切換。",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer()
+        result = await cog._switch_guild_node(
+            interaction.guild,
+            target_node=candidate,
+            operator_name=interaction.user.display_name,
+            sync_panel=False,
+        )
+        if result.get("status") == "ok":
+            await cog._sync_panel(interaction.guild.id, result.get("player"), interaction=interaction)
+        else:
+            msg = result.get("message") or "⚠️ 切換節點失敗，請稍後再試。"
+            try:
+                await interaction.followup.send(msg, ephemeral=True)
+            except discord.HTTPException:
+                pass
+
+
+class NodeStatusSwitchView(ui.View):
+    """/music_node_status 專用互動視圖：當機器人在語音房內時提供切換節點與重新整理按鈕。"""
+
+    def __init__(
+        self,
+        cog: "Music",
+        guild_id: int,
+        current_node_id: str | None,
+        states: dict[str, dict[str, Any]],
+        *,
+        timeout: float = 180.0,
+    ):
+        super().__init__(timeout=timeout)
+        self.cog = cog
+        self.guild_id = guild_id
+        self.current_node_id = current_node_id
+
+        connected_ids = [nid for nid, st in states.items() if st.get("status") == "CONNECTED"]
+        alternate_ids = [nid for nid in connected_ids if nid != current_node_id]
+
+        self.btn_switch = ui.Button(
+            label="切換節點",
+            emoji="🔄",
+            style=discord.ButtonStyle.primary if alternate_ids else discord.ButtonStyle.secondary,
+            disabled=(len(alternate_ids) == 0),
+        )
+        self.btn_switch.callback = self.switch_node
+        self.add_item(self.btn_switch)
+
+        self.btn_refresh = ui.Button(
+            label="重新整理",
+            emoji="🔃",
+            style=discord.ButtonStyle.secondary,
+        )
+        self.btn_refresh.callback = self.refresh_status
+        self.add_item(self.btn_refresh)
+
+        self.node_select: ui.Select | None = None
+        if len(alternate_ids) >= 2:
+            options: list[discord.SelectOption] = []
+            for nid in alternate_ids[:25]:
+                st = states.get(nid, {})
+                lat = st.get("latency_ms")
+                lat_hint = f"延遲 {lat:.1f} ms" if lat is not None else "延遲尚未量測"
+                players_hint = f"玩家數 {int(st.get('players') or 0)}"
+                options.append(
+                    discord.SelectOption(
+                        label=nid[:100],
+                        value=nid[:100],
+                        description=f"{players_hint}｜{lat_hint}"[:100],
+                    )
+                )
+            self.node_select = ui.Select(placeholder="選擇要切換的指定節點...", options=options)
+            self.node_select.callback = self.select_target_node
+            self.add_item(self.node_select)
+
+    async def _check_switch_permission(self, interaction: discord.Interaction) -> bool:
+        guild = interaction.guild
+        if guild is None or guild.id != self.guild_id:
+            await interaction.response.send_message("❌ 僅可在原伺服器中操作此面板。", ephemeral=True)
+            return False
+        player = getattr(guild, "voice_client", None)
+        player_channel = getattr(player, "channel", None) if player is not None else None
+        if player is None or player_channel is None:
+            await interaction.response.send_message("ℹ️ 機器人目前已離開語音頻道，無需切換節點。", ephemeral=True)
+            return False
+
+        user_voice = getattr(interaction.user, "voice", None)
+        same_voice = bool(user_voice and user_voice.channel and user_voice.channel.id == player_channel.id)
+        perms = getattr(interaction.user, "guild_permissions", None)
+        is_admin = bool(perms and perms.manage_guild)
+        is_owner = self.cog._is_bot_owner(interaction) if hasattr(self.cog, "_is_bot_owner") else False
+        if not (same_voice or is_admin or is_owner):
+            ch_label = getattr(player_channel, "mention", None) or getattr(player_channel, "name", "語音頻道")
+            await interaction.response.send_message(
+                f"❌ 你必須跟我在同一個語音頻道（{ch_label}），或具備管理伺服器權限才能切換節點！",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def _perform_switch_and_update(
+        self,
+        interaction: discord.Interaction,
+        *,
+        target_node_id: str | None = None,
+    ) -> None:
+        if not await self._check_switch_permission(interaction):
+            return
+        await interaction.response.defer()
+        result = await self.cog._switch_guild_node(
+            interaction.guild,
+            target_node_id=target_node_id,
+            operator_name=interaction.user.display_name,
+        )
+        connected_nodes = self.cog._get_connected_nodes()
+        if connected_nodes:
+            await asyncio.gather(
+                *(self.cog._refresh_node_stats(n, timeout=2.5) for n in connected_nodes),
+                return_exceptions=True,
+            )
+        embed, new_view = self.cog._build_node_status_response(interaction.guild)
+        try:
+            await interaction.edit_original_response(embed=embed, view=new_view)
+        except discord.HTTPException:
+            pass
+        msg = result.get("message")
+        if msg:
+            try:
+                await interaction.followup.send(msg, ephemeral=True)
+            except discord.HTTPException:
+                pass
+
+    async def switch_node(self, interaction: discord.Interaction, button: ui.Button | None = None):
+        await self._perform_switch_and_update(interaction)
+
+    async def select_target_node(self, interaction: discord.Interaction):
+        selected = self.node_select.values[0] if self.node_select and self.node_select.values else None
+        await self._perform_switch_and_update(interaction, target_node_id=selected)
+
+    async def refresh_status(self, interaction: discord.Interaction, button: ui.Button | None = None):
+        if interaction.guild is None:
+            await interaction.response.send_message("❌ 此操作僅限伺服器內使用。", ephemeral=True)
+            return
+        await interaction.response.defer()
+        connected_nodes = self.cog._get_connected_nodes()
+        if connected_nodes:
+            await asyncio.gather(
+                *(self.cog._refresh_node_stats(n, timeout=3.0) for n in connected_nodes),
+                return_exceptions=True,
+            )
+        embed, new_view = self.cog._build_node_status_response(interaction.guild)
+        try:
+            await interaction.edit_original_response(embed=embed, view=new_view)
+        except discord.HTTPException:
+            pass
 
 
 # ==============================================================================
@@ -2500,7 +2712,7 @@ class Music(commands.Cog):
                 matched_pool_ids.add(ident)
 
             stats = self._node_stats_cache.get(ident)
-            latency = self._node_latencies.get(ident)
+            latency = self._node_latencies.get(ident) if matched_node is not None else None
             if matched_node is not None:
                 mid = str(getattr(matched_node, "identifier", ident) or ident)
                 stats = stats or self._node_stats_cache.get(mid)
@@ -2560,6 +2772,7 @@ class Music(commands.Cog):
                     if stats is not None:
                         self._node_stats_cache[ident] = stats_payload_to_dict(stats)
             except Exception as exc:
+                self._node_latencies.pop(ident, None)
                 print(f">>> 取得節點 {ident} 負載統計失敗（不影響播放）：{exc}")
 
     def _schedule_all_nodes_reconnect(self) -> None:
@@ -3610,8 +3823,10 @@ class Music(commands.Cog):
         message_id: int | None,
     ) -> tuple:
         """建立控制面板的非進度條狀態簽章，避免狀態未變時重複發送 PATCH。"""
+        node_obj = getattr(player, "node", None)
+        node_id = str(getattr(node_obj, "identifier", "") or "") if node_obj is not None else ""
         if player is None or getattr(player, "current", None) is None:
-            return (message_id, None, None, None, None, None, 0, None, notice or "", bool(final))
+            return (message_id, None, None, None, None, None, 0, None, node_id, notice or "", bool(final))
         track = player.current
         track_key = self._track_key(track)
         is_paused = bool(getattr(player, "paused", False))
@@ -3637,6 +3852,7 @@ class Music(commands.Cog):
             shuffle,
             q_len,
             next_key,
+            node_id,
             notice or "",
             bool(final),
         )
@@ -4010,7 +4226,13 @@ class Music(commands.Cog):
         self._active_guild_snapshots.pop(guild_id, None)
         self._guild_active_node.pop(guild_id, None)
 
-    async def _reload_track_on_node(self, track: Any, target_node: Any) -> Any | None:
+    async def _reload_track_on_node(
+        self,
+        track: Any,
+        target_node: Any,
+        *,
+        allow_encoded_fallback: bool = True,
+    ) -> Any | None:
         """在目標節點重新載入同曲目（優先以原網址精準重抓，失敗再退回曲名＋作者搜尋或沿用編碼）。"""
         if track is None or target_node is None or wavelink is None:
             return track
@@ -4028,12 +4250,12 @@ class Music(commands.Cog):
                         return found[0] if found else None
                     return found
             except Exception as exc:
-                print(f"⚠️ [故障轉移] 目標節點以 URI 重新載入「{title or uri}」失敗，改用關鍵字重搜：{exc}")
+                print(f"⚠️ [節點轉移] 目標節點以 URI 重新載入「{title or uri}」失敗，改用關鍵字重搜：{exc}")
 
         search_term = f"{title} {author}".strip() or title
         if search_term:
             try:
-                found = await self._fetch_tracks_with_fallback(search_term, node=target_node)
+                found = await self._fetch_tracks_with_fallback(search_term, node=target_node, strict_node=True)
                 if found:
                     if isinstance(found, wavelink.Playlist):
                         return found.tracks[0] if found.tracks else None
@@ -4041,9 +4263,9 @@ class Music(commands.Cog):
                         return found[0] if found else None
                     return found
             except Exception as exc:
-                print(f"⚠️ [故障轉移] 目標節點以關鍵字重搜「{search_term}」失敗：{exc}")
+                print(f"⚠️ [節點轉移] 目標節點以關鍵字重搜「{search_term}」失敗：{exc}")
 
-        if getattr(track, "encoded", None):
+        if allow_encoded_fallback and getattr(track, "encoded", None):
             return track
         return None
 
@@ -4059,6 +4281,88 @@ class Music(commands.Cog):
                 await home_channel.send(text)
             except Exception:
                 pass
+
+    async def _restore_player_on_node(
+        self,
+        guild: discord.Guild,
+        voice_channel: Any,
+        target_node: Any,
+        snapshot: dict[str, Any],
+        *,
+        preloaded_track: Any = None,
+        allow_encoded_fallback: bool = True,
+    ) -> tuple[Any, Any | None, int, bool]:
+        """共用的玩家重建與續播核心：在目標節點重建 Player、入房、恢復佇列並從原位置繼續播放。"""
+        guild_id = guild.id
+        target_id = str(getattr(target_node, "identifier", "backup") or "backup")
+
+        await self._cleanup_guild_voice_and_player(guild, reset_gateway=True)
+        await asyncio.sleep(0.15)
+        new_player = await self._connect_voice_channel(guild, voice_channel, target_node=target_node)
+
+        new_player.autoplay = wavelink.AutoPlayMode.disabled
+        new_player.song_queue = deque(snapshot.get("song_queue") or [])
+        new_player.loop_mode = snapshot.get("loop_mode", "off")
+        new_player.shuffle = bool(snapshot.get("shuffle", False))
+        new_player.home_channel = snapshot.get("home_channel")
+        self._guild_active_node[guild_id] = target_id
+
+        track = snapshot.get("track")
+        if track is None:
+            self._snapshot_player_state(new_player, dead_node_id=target_id)
+            return new_player, None, 0, False
+
+        reloaded = preloaded_track
+        if reloaded is None:
+            reloaded = await self._reload_track_on_node(
+                track,
+                target_node,
+                allow_encoded_fallback=allow_encoded_fallback,
+            )
+        if reloaded is None:
+            raise RuntimeError(f"目標節點 {target_id} 無法重新載入曲目「{getattr(track, 'title', '未知曲目')}」")
+
+        is_stream = self._is_live_track(reloaded)
+        seek_ms = 0 if is_stream else max(0, int(snapshot.get("position_ms", 0) or 0))
+        t_len = int(getattr(reloaded, "length", 0) or 0)
+        if not is_stream and t_len > 1000:
+            seek_ms = min(seek_ms, t_len - 1000)
+
+        requester_name = snapshot.get("requester_name") or "未知"
+        requester_id = snapshot.get("requester_id")
+        volume = int(snapshot.get("volume", 100))
+        paused = bool(snapshot.get("paused", False))
+
+        new_player.current_requester = requester_name
+        new_player.current_requester_id = requester_id
+        new_player.end_intent = None
+        new_player._stopped_track = None
+        new_player._started_track = None
+        new_player._active_track = reloaded
+        new_player._play_seq = getattr(new_player, "_play_seq", 0) + 1
+        new_player._is_current_stream = is_stream
+        self._reset_player_position_state(new_player, start_ms=seek_ms)
+
+        try:
+            await new_player.play(
+                reloaded,
+                replace=True,
+                start=seek_ms,
+                volume=volume,
+                paused=paused,
+            )
+            if volume == 0 and callable(getattr(new_player, "set_volume", None)):
+                await new_player.set_volume(0)
+        except TypeError:
+            await new_player.play(reloaded)
+            if seek_ms > 0 and callable(getattr(new_player, "seek", None)):
+                await new_player.seek(seek_ms)
+            if paused and callable(getattr(new_player, "pause", None)):
+                await new_player.pause(True)
+
+        self._reset_player_position_state(new_player, start_ms=seek_ms)
+        self._snapshot_player_state(new_player, dead_node_id=target_id)
+        return new_player, reloaded, seek_ms, is_stream
 
     async def _failover_single_guild(
         self,
@@ -4132,20 +4436,14 @@ class Music(commands.Cog):
 
             self._failing_over_guilds.add(guild_id)
             try:
-                await self._cleanup_guild_voice_and_player(guild, reset_gateway=True)
-                await asyncio.sleep(0.15)
-                new_player = await self._connect_voice_channel(guild, voice_channel, target_node=target_node)
-
-                new_player.autoplay = wavelink.AutoPlayMode.disabled
-                new_player.song_queue = deque(snapshot.get("song_queue") or [])
-                new_player.loop_mode = snapshot.get("loop_mode", "off")
-                new_player.shuffle = bool(snapshot.get("shuffle", False))
-                new_player.home_channel = home_channel
-                self._guild_active_node[guild_id] = target_id
-
-                track = snapshot.get("track")
-                if track is None:
-                    self._snapshot_player_state(new_player, dead_node_id=target_id)
+                new_player, reloaded, seek_ms, is_stream = await self._restore_player_on_node(
+                    guild,
+                    voice_channel,
+                    target_node,
+                    snapshot,
+                    allow_encoded_fallback=True,
+                )
+                if reloaded is None:
                     await self._send_failover_notice(
                         guild_id,
                         home_channel,
@@ -4153,50 +4451,6 @@ class Music(commands.Cog):
                     )
                     return {"guild_id": guild_id, "status": "ok", "target_node": target_id, "position_ms": 0}
 
-                reloaded = await self._reload_track_on_node(track, target_node)
-                if reloaded is None:
-                    raise RuntimeError(f"備援節點 {target_id} 無法重新載入曲目「{getattr(track, 'title', '未知曲目')}」")
-
-                is_stream = self._is_live_track(reloaded)
-                seek_ms = 0 if is_stream else max(0, int(snapshot.get("position_ms", 0) or 0))
-                t_len = int(getattr(reloaded, "length", 0) or 0)
-                if not is_stream and t_len > 1000:
-                    seek_ms = min(seek_ms, t_len - 1000)
-
-                requester_name = snapshot.get("requester_name") or "未知"
-                requester_id = snapshot.get("requester_id")
-                volume = int(snapshot.get("volume", 100))
-                paused = bool(snapshot.get("paused", False))
-
-                new_player.current_requester = requester_name
-                new_player.current_requester_id = requester_id
-                new_player.end_intent = None
-                new_player._stopped_track = None
-                new_player._started_track = None
-                new_player._active_track = reloaded
-                new_player._play_seq = getattr(new_player, "_play_seq", 0) + 1
-                new_player._is_current_stream = is_stream
-                self._reset_player_position_state(new_player, start_ms=seek_ms)
-
-                try:
-                    await new_player.play(
-                        reloaded,
-                        replace=True,
-                        start=seek_ms,
-                        volume=volume,
-                        paused=paused,
-                    )
-                    if volume == 0 and callable(getattr(new_player, "set_volume", None)):
-                        await new_player.set_volume(0)
-                except TypeError:
-                    await new_player.play(reloaded)
-                    if seek_ms > 0 and callable(getattr(new_player, "seek", None)):
-                        await new_player.seek(seek_ms)
-                    if paused and callable(getattr(new_player, "pause", None)):
-                        await new_player.pause(True)
-
-                self._reset_player_position_state(new_player, start_ms=seek_ms)
-                self._snapshot_player_state(new_player, dead_node_id=target_id)
                 title_str = getattr(reloaded, "title", "未知曲目")
                 pos_label = "直播起始處" if is_stream else f"`{format_position(seek_ms)}`"
                 notice_text = (
@@ -4237,6 +4491,158 @@ class Music(commands.Cog):
             finally:
                 self._failing_over_guilds.discard(guild_id)
 
+    async def _switch_guild_node(
+        self,
+        guild: discord.Guild,
+        *,
+        target_node: Any | None = None,
+        target_node_id: str | None = None,
+        operator_name: str | None = None,
+        sync_panel: bool = True,
+    ) -> dict[str, Any]:
+        """手動將指定伺服器的語音房播放器切換至其他可用 Lavalink 節點（含曲目預載檢查與狀態鎖保護）。"""
+        guild_id = guild.id
+        async with self._get_guild_failover_lock(guild_id):
+            live_vc = getattr(guild, "voice_client", None)
+            voice_channel = getattr(live_vc, "channel", None) if live_vc is not None else None
+            if live_vc is None or voice_channel is None:
+                return {
+                    "guild_id": guild_id,
+                    "status": "not_connected",
+                    "message": "ℹ️ 機器人目前不在任何語音頻道中。",
+                }
+
+            current_node = getattr(live_vc, "node", None)
+            from_node_id = (
+                str(getattr(current_node, "identifier", "") or "").strip()
+                or self._guild_active_node.get(guild_id)
+                or ""
+            )
+
+            chosen = target_node
+            if chosen is None and target_node_id:
+                pool_nodes = self._get_pool_nodes()
+                cand = pool_nodes.get(target_node_id)
+                if cand is not None and getattr(getattr(cand, "status", None), "name", None) == "CONNECTED":
+                    chosen = cand
+            if chosen is None:
+                chosen = self._pick_best_node(exclude={from_node_id} if from_node_id else ())
+
+            if chosen is None:
+                cur_label = from_node_id or "未知"
+                return {
+                    "guild_id": guild_id,
+                    "status": "no_other_node",
+                    "current_node": cur_label,
+                    "message": f"ℹ️ 目前僅有節點 `{cur_label}` 在線，尚無其他可用節點可切換。",
+                }
+
+            target_id = str(getattr(chosen, "identifier", "") or "")
+            if from_node_id and target_id == from_node_id:
+                return {
+                    "guild_id": guild_id,
+                    "status": "same_node",
+                    "current_node": from_node_id,
+                    "target_node": target_id,
+                    "message": f"ℹ️ 目前語音房已經連接在節點 `{target_id}` 上。",
+                }
+
+            # 避免手動切換待機中的玩家時誤抓殘留快取曲目：只取實時播放中的曲目
+            live_track = (
+                getattr(live_vc, "current", None)
+                or getattr(live_vc, "_active_track", None)
+                or getattr(live_vc, "_started_track", None)
+            )
+            snapshot = self._snapshot_player_state(live_vc, dead_node_id=from_node_id) or {}
+            snapshot["track"] = live_track
+            home_channel = snapshot.get("home_channel")
+
+            # 在維持原播放器不斷線的情況下，先驗證目標節點可順利載入目前曲目；
+            # 若目標節點不支援該音源，立即中止切換並保留原節點繼續播放。
+            preloaded_track = None
+            if live_track is not None:
+                preloaded_track = await self._reload_track_on_node(
+                    live_track,
+                    chosen,
+                    allow_encoded_fallback=False,
+                )
+                if preloaded_track is None:
+                    title_str = getattr(live_track, "title", "未知曲目")
+                    msg = (
+                        f"⚠️ 目標節點 `{target_id}` 無法載入目前曲目「{title_str}」，"
+                        f"已維持原節點 `{from_node_id or '未知'}` 繼續播放。"
+                    )
+                    return {
+                        "guild_id": guild_id,
+                        "status": "reload_failed",
+                        "current_node": from_node_id,
+                        "target_node": target_id,
+                        "message": msg,
+                    }
+                # 預載期間播放仍持續前進，重建前再更新一次精確位置
+                snapshot["position_ms"] = self._get_safe_position_ms(live_vc)
+
+            self._failing_over_guilds.add(guild_id)
+            try:
+                new_player, reloaded, seek_ms, is_stream = await self._restore_player_on_node(
+                    guild,
+                    voice_channel,
+                    chosen,
+                    snapshot,
+                    preloaded_track=preloaded_track,
+                    allow_encoded_fallback=False,
+                )
+                op_suffix = f"（操作者：{operator_name}）" if operator_name else ""
+                from_label = from_node_id or "原節點"
+                if reloaded is None:
+                    msg = f"🔄 已切換語音節點：`{from_label}` ➜ `{target_id}`{op_suffix}。"
+                else:
+                    title_str = getattr(reloaded, "title", "未知曲目")
+                    pos_label = "直播起始處" if is_stream else f"`{format_position(seek_ms)}`"
+                    msg = (
+                        f"🔄 已切換音訊節點：`{from_label}` ➜ `{target_id}`，"
+                        f"並從 {pos_label} 繼續播放 **{title_str}**{op_suffix}！"
+                    )
+                    self._set_panel_notice(guild_id, msg, duration=10.0)
+                    if sync_panel and guild_id in self.panel_messages:
+                        try:
+                            await self._sync_panel(guild_id, new_player)
+                        except Exception:
+                            pass
+
+                print(f"🔄 [手動切換節點] guild_id={guild_id}：{from_label} -> {target_id}{op_suffix}")
+                return {
+                    "guild_id": guild_id,
+                    "status": "ok",
+                    "from_node": from_node_id,
+                    "target_node": target_id,
+                    "position_ms": seek_ms,
+                    "player": new_player,
+                    "message": msg,
+                }
+            except Exception as exc:
+                print(f"❌ [手動切換節點] guild_id={guild_id} 從 {from_node_id} 切換至 {target_id} 失敗：{exc}")
+                await self._cleanup_guild_voice_and_player(guild, reset_gateway=True)
+                self._clear_guild_snapshot(guild_id)
+                fail_msg = (
+                    f"⚠️ 嘗試切換至節點 `{target_id}` 時發生錯誤：{exc}，已結束目前語音連線。"
+                )
+                await self._update_panel_ended(guild_id, reason=fail_msg)
+                if home_channel is not None and hasattr(home_channel, "send"):
+                    try:
+                        await home_channel.send(fail_msg)
+                    except Exception:
+                        pass
+                return {
+                    "guild_id": guild_id,
+                    "status": "failed",
+                    "target_node": target_id,
+                    "error": str(exc),
+                    "message": fail_msg,
+                }
+            finally:
+                self._failing_over_guilds.discard(guild_id)
+
     async def _handle_node_disconnect_event(
         self,
         node: Any,
@@ -4251,8 +4657,11 @@ class Music(commands.Cog):
         dead_id = str(getattr(node, "identifier", "") or "")
         print(f"⚠️ [{reason_label}] 偵測到 Lavalink 節點離線：{dead_id or getattr(node, 'uri', 'unknown')}")
 
-        if dead_id and dead_id not in self._node_last_errors:
-            self._node_last_errors[dead_id] = reason_label
+        if dead_id:
+            self._node_latencies.pop(dead_id, None)
+            self._node_stats_cache.pop(dead_id, None)
+            if dead_id not in self._node_last_errors:
+                self._node_last_errors[dead_id] = reason_label
 
         snapshots: dict[int, dict[str, Any]] = dict(pre_snapshots or {})
         candidate_players: list[Any] = list(disconnected_players or [])
@@ -5149,8 +5558,13 @@ class Music(commands.Cog):
             else:
                 target_channel = getattr(vc, "channel", None)
                 channel_mention = target_channel.mention if target_channel else "語音"
+                active_nid = (
+                    str(getattr(getattr(vc, "node", None), "identifier", "") or "").strip()
+                    or self._guild_active_node.get(interaction.guild.id)
+                )
+                node_hint = f"（目前連接節點：`{active_nid}`）" if active_nid else ""
                 await interaction.response.send_message(
-                    f"ℹ️ 我已經在 {channel_mention} 頻道中了。", ephemeral=True
+                    f"ℹ️ 我已經在 {channel_mention} 頻道中了{node_hint}。", ephemeral=True
                 )
                 return
 
@@ -5196,7 +5610,12 @@ class Music(commands.Cog):
         self._cancel_empty_channel_timer(interaction.guild.id)
         self._snapshot_player_state(player)
 
-        await interaction.followup.send(f"🔊 已加入 {channel.mention}！", ephemeral=True)
+        active_nid = (
+            str(getattr(getattr(player, "node", None), "identifier", "") or "").strip()
+            or self._guild_active_node.get(interaction.guild.id)
+        )
+        node_hint = f"（連接節點：`{active_nid}`）" if active_nid else ""
+        await interaction.followup.send(f"🔊 已加入 {channel.mention}！{node_hint}", ephemeral=True)
 
     @app_commands.command(name="music_leave", description="讓機器人離開目前所在的語音頻道")
     @app_commands.guild_only()
@@ -5249,14 +5668,16 @@ class Music(commands.Cog):
     async def _invoke_playable_search(query: str, *, source: str | None = None, node: Any = None) -> Any:
         """封裝 wavelink.Playable.search，加入 timeout 並相容測試替身函式簽名。"""
         search_fn = wavelink.Playable.search
+        sig_target = getattr(search_fn, "side_effect", None)
+        if not callable(sig_target):
+            sig_target = search_fn
         try:
-            params = inspect.signature(search_fn).parameters
+            params = inspect.signature(sig_target).parameters
         except (TypeError, ValueError):
             params = {}
-        supports_node = "node" in params
-        supports_source = "source" in params or any(
-            p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
-        )
+        has_var_kw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+        supports_node = "node" in params or has_var_kw
+        supports_source = "source" in params or has_var_kw
 
         kwargs: dict[str, Any] = {}
         if source is not None and supports_source:
@@ -5270,14 +5691,20 @@ class Music(commands.Cog):
             coro = search_fn(query)
         return await asyncio.wait_for(coro, timeout=LAVALINK_SEARCH_TIMEOUT)
 
-    async def _fetch_tracks_with_fallback(self, query: str, *, node: Any = None) -> Any:
+    async def _fetch_tracks_with_fallback(
+        self,
+        query: str,
+        *,
+        node: Any = None,
+        strict_node: bool = False,
+    ) -> Any:
         """核心搜尋演算法：支援 URL、自帶前綴、多節點容錯，並對純關鍵字進行多來源智慧 Fallback。
 
         - 修正問題：wavelink 3.x 預設使用 ytmsearch:（YouTube Music），但多數公開節點對 ytmsearch
           回傳空結果（empty）或錯誤，導致一般關鍵字搜尋完全無法找到歌曲。
         - 解決方案：純關鍵字優先使用「ytsearch:」（標準 YouTube 搜尋），並在無結果或失敗時
           依序自動 fallback 到「scsearch:」（SoundCloud）與「ytmsearch:」（YouTube Music）；
-          在雙節點均可用時，若單一節點失敗亦會自動嘗試備援節點。
+          在雙節點均可用時，若單一節點失敗亦會自動嘗試備援節點（除非指定 `strict_node=True` 僅在目標節點測試）。
         - 針對 URL 與自帶前綴（例如 ytsearch:、scsearch: 等）直接傳送，不重疊添加前綴。
         """
         clean_query = query.strip().strip("<>")
@@ -5286,7 +5713,10 @@ class Music(commands.Cog):
             clean_query.lower().startswith(p)
             for p in ("ytsearch:", "ytmsearch:", "scsearch:", "spsearch:", "amsearch:")
         )
-        candidate_nodes = self._get_candidate_search_nodes(preferred_node=node)
+        if strict_node and node is not None:
+            candidate_nodes = [node]
+        else:
+            candidate_nodes = self._get_candidate_search_nodes(preferred_node=node)
 
         if is_url or has_prefix:
             last_err: Exception | None = None
@@ -8085,40 +8515,14 @@ class Music(commands.Cog):
                 break
         return choices
 
-    @app_commands.command(name="music_node_status", description="查看目前所有 Lavalink 節點的連線狀態、玩家數、延遲與負載")
-    async def node_status(self, interaction: discord.Interaction):
-        if interaction.guild_id is not None and not await self._check_music_channel(interaction):
-            return
-        if wavelink is None:
-            await interaction.response.send_message("❌ 語音模組尚未安裝完成，請聯絡管理員。", ephemeral=True)
-            return
-
-        await interaction.response.defer(ephemeral=True, thinking=True)
-
-        if not self._configured_nodes:
-            for cfg in load_lavalink_node_configs(log_warnings=False):
-                self._configured_nodes[cfg.identifier] = cfg
-
-        try:
-            connected_nodes = self._get_connected_nodes()
-            if connected_nodes:
-                await asyncio.gather(
-                    *(self._refresh_node_stats(n, timeout=3.0) for n in connected_nodes),
-                    return_exceptions=True,
-                )
+    def _build_node_status_response(
+        self,
+        guild: discord.Guild | None,
+        states: dict[str, dict[str, Any]] | None = None,
+    ) -> tuple[discord.Embed, "NodeStatusSwitchView | None"]:
+        """組裝 /music_node_status Embed；若機器人在語音房內則額外顯示使用中的節點並附帶切換視圖。"""
+        if states is None:
             states = self._get_node_states()
-        except Exception as e:
-            print(f">>> /music_node_status 讀取節點清單失敗：{e}")
-            await self.bot.notify_owner_error(e, interaction, extra_info="/music_node_status 讀取節點清單失敗")
-            await interaction.followup.send("❌ 讀取節點狀態時發生錯誤，已回報開發者。", ephemeral=True)
-            return
-
-        if not states:
-            await interaction.followup.send(
-                "⚠️ 目前沒有任何已設定或註冊的 Lavalink 節點，請確認 `LAVALINK_NODE1_*` / `LAVALINK_NODE2_*`（或 `LAVALINK_URI`）是否已設定。",
-                ephemeral=True,
-            )
-            return
 
         connected_count = sum(1 for st in states.values() if st.get("status") == "CONNECTED")
         best_id = pick_best_node(states)
@@ -8129,9 +8533,30 @@ class Music(commands.Cog):
         else:
             embed_color = discord.Color.red()
 
+        voice_channel = None
+        current_voice_node_id: str | None = None
+        player = getattr(guild, "voice_client", None) if guild is not None else None
+        if player is not None:
+            voice_channel = getattr(player, "channel", None)
+            if voice_channel is not None:
+                p_node = getattr(player, "node", None)
+                current_voice_node_id = (
+                    (str(getattr(p_node, "identifier", "") or "").strip() if p_node is not None else "")
+                    or self._guild_active_node.get(guild.id)
+                    or None
+                )
+
+        desc_lines = [f"已設定／註冊節點：**{len(states)}** 個｜在線：**{connected_count}** 個"]
+        if voice_channel is not None:
+            ch_label = getattr(voice_channel, "mention", None) or getattr(voice_channel, "name", "語音頻道")
+            node_label = f"`{current_voice_node_id}`" if current_voice_node_id else "`未知`"
+            vc_track = getattr(player, "current", None) or getattr(player, "_active_track", None)
+            vc_state = f"播放中：`{getattr(vc_track, 'title', '未知曲目')}`" if vc_track is not None else "待機中"
+            desc_lines.append(f"🎧 目前語音頻道 {ch_label} 連接節點：{node_label}（{vc_state}）")
+
         embed = discord.Embed(
-            title="🖥️ Lavalink 雙節點容錯狀態",
-            description=f"已設定／註冊節點：**{len(states)}** 個｜在線：**{connected_count}** 個",
+            title="🖥️ Lavalink 節點狀態",
+            description="\n".join(desc_lines),
             color=embed_color,
             timestamp=discord.utils.utcnow(),
         )
@@ -8194,14 +8619,68 @@ class Music(commands.Cog):
             if status_name != "CONNECTED" and last_err:
                 value_lines.append(f"**備註：** {redact_secrets(last_err)[:150]}")
 
-            role_badge = " ⭐ 優先選用" if best_id == identifier else ""
+            badges = []
+            if current_voice_node_id and current_voice_node_id == identifier:
+                badges.append("🎧 目前語音使用中")
+            if best_id == identifier:
+                badges.append("⭐ 優先選用")
+            badge_suffix = f" {'｜'.join(badges)}" if badges else ""
             embed.add_field(
-                name=f"📡 {identifier}{role_badge}",
+                name=f"📡 {identifier}{badge_suffix}",
                 value="\n".join(value_lines),
                 inline=False,
             )
 
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        view = None
+        if guild is not None and voice_channel is not None:
+            view = NodeStatusSwitchView(
+                self,
+                guild_id=guild.id,
+                current_node_id=current_voice_node_id,
+                states=states,
+            )
+        return embed, view
+
+    @app_commands.command(name="music_node_status", description="查看目前所有 Lavalink 節點的連線狀態、玩家數、延遲與負載")
+    async def node_status(self, interaction: discord.Interaction):
+        if interaction.guild_id is not None and not await self._check_music_channel(interaction):
+            return
+        if wavelink is None:
+            await interaction.response.send_message("❌ 語音模組尚未安裝完成，請聯絡管理員。", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        if not self._configured_nodes:
+            for cfg in load_lavalink_node_configs(log_warnings=False):
+                self._configured_nodes[cfg.identifier] = cfg
+
+        try:
+            connected_nodes = self._get_connected_nodes()
+            if connected_nodes:
+                await asyncio.gather(
+                    *(self._refresh_node_stats(n, timeout=3.0) for n in connected_nodes),
+                    return_exceptions=True,
+                )
+            states = self._get_node_states()
+        except Exception as e:
+            print(f">>> /music_node_status 讀取節點清單失敗：{e}")
+            await self.bot.notify_owner_error(e, interaction, extra_info="/music_node_status 讀取節點清單失敗")
+            await interaction.followup.send("❌ 讀取節點狀態時發生錯誤，已回報開發者。", ephemeral=True)
+            return
+
+        if not states:
+            await interaction.followup.send(
+                "⚠️ 目前沒有任何已設定或註冊的 Lavalink 節點，請確認 `LAVALINK_NODE1_*` / `LAVALINK_NODE2_*`（或 `LAVALINK_URI`）是否已設定。",
+                ephemeral=True,
+            )
+            return
+
+        embed, view = self._build_node_status_response(interaction.guild, states)
+        if view is not None:
+            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+        else:
+            await interaction.followup.send(embed=embed, ephemeral=True)
 
     @_owner_guild_only
     @app_commands.command(name="node_kill", description="[擁有者] 模擬指定 Lavalink 節點斷線以實測故障轉移")

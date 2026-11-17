@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
@@ -192,18 +193,23 @@ def pick_best_node(
     選擇規則（依序套用）：
     1. **狀態過濾**：只考慮狀態為 `CONNECTED` 且不在 `exclude` 排除清單中的節點；
        若沒有任何可用節點，回傳 `None`。
-    2. **主要指標（玩家數優先）**：找出目前 `players`（玩家數）最低的候選節點群組；
+    2. **延遲偵測優先級**：若存在任何已偵測到有效延遲（`latency_ms` 為非負數值）的在線節點，
+       未偵測到延遲（`latency_ms is None` 或無效負值）的節點優先順序一律往後排；
+       僅在所有在線節點都尚未偵測到延遲時，才一起進入後續評比。
+    3. **主要指標（玩家數優先）**：找出目前 `players`（玩家數）最低的候選節點群組；
        只要某節點玩家數嚴格少於另一節點，即優先勝出。
-    3. **輔助指標（CPU／記憶體負載）**：當多個節點玩家數相同時，檢查是否皆能取得
-       CPU 或記憶體負載分數；若皆有負載資料，挑出負載分數最低者。
-    4. **無負載資料退回機制**：若相同玩家數的候選節點中缺少負載資料（例如剛連上尚未
-       收到 `/v4/stats`），安全退回只比較玩家數（維持輸入順序取第一個）。
+    4. **輔助指標（CPU／記憶體負載與延遲）**：當多個節點玩家數相同時，檢查是否皆能取得
+       CPU 或記憶體負載分數；若皆有負載資料，挑出負載分數最低者（若負載分數相同，
+       再以延遲低者勝出）。
+    5. **無負載資料退回機制**：若相同玩家數的候選節點中缺少負載資料（例如剛連上尚未
+       收到 `/v4/stats`），安全退回優先選擇已測得延遲中較低者（若無延遲資料則維持順序取第一個）。
     """
     if not node_states:
         return None
 
     excluded_ids = {str(x) for x in exclude if x is not None}
-    candidates: list[tuple[str, int, float | None]] = []
+    # (identifier, players, load_score, latency_ms)
+    candidates: list[tuple[str, int, float | None, float | None]] = []
 
     for identifier, info in node_states.items():
         ident_str = str(identifier)
@@ -223,23 +229,43 @@ def pick_best_node(
             players = 0
 
         load_score = _compute_load_score(info)
-        candidates.append((ident_str, players, load_score))
+        latency_ms = _to_non_negative_float(info.get("latency_ms"))
+        candidates.append((ident_str, players, load_score, latency_ms))
 
     if not candidates:
         return None
 
+    # 若有任何在線節點已測得延遲，未偵測到延遲（None）的節點自動往後排，僅保留有延遲者參與優先評比；
+    # 若全部在線節點都尚未測得延遲，則全數納入評比。
+    with_latency = [item for item in candidates if item[3] is not None]
+    pool = with_latency if with_latency else candidates
+
     # 先找出玩家數最少的一群候選節點
-    min_players = min(item[1] for item in candidates)
-    tied = [item for item in candidates if item[1] == min_players]
+    min_players = min(item[1] for item in pool)
+    tied = [item for item in pool if item[1] == min_players]
 
     if len(tied) == 1:
         return tied[0][0]
 
     # 玩家數相同時，若所有平手節點都有可取得的 CPU／記憶體負載資料，再比負載最低者；
-    # 若有節點取不到負載資料，依規則退回只比玩家數（維持順序選第一位）。
+    # 若負載亦相同（且皆有延遲），再以延遲較低者勝出。
     if all(item[2] is not None for item in tied):
-        best = min(tied, key=lambda item: float(item[2]))  # type: ignore[arg-type]
-        return best[0]
+        min_load = min(float(item[2]) for item in tied)  # type: ignore[arg-type]
+        load_tied = [
+            item for item in tied
+            if math.isclose(float(item[2]), min_load, rel_tol=1e-9, abs_tol=1e-9)  # type: ignore[arg-type]
+        ]
+        if len(load_tied) == 1:
+            return load_tied[0][0]
+        if all(item[3] is not None for item in load_tied):
+            best_lat = min(load_tied, key=lambda item: float(item[3]))  # type: ignore[arg-type]
+            return best_lat[0]
+        return load_tied[0][0]
+
+    # 若部分節點缺乏負載資料，優先以實測延遲較低者決勝；無延遲資料則維持輸入順序選第一位。
+    if all(item[3] is not None for item in tied):
+        best_lat = min(tied, key=lambda item: float(item[3]))  # type: ignore[arg-type]
+        return best_lat[0]
 
     return tied[0][0]
 
@@ -270,7 +296,7 @@ def extract_node_state(
             "memory_reservable": None,
             "memory_free": None,
             "memory_ratio": None,
-            "latency_ms": latency_ms,
+            "latency_ms": None,
             "session_id": None,
         }
 
@@ -312,7 +338,7 @@ def extract_node_state(
         "memory_allocated": mem_alloc,
         "memory_reservable": mem_res,
         "memory_free": mem_free,
-        "latency_ms": latency_ms,
+        "latency_ms": latency_ms if status_name == "CONNECTED" else None,
         "session_id": getattr(node, "session_id", None),
     }
     if lavalink_load is not None and system_load is not None:
