@@ -13,7 +13,7 @@ import traceback
 from collections import deque
 from dataclasses import dataclass
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Iterable
 
 import aiohttp
 import discord
@@ -69,6 +69,49 @@ LAVALINK_PROBE_TIMEOUT = 5.0
 # 雙節點全斷時背景指數退避重連的起始間隔與最大上限秒數（上限 60 秒）
 LAVALINK_BACKOFF_BASE = float(os.getenv('LAVALINK_BACKOFF_BASE', '5'))
 LAVALINK_BACKOFF_MAX = min(60.0, float(os.getenv('LAVALINK_BACKOFF_MAX', '60')))
+
+# 後台擁有者權限檢查（供 /node_kill、/node_revive 使用）
+OWNER_ID_ENV = os.getenv('DISCORD_OWNER_ID') or os.getenv('OWNER_ID')
+try:
+    OWNER_ID_ENV = int(OWNER_ID_ENV) if OWNER_ID_ENV else None
+except ValueError:
+    OWNER_ID_ENV = None
+
+OWNER_GUILD_ID = os.getenv('DISCORD_OWNER_GUILD_ID') or os.getenv('OWNER_GUILD_ID')
+try:
+    OWNER_GUILD_ID = int(OWNER_GUILD_ID) if OWNER_GUILD_ID else None
+except ValueError:
+    OWNER_GUILD_ID = None
+
+
+def _get_bot_owner_id(bot: Any) -> int | None:
+    """取得機器人擁有者 ID（優先讀取 bot.owner_id，退回環境變數 DISCORD_OWNER_ID / OWNER_ID）。"""
+    oid = getattr(bot, 'owner_id', None)
+    if oid is not None:
+        try:
+            return int(oid)
+        except (TypeError, ValueError):
+            pass
+    raw = os.getenv('DISCORD_OWNER_ID') or os.getenv('OWNER_ID')
+    if raw:
+        try:
+            return int(str(raw).strip())
+        except ValueError:
+            return None
+    return OWNER_ID_ENV
+
+
+def _owner_guild_only(command_func):
+    """將指令限制在開發者專屬伺服器 (OWNER_GUILD_ID) 同步顯示。"""
+    if OWNER_GUILD_ID is None:
+        return command_func
+    return app_commands.guilds(OWNER_GUILD_ID)(command_func)
+
+
+def _owner_only_check(interaction: discord.Interaction) -> bool:
+    """執行期驗證互動者是否為機器人擁有者（比對 OWNER_ID）。"""
+    owner_id = _get_bot_owner_id(interaction.client)
+    return owner_id is not None and interaction.user.id == owner_id
 
 # Pool 為空時自動重連的冷卻秒數，可用環境變數覆寫。
 # 沒有冷卻的話，health check 每 NODE_HEALTH_CHECK_INTERVAL 秒就會重連一次，節點長時間故障時會變成洗版式重試。
@@ -4359,18 +4402,15 @@ class Music(commands.Cog):
         combined_text = f"{message or ''} {cause or ''}".lower()
         if "login" in combined_text or "sign in" in combined_text:
             reason_hint = (
-                "\n🔍 研判原因：YouTube 判定這個請求需要登入驗證，疑似觸發了反爬蟲機制。"
-                "這是已知的技術風險，規劃在第8週設定 poToken／OAuth2 來解決，目前這首歌先跳過。"
+                "\n🔍 研判原因：YouTube 判定這個請求需要登入驗證（公開 Lavalink 節點常見限制），"
+                "建議改用 `scsearch:` 關鍵字從 SoundCloud 搜尋，目前這首歌先跳過。"
             )
         elif "not available" in combined_text or "region" in combined_text:
             reason_hint = "\n🔍 研判原因：這支影片可能有地區限制，換一個來源或影片試試看。"
         elif severity == "fault" or "invalid status code" in combined_text or " 404" in combined_text:
-            # 實測發現：目前使用的是公開 Lavalink 節點，曾遇過 SoundCloud 串流連結
-            # 直接回傳 404（節點端問題，不是我們程式碼的邏輯錯誤）。這正是計畫書裡
-            # 「公開節點本質上不穩定」的實際案例，也是第8週要自架節點的理由之一。
             reason_hint = (
-                "\n🔍 研判原因：這個音源的連結目前是壞的（來源站回傳錯誤），"
-                "常見於目前使用的公開 Lavalink 節點不穩定，換一首歌或稍後再試看看。"
+                "\n🔍 研判原因：這個音源的連結目前無效（來源站回傳錯誤），"
+                "常見於公開 Lavalink 節點暫時不穩定，可換一首歌或稍後再試。"
             )
         else:
             reason_hint = ""
@@ -7992,57 +8032,332 @@ class Music(commands.Cog):
             f"{self._operator_stamp(interaction)}",
         )
 
-    @app_commands.command(name="music_node_status", description="查看目前 Lavalink 節點的連線狀態")
-    @app_commands.guild_only()
+    @staticmethod
+    def _format_node_status_label(status_name: str, *, is_manual_kill: bool = False) -> str:
+        labels = {
+            "CONNECTED": "🟢 已連線",
+            "CONNECTING": "🟡 連線中",
+            "DISCONNECTED": "🔴 已離線",
+        }
+        base = labels.get(status_name, f"❔ 未知（{status_name}）")
+        if is_manual_kill and status_name != "CONNECTED":
+            return f"{base}（已透過 `/node_kill` 停用）"
+        return base
+
+    def _find_configured_node_config(self, identifier: str) -> LavalinkNodeConfig | None:
+        """依據節點識別名稱尋找設定物件（先查快取設定，再重讀環境變數）。"""
+        key = (identifier or "").strip()
+        if not key:
+            return None
+        if key in self._configured_nodes:
+            return self._configured_nodes[key]
+        for cfg in load_lavalink_node_configs(log_warnings=False):
+            self._configured_nodes[cfg.identifier] = cfg
+            if cfg.identifier == key:
+                return cfg
+        return None
+
+    async def _node_identifier_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        """自動補全目前所有已設定或連線池中的節點識別名稱。"""
+        if not _owner_only_check(interaction):
+            return []
+        if not self._configured_nodes:
+            for cfg in load_lavalink_node_configs(log_warnings=False):
+                self._configured_nodes[cfg.identifier] = cfg
+        states = self._get_node_states()
+        kw = (current or "").strip().lower()
+        choices: list[app_commands.Choice[str]] = []
+        for ident, st in states.items():
+            if kw and kw not in ident.lower() and kw not in str(st.get("uri", "")).lower():
+                continue
+            status_emoji = "🟢" if st.get("status") == "CONNECTED" else "🔴"
+            label = f"{status_emoji} {ident} ({st.get('uri', '未設定')})"[:100]
+            choices.append(app_commands.Choice(name=label, value=ident))
+            if len(choices) >= 25:
+                break
+        return choices
+
+    @app_commands.command(name="music_node_status", description="查看目前所有 Lavalink 節點的連線狀態、玩家數、延遲與負載")
     async def node_status(self, interaction: discord.Interaction):
-        if not await self._check_music_channel(interaction):
+        if interaction.guild_id is not None and not await self._check_music_channel(interaction):
             return
         if wavelink is None:
             await interaction.response.send_message("❌ 語音模組尚未安裝完成，請聯絡管理員。", ephemeral=True)
             return
 
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        if not self._configured_nodes:
+            for cfg in load_lavalink_node_configs(log_warnings=False):
+                self._configured_nodes[cfg.identifier] = cfg
+
         try:
-            nodes = wavelink.Pool.nodes
+            connected_nodes = self._get_connected_nodes()
+            if connected_nodes:
+                await asyncio.gather(
+                    *(self._refresh_node_stats(n, timeout=3.0) for n in connected_nodes),
+                    return_exceptions=True,
+                )
+            states = self._get_node_states()
         except Exception as e:
             print(f">>> /music_node_status 讀取節點清單失敗：{e}")
             await self.bot.notify_owner_error(e, interaction, extra_info="/music_node_status 讀取節點清單失敗")
-            await interaction.response.send_message("❌ 讀取節點狀態時發生錯誤，已回報開發者。", ephemeral=True)
+            await interaction.followup.send("❌ 讀取節點狀態時發生錯誤，已回報開發者。", ephemeral=True)
             return
 
-        if not nodes:
-            await interaction.response.send_message(
-                "⚠️ 目前沒有任何已註冊的 Lavalink 節點，請確認 `LAVALINK_URI` / `LAVALINK_PASSWORD` 是否已設定。",
+        if not states:
+            await interaction.followup.send(
+                "⚠️ 目前沒有任何已設定或註冊的 Lavalink 節點，請確認 `LAVALINK_NODE1_*` / `LAVALINK_NODE2_*`（或 `LAVALINK_URI`）是否已設定。",
                 ephemeral=True,
             )
             return
 
+        connected_count = sum(1 for st in states.values() if st.get("status") == "CONNECTED")
+        best_id = pick_best_node(states)
+        if connected_count == len(states):
+            embed_color = discord.Color.green()
+        elif connected_count > 0:
+            embed_color = discord.Color.orange()
+        else:
+            embed_color = discord.Color.red()
+
         embed = discord.Embed(
-            title="🖥️ Lavalink 節點狀態",
-            description=f"目前共有 {len(nodes)} 個節點",
-            color=discord.Color.blurple(),
+            title="🖥️ Lavalink 雙節點容錯狀態",
+            description=f"已設定／註冊節點：**{len(states)}** 個｜在線：**{connected_count}** 個",
+            color=embed_color,
             timestamp=discord.utils.utcnow(),
         )
 
-        for identifier, node in nodes.items():
-            status_name, status_label = self._describe_node_status(node)
-            uri = getattr(node, "uri", "未知網址")
-            player_count = len(getattr(node, "players", None) or {})
+        for identifier, st in states.items():
+            status_name = str(st.get("status") or "UNKNOWN")
+            status_label = self._format_node_status_label(
+                status_name,
+                is_manual_kill=(identifier in self._manually_killed_nodes),
+            )
+            uri = st.get("uri") or "未知網址"
+            local_players = int(st.get("local_players") or 0)
+            total_players = st.get("total_players")
+            players_str = (
+                f"本機 {local_players} / 節點總計 {total_players}"
+                if total_players is not None
+                else f"{local_players}"
+            )
+
+            latency_ms = st.get("latency_ms")
+            latency_str = f"{latency_ms:.1f} ms" if latency_ms is not None else "N/A（尚未量測或離線）"
+
+            ll_load = st.get("lavalink_load")
+            sys_load = st.get("system_load")
+            cores = st.get("cpu_cores")
+            if ll_load is not None or sys_load is not None:
+                cpu_parts = []
+                if ll_load is not None:
+                    cpu_parts.append(f"Lavalink {ll_load * 100:.1f}%")
+                if sys_load is not None:
+                    cpu_parts.append(f"系統 {sys_load * 100:.1f}%")
+                core_tag = f"（{cores} 核心）" if cores else ""
+                cpu_str = " / ".join(cpu_parts) + core_tag
+            else:
+                cpu_str = "N/A"
+
+            mem_used = st.get("memory_used")
+            mem_cap = st.get("memory_reservable") or st.get("memory_allocated")
+            mem_ratio = st.get("memory_ratio")
+            if mem_used is not None and mem_cap is not None and mem_cap > 0:
+                used_mb = mem_used / (1024 * 1024)
+                cap_mb = mem_cap / (1024 * 1024)
+                pct = (mem_ratio * 100) if mem_ratio is not None else (mem_used / mem_cap * 100)
+                mem_str = f"{used_mb:.1f} / {cap_mb:.1f} MB ({pct:.1f}%)"
+            else:
+                mem_str = "N/A"
 
             value_lines = [
+                f"**網址：** `{uri}`",
                 f"**狀態：** {status_label}",
-                f"**目前連線的伺服器數：** {player_count}",
+                f"**玩家數：** {players_str}",
+                f"**延遲：** {latency_str}",
+                f"**CPU 負載：** {cpu_str}",
+                f"**記憶體：** {mem_str}",
             ]
-            session_id = getattr(node, "session_id", None)
+            session_id = st.get("session_id")
             if session_id:
                 value_lines.append(f"**Session ID：** `{session_id}`")
+            last_err = self._node_last_errors.get(identifier)
+            if status_name != "CONNECTED" and last_err:
+                value_lines.append(f"**備註：** {redact_secrets(last_err)[:150]}")
 
+            role_badge = " ⭐ 優先選用" if best_id == identifier else ""
             embed.add_field(
-                name=f"📡 {identifier}",
-                value=f"網址：{uri}\n" + "\n".join(value_lines),
+                name=f"📡 {identifier}{role_badge}",
+                value="\n".join(value_lines),
                 inline=False,
             )
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @_owner_guild_only
+    @app_commands.command(name="node_kill", description="[擁有者] 模擬指定 Lavalink 節點斷線以實測故障轉移")
+    @app_commands.describe(node="要模擬斷線的節點識別名稱（例如 node1 / node2）")
+    @app_commands.autocomplete(node=_node_identifier_autocomplete)
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.check(_owner_only_check)
+    async def node_kill(self, interaction: discord.Interaction, node: str):
+        if wavelink is None:
+            await interaction.response.send_message("❌ 語音模組尚未載入。", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        target_key = (node or "").strip()
+        pool_nodes = dict(getattr(wavelink.Pool, "nodes", {}) or {})
+        target_node = pool_nodes.get(target_key)
+        if target_node is None:
+            cfg = self._find_configured_node_config(target_key)
+            if cfg is not None:
+                cand_uris = {cfg.uri.strip().rstrip("/"), *_build_http_fallback_uris(cfg.uri)}
+                for pnode in pool_nodes.values():
+                    if str(getattr(pnode, "uri", "") or "").strip().rstrip("/") in cand_uris:
+                        target_node = pnode
+                        break
+
+        if target_node is None:
+            await interaction.followup.send(
+                f"⚠️ 目前連線池中找不到節點 `{target_key}`（可能尚未連線或已離線）。",
+                ephemeral=True,
+            )
+            return
+
+        ident = str(getattr(target_node, "identifier", target_key) or target_key)
+        status_name, _ = self._describe_node_status(target_node)
+        if status_name != "CONNECTED":
+            await interaction.followup.send(
+                f"ℹ️ 節點 `{ident}` 目前狀態為 `{status_name}`，非連線中狀態。",
+                ephemeral=True,
+            )
+            return
+
+        # 1. 在呼叫 node.close() 前先擷取受影響伺服器快照並設保護旗標，避免 Node.close() 先斷玩家導致曲目與進度遺失
+        pre_snapshots: dict[int, dict[str, Any]] = {}
+        affected_players: list[Any] = []
+        for p_attr in ("players", "_players"):
+            p_map = getattr(target_node, p_attr, None)
+            if isinstance(p_map, dict):
+                affected_players.extend(p_map.values())
+        for vc in list(getattr(self.bot, "voice_clients", []) or []):
+            vc_node = getattr(vc, "node", None)
+            vc_nid = str(getattr(vc_node, "identifier", "") or "") if vc_node is not None else ""
+            if vc_node is target_node or vc_nid == ident:
+                affected_players.append(vc)
+        for p in affected_players:
+            snap = self._snapshot_player_state(p, dead_node_id=ident)
+            if snap is not None:
+                pre_snapshots[snap["guild_id"]] = snap
+                self._failing_over_guilds.add(snap["guild_id"])
+
+        for gid, active_nid in list(self._guild_active_node.items()):
+            if active_nid == ident and gid not in pre_snapshots:
+                cached = self._active_guild_snapshots.get(gid)
+                if cached:
+                    pre_snapshots[gid] = dict(cached)
+                    self._failing_over_guilds.add(gid)
+
+        self._manually_killed_nodes.add(ident)
+        self._node_last_errors[ident] = "管理員透過 /node_kill 手動模擬斷線"
+        print(
+            f"🧪 [/node_kill] 管理員 {interaction.user} ({interaction.user.id}) 模擬斷線節點 `{ident}`"
+            f"（受影響伺服器：{list(pre_snapshots.keys())}）"
+        )
+
+        # 2. 斷開節點連線（保留於 Pool 中以便 /music_node_status 顯示離線狀態）
+        close_fn = getattr(target_node, "close", None)
+        if callable(close_fn):
+            try:
+                await asyncio.wait_for(close_fn(eject=False), timeout=10.0)
+            except TypeError:
+                await asyncio.wait_for(close_fn(), timeout=10.0)
+            except Exception as exc:
+                print(f"⚠️ [/node_kill] 呼叫節點 `{ident}` close() 時發生錯誤：{exc}")
+        elif hasattr(target_node, "_status") and hasattr(wavelink, "NodeStatus"):
+            target_node._status = wavelink.NodeStatus.DISCONNECTED
+
+        # 3. 立即執行（或等待）故障轉移並記錄結果
+        results = await self._handle_node_disconnect_event(
+            target_node,
+            pre_snapshots=pre_snapshots,
+            reason_label="/node_kill 模擬斷線",
+        )
+        for gid in pre_snapshots:
+            self._failing_over_guilds.discard(gid)
+
+        lines = [
+            f"🧪 已模擬中斷節點 **{ident}**（`{getattr(target_node, 'uri', '未知網址')}`）。",
+            f"• 受影響伺服器數：**{len(pre_snapshots)}**",
+        ]
+        for res in results:
+            gid = res.get("guild_id")
+            st = res.get("status")
+            t_node = res.get("target_node")
+            if st == "ok":
+                pos_ms = int(res.get("position_ms") or 0)
+                lines.append(f"• ✅ 伺服器 `{gid}` 已故障轉移至 **{t_node}**（位置 `{format_position(pos_ms)}`）")
+            elif st == "skipped":
+                lines.append(f"• ℹ️ 伺服器 `{gid}` 已由備援節點 **{t_node}** 接管")
+            elif st == "no_node":
+                lines.append(f"• ⚠️ 伺服器 `{gid}` 無可用備援節點，已優雅結束並啟動背景重連")
+            else:
+                lines.append(f"• ❌ 伺服器 `{gid}` 轉移失敗：{res.get('reason') or res.get('error') or '未知錯誤'}")
+        lines.append(f"\n💡 測試完成後可使用 `/node_revive node:{ident}` 重新連回該節點。")
+        print(f"📝 [/node_kill] 節點 `{ident}` 模擬斷線與故障轉移結果：{results}")
+        await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+    @_owner_guild_only
+    @app_commands.command(name="node_revive", description="[擁有者] 重新連線指定的 Lavalink 節點")
+    @app_commands.describe(node="要重新連線的節點識別名稱（例如 node1 / node2）")
+    @app_commands.autocomplete(node=_node_identifier_autocomplete)
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.check(_owner_only_check)
+    async def node_revive(self, interaction: discord.Interaction, node: str):
+        if wavelink is None:
+            await interaction.response.send_message("❌ 語音模組尚未載入。", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        target_key = (node or "").strip()
+        cfg = self._find_configured_node_config(target_key)
+        if cfg is None:
+            known = ", ".join(self._configured_nodes.keys()) or "無"
+            await interaction.followup.send(
+                f"❌ 找不到識別名稱為 `{target_key}` 的設定節點（目前已設定節點：{known}）。",
+                ephemeral=True,
+            )
+            return
+
+        self._manually_killed_nodes.discard(cfg.identifier)
+        self._node_failure_notified[cfg.identifier] = False
+        self._node_alert_sent[cfg.identifier] = False
+        self._node_last_errors.pop(cfg.identifier, None)
+
+        print(f"🔄 [/node_revive] 管理員 {interaction.user} ({interaction.user.id}) 嘗試重新連線節點 `{cfg.identifier}` ({cfg.uri})")
+        ok = await self._connect_single_node(cfg)
+        if ok:
+            pool_nodes = getattr(wavelink.Pool, "nodes", {}) or {}
+            node_obj = pool_nodes.get(cfg.identifier)
+            if node_obj is not None:
+                await self._refresh_node_stats(node_obj, timeout=4.0)
+            print(f"✅ [/node_revive] 節點 `{cfg.identifier}` 已成功重新連線。")
+            await interaction.followup.send(
+                f"✅ 已成功重新連線 Lavalink 節點 **{cfg.identifier}**（`{cfg.uri}`）！",
+                ephemeral=True,
+            )
+            return
+
+        err_detail = self._node_last_errors.get(cfg.identifier) or "請查看後台日誌與診斷訊息"
+        print(f"❌ [/node_revive] 節點 `{cfg.identifier}` 重連失敗：{err_detail}")
+        await interaction.followup.send(
+            f"❌ 重新連線節點 **{cfg.identifier}**（`{cfg.uri}`）失敗：{redact_secrets(err_detail)}",
+            ephemeral=True,
+        )
 
     # ==========================================================
     # 用戶歌單管理指令（每個用戶上限 1 個歌單、最多 500 首歌）
